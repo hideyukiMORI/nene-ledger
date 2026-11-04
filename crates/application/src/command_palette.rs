@@ -134,6 +134,8 @@ impl CommandPalette {
             | Intent::MoveColumns(_)
             | Intent::ResetColumns
             | Intent::ResetWidths
+            | Intent::FreezeColumns
+            | Intent::UnfreezeColumns
             | Intent::GoTo(_)
             | Intent::Copy
             | Intent::ToggleDetail
@@ -387,7 +389,7 @@ mod tests {
         };
         palette.handle(moving(CursorStep::Bottom), 0);
         assert_eq!(palette.selected(), CommandId::ALL.len() - 1);
-        // 1 回の PageUp は 10 件。操作は 22 なので 3 回で先頭（最後は 0 で止まる）。
+        // 1 回の PageUp は 10 件。操作は 24 なので 3 回で先頭（最後は 0 で止まる）。
         palette.handle(moving(CursorStep::PageUp), 0);
         assert_eq!(palette.selected(), CommandId::ALL.len() - 1 - 10);
         palette.handle(moving(CursorStep::PageUp), 0);

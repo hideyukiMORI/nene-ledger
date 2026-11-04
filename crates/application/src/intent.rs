@@ -53,6 +53,10 @@ pub enum Intent {
     ResetColumns,
     /// 列の幅を、開いたときの自動の幅に戻す（Issue #64）。
     ResetWidths,
+    /// カーソルの列まで（表示の位置で）左に固定する（表示だけ・VIEW-01・Issue #4）。
+    FreezeColumns,
+    /// 列の固定を外す。
+    UnfreezeColumns,
     /// 選択した矩形をコピーする（Ctrl+C）。
     Copy,
     /// 詳細ペインを開閉する（Ctrl+Shift+U）。

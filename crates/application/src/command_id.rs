@@ -52,6 +52,10 @@ pub enum CommandId {
     ResetColumns,
     /// 列の幅を元に戻す（Issue #64）。
     ResetWidths,
+    /// カーソルの列まで左に固定する（表示だけ・Issue #4）。
+    FreezeColumns,
+    /// 列の固定を外す。
+    UnfreezeColumns,
     /// 選んだ範囲をコピーする。
     Copy,
     /// キーの一覧を見る（2 段目・Issue #63）。
@@ -60,7 +64,7 @@ pub enum CommandId {
 
 impl CommandId {
     /// すべての操作（何も打たないときの順）。
-    pub const ALL: [Self; 22] = [
+    pub const ALL: [Self; 24] = [
         Self::Top,
         Self::Bottom,
         Self::GoTo,
@@ -81,6 +85,8 @@ impl CommandId {
         Self::MoveColumnsRight,
         Self::ResetColumns,
         Self::ResetWidths,
+        Self::FreezeColumns,
+        Self::UnfreezeColumns,
         Self::Copy,
         Self::ShowKeys,
     ];
@@ -113,6 +119,8 @@ impl CommandId {
             Self::MoveColumnsRight => "選んだ列を右へ移す",
             Self::ResetColumns => "列の並びを元に戻す",
             Self::ResetWidths => "列の幅を元に戻す",
+            Self::FreezeColumns => "カーソルの列まで左に固定する",
+            Self::UnfreezeColumns => "列の固定を外す",
             Self::Copy => "選んだ範囲をコピーする",
             Self::ShowKeys => "キーの一覧を見る…",
         }
@@ -142,6 +150,8 @@ impl CommandId {
             Self::MoveColumnsRight => "えらんだれつをみぎへうつす",
             Self::ResetColumns => "れつのならびをもとにもどす",
             Self::ResetWidths => "れつのはばをもとにもどす",
+            Self::FreezeColumns => "かーそるのれつまでひだりにこていする",
+            Self::UnfreezeColumns => "れつのこていをはずす",
             Self::Copy => "えらんだはんいをこぴーする",
             Self::ShowKeys => "きーのいちらんをみる",
         }
@@ -178,6 +188,8 @@ impl CommandId {
             Self::MoveColumnsRight => &["move column right", "column order"],
             Self::ResetColumns => &["reset columns", "column order", "original order"],
             Self::ResetWidths => &["reset widths", "column width", "autofit"],
+            Self::FreezeColumns => &["freeze", "pin", "lock columns", "fixed column"],
+            Self::UnfreezeColumns => &["unfreeze", "unpin", "unlock columns"],
             Self::Copy => &["copy", "clipboard"],
             Self::ShowKeys => &["keys", "shortcuts", "keyboard", "help"],
         }
@@ -207,6 +219,8 @@ impl CommandId {
             | Self::ChooseHeader
             | Self::ResetColumns
             | Self::ResetWidths
+            | Self::FreezeColumns
+            | Self::UnfreezeColumns
             | Self::ShowKeys => None,
             Self::Copy => Some("Ctrl+C"),
         }
@@ -236,6 +250,8 @@ impl CommandId {
             | Self::MoveColumnsRight
             | Self::ResetColumns
             | Self::ResetWidths
+            | Self::FreezeColumns
+            | Self::UnfreezeColumns
             | Self::Copy
             | Self::ShowKeys => None,
         }
@@ -270,6 +286,8 @@ impl CommandId {
             Self::MoveColumnsRight => Some(Intent::MoveColumns(ColumnShift::Right)),
             Self::ResetColumns => Some(Intent::ResetColumns),
             Self::ResetWidths => Some(Intent::ResetWidths),
+            Self::FreezeColumns => Some(Intent::FreezeColumns),
+            Self::UnfreezeColumns => Some(Intent::UnfreezeColumns),
             Self::Copy => Some(Intent::Copy),
         }
     }

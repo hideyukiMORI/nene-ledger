@@ -519,6 +519,20 @@ Shift_JIS・縦棒区切りの見本（`crates/app/fixtures/shift-jis-pipe.csv`�
 
 名前が長いときは右の字（印と点数）の手前で切る（application の `a_long_name_is_clipped_before_the_aside`）。試しの案内の行は窓の幅 1024 では末尾が切れる（Issue #52 の読み方の段と同じ・幅 1280 以上なら収まる・残るリスク）。Windows の実機での確認はまだ。
 
+## 53. 左の列の固定（GitHub Issue #4）— 仮想の X サーバでの確認（QLT-013）
+
+20 列 × 30 行の見本（見出し `c01`〜`c20`・値 `r行-c列`・3〜6 字の列）を幅 1024 の窓で開き、xdotool で送って撮った（2026-11-05）。
+
+| 操作 | 画面 |
+| --- | --- |
+| → → → Ctrl+Shift+P → `freeze` → Enter | 状態の行に `左の 3 列を固定しました（横に動いても残ります）`。`c03` の右に境の線（窓の縁の色・2 画素）。横のスクロールバーの溝は固定した列の分だけ短くならず、つまみが動く列の幅で測られる |
+| → × 14（カーソルが `c17` まで） | `c01`〜`c03` は左に残り、その右は `c08` から `c18`（`c04`〜`c07` が隠れる）。状態の行は `2 行目 · 17 列目` |
+| Home | カーソルが `c01` へ戻るが横の表示は動かない（`c08` からのまま）。固定した列は常に見えているので動かす理由が無い |
+| Ctrl+Shift+P → `unfreeze` → Enter | `列の固定を外しました`。表示の最初の列は `c08` のまま（`c01` のカーソルは隠れ、横のスクロールバーの印が左端に残る） |
+| Home | `c01` からの表示に戻る（撮った PNG が開いた直後と `cmp` でバイト一致） |
+
+固定した列の幅が本体の幅（行番号の列を除く）の 2/3 を超えるときは、収まる数まで減らす（application の `freezing_more_than_fits_keeps_room_for_the_scrolling_columns`）。固定した列と動く列のクリックの位置は `frozen_and_scrolled_cells_are_hit_where_they_are_drawn`、横の移動の下限は `scrolling_left_stops_at_the_frozen_columns_until_they_are_unfrozen`、配置は core の `frozen_columns_stay_left_of_the_scrolled_ones` ほか 2 つ。列の入れ替えと幅のドラッグは固定した列でも同じ経路（`visible_columns` を見る）だが、撮っていない。Windows の実機での確認はまだ。
+
 ## 7. active の規則と、その証明
 
 CNF-009 は active の規則ごとに `| ID |` で始まる行がここにあることを要求する。

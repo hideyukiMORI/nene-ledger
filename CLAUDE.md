@@ -7,7 +7,7 @@ Claude Code / AI エージェントがこのリポジトリで作業するため
 
 ## 0. まず読むもの（production コードに触れる前に必ず）
 
-0. [SPECIFICATION.md](SPECIFICATION.md) — 何を作るか（FR-NNN）と、細目の [docs/FEATURES.md](docs/FEATURES.md)（213 項目・フェーズ・状態）。順番は [docs/ROADMAP.md](docs/ROADMAP.md)（M0〜M6）
+0. [SPECIFICATION.md](SPECIFICATION.md) — 何を作るか（FR-NNN）と、細目の [docs/FEATURES.md](docs/FEATURES.md)（219 項目・フェーズ・状態）。順番は [docs/ROADMAP.md](docs/ROADMAP.md)（M0〜M6）
 1. [docs/ARCHITECTURE_CONSTITUTION.md](docs/ARCHITECTURE_CONSTITUTION.md) — 憲章（ARC-NNN）
 2. [docs/PROJECT_LAYOUT.md](docs/PROJECT_LAYOUT.md) — クレートと依存方向
 3. [docs/CODING_RULES.md](docs/CODING_RULES.md) — Rust 規約（RS-NNN）

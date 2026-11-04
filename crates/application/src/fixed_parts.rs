@@ -2,12 +2,14 @@
 
 use nene_ledger_core::display_scale::DisplayScale;
 
-/// 表の固定の部分の大きさ（画素）。見出しの行の高さ（無ければ 0）・本体の 1 行の高さ・行番号の列の幅。
+/// 表の固定の部分の大きさ（画素）。見出しの行の高さ（無ければ 0）・本体の 1 行の高さ・行番号の列の幅・左に固定した列の幅
+/// （無ければ 0・VIEW-01）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FixedParts {
     header: u32,
     row: u32,
     gutter: u32,
+    frozen: u32,
     scale: DisplayScale,
 }
 
@@ -19,8 +21,21 @@ impl FixedParts {
             header,
             row,
             gutter,
+            frozen: 0,
             scale: DisplayScale::hundred(),
         }
+    }
+
+    /// 左に固定した列の幅 `frozen`（罫線を含む）で。横に動く列に使える幅がその分だけ減る。
+    #[must_use]
+    pub fn with_frozen(self, frozen: u32) -> Self {
+        Self { frozen, ..self }
+    }
+
+    /// 左に固定した列の幅（無ければ 0）。
+    #[must_use]
+    pub fn frozen(self) -> u32 {
+        self.frozen
     }
 
     /// 画面の倍率 `scale` で（スクロールバーの幅などの固定の画素に掛ける）。
@@ -59,9 +74,13 @@ impl FixedParts {
         u64::from(height.saturating_sub(self.header) / self.row.max(1))
     }
 
-    /// 幅 `width` の表で、セルの列に使える幅。
+    /// 幅 `width` の表で、横に動くセルの列に使える幅（行番号の列と固定した列を除く）。
     #[must_use]
     pub fn columns_in(self, width: u32) -> u64 {
-        u64::from(width.saturating_sub(self.gutter))
+        u64::from(
+            width
+                .saturating_sub(self.gutter)
+                .saturating_sub(self.frozen),
+        )
     }
 }

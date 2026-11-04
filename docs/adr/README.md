@@ -37,6 +37,7 @@ ADR は「なぜそう決めたか」「何を却下したか」を書く。
 | [0019](0019-text-units-in-the-splitting-rule.md) | 切り出しの規則に「文字の単位」を入れ、区切り・引用符・改行は文字の頭でだけ見分ける | 受理 |
 | [0020](0020-zoom-and-scale.md) | 文字の大きさの変更は表と詳細ペインの字だけを変え、段階は application が決めて UI が測り直す。固定の画素は画面の倍率の 1 つの経路で掛ける | 受理 |
 | [0021](0021-public-repository-on-github.md) | 公開リポジトリを GitHub に置く。Issue は GitHub の Issue、PR が統合の境界、CI は `make ci` を呼ぶだけ、`main` は ruleset で守る | 受理 |
+| [0022](0022-calculation-on-values-not-formulas.md) | 計算は値に対して行い、数式を保存も評価もしない（集計パレット STAT-09・列の演算 XFRM-17） | 受理 |
 
 ## これから書くもの（Issue が立ったら）
 

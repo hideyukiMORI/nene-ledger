@@ -37,6 +37,8 @@ pub(crate) struct FramePainter<'view> {
 const CURSOR_LINE: u32 = 2;
 /// 選んだ範囲の外周の枠の太さ（画素・100% のとき）。
 const SELECTION_LINE: u32 = 1;
+/// 左に固定した列と横に動く列の境の線の太さ（画素・100% のとき・VIEW-01）。
+const FROZEN_LINE: u32 = 2;
 
 impl<'view> FramePainter<'view> {
     /// 配置・字の寸法・色・窓の大きさから始める。
@@ -98,13 +100,40 @@ impl<'view> FramePainter<'view> {
                 .zip(view.first_body()..)
                 .map(|(row, body)| (row, RowStyle::Body(body))),
         );
+        let mut painted = 0_usize;
         for (slot, (row, style)) in styled.take(visible).enumerate() {
             self.paint_row(slot, row, style);
+            painted = slot.saturating_add(1);
         }
+        self.frozen_edge(painted);
         // 選んだ範囲の外周とカーソルの枠は、隣の行の塗りに隠されないよう最後に重ねる。
         let mut commands = self.commands;
         commands.append(&mut self.overlays);
         commands
+    }
+
+    /// 左に固定した列の右の境に、描いた `rows` 行ぶんの縦の線（固定が無ければ何も描かない・VIEW-01）。
+    fn frozen_edge(&mut self, rows: usize) {
+        if self.layout.frozen() == 0 {
+            return;
+        }
+        let line = self.metrics.px(FROZEN_LINE);
+        let right = self
+            .layout
+            .gutter_width()
+            .saturating_add(self.layout.frozen_width());
+        let height = self
+            .layout
+            .row_height()
+            .saturating_mul(u32::try_from(rows).unwrap_or(u32::MAX))
+            .min(self.size.height());
+        self.fill(
+            PixelRect::new(
+                PixelPoint::new(right.saturating_sub(line), 0),
+                PixelSize::new(line, height),
+            ),
+            self.palette.border(),
+        );
     }
 
     /// 1 行。罫線の色で行の帯（表の幅まで）を塗り、その上にセルを塗って、残った 1 画素を罫線にする。
@@ -134,7 +163,7 @@ impl<'view> FramePainter<'view> {
             self.text(gutter, shown, gutter_ink);
         }
         let mut cursor = None;
-        for column in self.layout.first_column()..self.layout.column_count() {
+        for column in self.layout.visible_columns() {
             let Some(rect) = self.layout.cell_rect(index, column) else {
                 break;
             };
@@ -388,6 +417,36 @@ mod tests {
             None => painter,
         };
         painter.paint(header, None, &view(rows))
+    }
+
+    #[test]
+    fn frozen_columns_are_painted_left_of_the_scrolled_ones_with_an_edge() {
+        let header = row(0, &["aaaaa", "bbbbbbbbbb", "c", "dd"]);
+        let body = [row(1, &["x1", "x2", "x3", "x4"])];
+        let cells: Vec<&[String]> = core::iter::once(&header)
+            .chain(&body)
+            .map(ViewRow::cells)
+            .collect();
+        // 1 列目を固定し、表示は 3 列目から。2 列目は描かない。
+        let layout = TableLayout::new(&ColumnWidths::fit(&cells), 2, 2, metrics()).with_frozen(1);
+        let commands = FramePainter::new(&layout, metrics(), palette(), PixelSize::new(800, 600))
+            .paint(Some(&header), None, &view(&body));
+        let shown = texts(&commands);
+        assert!(shown.contains(&"aaaaa") && shown.contains(&"c") && shown.contains(&"dd"));
+        assert!(shown.contains(&"x1") && shown.contains(&"x3"));
+        assert!(!shown.contains(&"bbbbbbbbbb") && !shown.contains(&"x2"));
+        // 固定した列の右の境に、描いた 2 行ぶんの縦の線。
+        let right = layout.gutter_width() + layout.frozen_width();
+        let edge = PixelRect::new(
+            PixelPoint::new(right - 2, 0),
+            PixelSize::new(2, layout.row_height() * 2),
+        );
+        assert!(fills_of(&commands, palette().border()).contains(&edge));
+        // 固定が無ければ線も無い。
+        let plain = TableLayout::new(&ColumnWidths::fit(&cells), 0, 2, metrics());
+        let unfrozen = FramePainter::new(&plain, metrics(), palette(), PixelSize::new(800, 600))
+            .paint(Some(&header), None, &view(&body));
+        assert!(fills_of(&unfrozen, palette().border()).is_empty());
     }
 
     fn texts(commands: &[DrawCommand]) -> Vec<&str> {
