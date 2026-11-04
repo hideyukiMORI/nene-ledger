@@ -378,10 +378,15 @@ impl Session for Viewer {
     fn refresh(&mut self, view: WindowView) {
         let report = self.report();
         // 読み方を試している間の索引の知らせは、元の読み方の画面のもの。
-        match self.trial.as_mut() {
-            Some(original) => original.report(report),
+        // 索引を作り終えたら今の表示の行を読み直す（試している読み方の画面は、元の読み方の索引では読めないので読み直さない）。
+        let reread = match self.trial.as_mut() {
+            Some(original) => {
+                original.report(report);
+                DocumentEffect::Stay
+            }
             None => self.document.report(report),
-        }
+        };
+        self.effect(reread);
         // 索引を作り終えたら、ファイルの終わりまでの選択を数え直す（変わっていなければ何もしない）。
         self.refresh_totals();
         if let Some(totals) = self.totals_report() {
