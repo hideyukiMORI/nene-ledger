@@ -502,7 +502,8 @@ Shift_JIS・縦棒区切りの見本（`crates/app/fixtures/shift-jis-pipe.csv`�
 | GIT-001 / GIT-004 / QLT-012 | `cargo test -p xtask`（92 件） | `pull_request_rejects_draft_missing_close_and_bad_title`（QLT-012 / GIT-001 / GIT-004 / GIT-003 の 4 つが出る）・`pull_request_field_must_start_a_line`（本文の途中の `目的:` は欄ではない）・`pull_request_body_with_a_machine_path_is_rejected`（GIT-005） |
 | GIT-002 / GIT-004 | リポジトリ設定 | squash のみ（`merge_commit` / `rebase` 不可）・`delete_branch_on_merge: true`（`gh repo view --json`） |
 | GIT-002 / GIT-004 | ruleset `main`（id 26530802・enforcement active・対象 `~DEFAULT_BRANCH`） | `deletion` / `non_fast_forward` / `pull_request`（`allowed_merge_methods: ["squash"]`・会話の解決必須）/ `required_status_checks`（`check`・strict）。`gh api repos/hideyukiMORI/nene-ledger/rulesets/26530802` |
-| QLT-005 / GIT-001〜005 | 本 PR の CI `check`（`check.yml` → `make ci`） | 実行 ID は本 PR の check の後に追記する |
+| QLT-005 / GIT-001〜005 | PR #2 の CI `check`（`check.yml` → `make ci`・`ready_for_review` で起動） | 実行 41832653816: `rustc 1.98.0`・`Git conventions passed.`・`git diff --check origin/main...HEAD`・success。手元の `make ci` と同じ出力 |
+| GIT-003（CI） | PR #2 のタイトルを `公開リポジトリの CI と ruleset の実測を記録する`（type と `(#N)` 無し）に編集 | 実行 41832778822（`edited`）: `GIT-003: subject must be ... (PR title)`・`make: *** [Makefile:61: validate-git] Error 1`・failure。タイトルを戻して success |
 
 ## 7. active の規則と、その証明
 
@@ -552,5 +553,10 @@ CNF-009 は active の規則ごとに `| ID |` で始まる行がここにある
 | CNF-013 | 許されない依存 | 同上 ＋ 実ファイル（第 5 節） | xtask |
 | CNF-014 | unsafe を許すクレートの lint の表のずれ | 同上 | xtask |
 | CNF-015 | scan の `File::create`・`.write(true`・書き込める写像 | 同上 | xtask |
-| GIT-003 | 形の違う件名 | commit-msg フック（第 6 節） | xtask |
-| GIT-005 | 管理するファイルの絶対パス | `validate-git`（第 6 節） | xtask |
+| GIT-001 | `Closes #N` の無い PR 本文 | 単体テスト ＋ CI の `make ci`（第 51 節） | xtask |
+| GIT-002 | 形の違う枝名・`main` への直接 push | `validate-git`（第 6 節）＋ ruleset（第 51 節） | xtask / GitHub |
+| GIT-003 | 形の違う件名・PR タイトル | commit-msg フック（第 6 節）＋ CI（第 51 節・実行 41832778822 が失敗） | xtask |
+| GIT-004 | 欄の無い PR 本文・squash 以外のマージ | 単体テスト ＋ CI（第 51 節）＋ ruleset（第 51 節） | xtask / GitHub |
+| GIT-005 | 管理するファイル・コミット・PR 本文の絶対パス | `validate-git`（第 6 節・第 51 節） | xtask |
+| QLT-005 | CI 側にだけある検査 | `check.yml` は `make ci` だけを呼ぶ。手元と同じ出力（第 51 節） | GitHub Actions |
+| QLT-012 | draft の PR で必須 check が走る・欄の無い本文 | 単体テスト（`pull_request_rejects_draft_missing_close_and_bad_title`）＋ `check.yml` の `if: draft == false` | xtask / GitHub Actions |

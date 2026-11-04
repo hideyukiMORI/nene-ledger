@@ -32,7 +32,7 @@ ADR 0004 が正直に書いた穴は、そのまま残っていた:
 
 ## 強制
 
-- **planned → active は Issue #1 の PR で実測してから**: `make ci` が PR 本文の `Closes #N`・欄・ブランチ名・全コミットと PR タイトルの形・絶対パスを見る。CI の実行と ruleset の設定を [gate-proofs](../quality/gate-proofs.md) に記録してから GIT-001 / GIT-002 / GIT-004 / QLT-005 を active にする
+- **active**（Issue #1 の PR #2 で実測・[gate-proofs](../quality/gate-proofs.md) 第 51 節）: `make ci` が PR 本文の `Closes #N`・欄・ブランチ名・全コミットと PR タイトルの形・絶対パスを見る（CI の実行 41832653816 が success、形の外のタイトルで 41832778822 が failure）。ruleset 26530802 が PR 必須・`check` 必須・squash のみ・force push と削除の禁止を課す
 - **不能**: Issue と記録の中身の妥当性（レビュー事項）
 
 ## 結果

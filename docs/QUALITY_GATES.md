@@ -7,7 +7,7 @@
 
 🔴 Issue #2 で NeNeDocket の機械（lint の表・`clippy.toml`・`deny.toml`・`xtask`・`Makefile`・commit-msg フック）を移し、
 `make prove`（26 件）と `cargo test -p xtask`（89 件）と実ファイルでの発火で**このリポジトリの道具で測った規則だけを active にした**（[gate-proofs](quality/gate-proofs.md)・[ADR 0010](adr/0010-rust-foundation-and-measured-limits.md)）。
-Issue #9 で `crates/core` が生まれ、中核の実ファイルで CNF-007 / CNF-012 / CNF-013 を発火させて ARC-003 を、`make coverage` の下限で QLT-009 を active にした。2026-11-04 に公開リポジトリへ移った（[ADR 0021](adr/0021-public-repository-on-github.md)）。CI（`check.yml` → `make ci`）と ruleset が要る GIT-001 / GIT-002 / GIT-004 / QLT-005 / QLT-012 は、Issue #1 の PR で実測して記録するまで planned。
+Issue #9 で `crates/core` が生まれ、中核の実ファイルで CNF-007 / CNF-012 / CNF-013 を発火させて ARC-003 を、`make coverage` の下限で QLT-009 を active にした。2026-11-04 に公開リポジトリへ移った（[ADR 0021](adr/0021-public-repository-on-github.md)）。CI（`check.yml` → `make ci`）と ruleset を Issue #1 の PR #2 で実測し（gate-proofs 第 51 節）、GIT-001 / GIT-002 / GIT-004 / QLT-005 / QLT-012 を active にした。
 🔴 記録に残る `Issue #N`（#1〜#68）は公開前のローカル履歴の番号で、GitHub の Issue とは別物（gate-proofs の節と対応する）。
 
 完了条件は、差分の挙動と直接の依存・呼び出し元に必要な最小限の検証が成功し、その根拠・対象・結果・再利用条件が記録されていること。
@@ -53,7 +53,7 @@ lint を `allow` に落とす設定・`--cap-lints`・`rustfmt.toml`・`baseline
 
 CI（`.github/workflows/check.yml`）は `make ci` を 1 行呼ぶだけ。判定は `make` の target と `xtask` にあり、手元でも同じ 1 行で同じ結果が出る。CI 側にだけ存在する検査を作らない（[ADR 0021](adr/0021-public-repository-on-github.md)）。
 
-- 機械強制: **planned**（`check.yml` は `make ci` だけを呼ぶ。手元と CI が同じ出力を出すことを Issue #1 の PR で実測して記録したら active にする）
+- 機械強制: **active**（`check.yml` は `make ci` だけを呼ぶ。PR #2 の実行 41832653816 で手元と同じ `Git conventions passed.` が出た・[gate-proofs](quality/gate-proofs.md) 第 51 節）
 
 ### QLT-006 — アーキテクチャは実行可能
 
@@ -110,7 +110,7 @@ lock が更新される状態でのゲート通過を拒む。
 担当・工程・文書追記・コミット ID の変更だけでは再実行しない。関連する変更・失敗・具体的な未確認事項がある場合だけ、その範囲を再検証する。
 PR に「確認する退行」「対象・依存」「検証結果（コマンド・結果・記録の所在）」「再利用（元の記録と不変性の根拠、または初回検証）」を残す。実装中とレビュー中は draft で、必須 check は draft では走らない。
 
-- 機械強制: **planned**（`make ci` が PR 本文の欄の存在を検査する（GIT-004）。CI での実行を記録したら active にする。結果の真偽・再利用条件・失敗との因果はレビュー事項）
+- 機械強制: **active**（`make ci` が PR 本文の欄の存在を検査し（GIT-004）、`check.yml` は draft では走らない。CI の実行は gate-proofs 第 51 節。結果の真偽・再利用条件・失敗との因果はレビュー事項）
 
 ### QLT-013 — 環境依存の主張は正直に名付ける
 
@@ -284,23 +284,23 @@ CNF-009（予定）が「本文に定義があるのにここに行が無い」�
 | RS-017 | active | `overflow-checks`（[gate-proofs](quality/gate-proofs.md)） |
 | RS-018 | active | `default_numeric_fallback`（[gate-proofs](quality/gate-proofs.md)） |
 | RS-019 | active | forbid の抑制不能・腐った抑制・`#[allow]` の禁止・CNF-006（[gate-proofs](quality/gate-proofs.md)） |
-| GIT-001 | planned | PR テンプレート＋`make ci`（`Closes #N`）。CI での実行を Issue #1 の PR で記録したら active |
-| GIT-002 | planned | `make ci`（PR の head のブランチ名）＋ ruleset（`main` の保護）。設定の事実を記録したら active |
+| GIT-001 | active | PR テンプレート＋`make ci`（`Closes #N`）。CI の実行は gate-proofs 第 51 節 |
+| GIT-002 | active | `make ci`（PR の head のブランチ名）＋ ruleset 26530802（PR 必須・force push と削除の禁止・gate-proofs 第 51 節） |
 | GIT-003 | active | `.githooks/commit-msg` ＋ `make ci`（[gate-proofs](quality/gate-proofs.md) 第 6 節） |
-| GIT-004 | planned | PR テンプレート＋`make ci`（欄）＋ ruleset（squash のみ・`check` 必須）。設定の事実を記録したら active |
+| GIT-004 | active | PR テンプレート＋`make ci`（欄）＋ ruleset 26530802（squash のみ・`check` 必須・gate-proofs 第 51 節） |
 | GIT-005 | active | `make ci`（管理するファイル・コミット・PR 本文の絶対パスの検出）。内容の判断はレビュー事項（[gate-proofs](quality/gate-proofs.md) 第 6 節） |
 | QLT-001 | planned | `make check` の `REASON` 要求。理由の妥当性はレビュー事項 |
 | QLT-002 | active | clippy `-D warnings`・rustfmt・rustdoc（[gate-proofs](quality/gate-proofs.md)） |
 | QLT-003 | active | `allow_attributes` の forbid ＋ CNF-011（[gate-proofs](quality/gate-proofs.md)） |
 | QLT-004 | active | `cargo fmt --check` ＋ CNF-011（[gate-proofs](quality/gate-proofs.md)） |
-| QLT-005 | planned | `check.yml` → `make ci` だけ。CI と手元が同じ出力を出すことを記録したら active |
+| QLT-005 | active | `check.yml` → `make ci` だけ。CI と手元が同じ出力（gate-proofs 第 51 節） |
 | QLT-006 | planned | |
 | QLT-007 | planned | 予定: `make prove` と `xtask` のテスト |
 | QLT-008 | planned | レビュー事項 |
 | QLT-009 | active | `make coverage`（region 90%）。実測と発火は [gate-proofs](quality/gate-proofs.md) 第 8 節 |
 | QLT-010 | 不能 | PR とレビューの手続き |
 | QLT-011 | active | `rust-toolchain.toml` ＋ `--locked`（[gate-proofs](quality/gate-proofs.md)） |
-| QLT-012 | planned | `make ci` が PR 本文の欄を見る。中身はレビュー事項 |
+| QLT-012 | active | `make ci` が PR 本文の欄を見る・draft では走らない（gate-proofs 第 51 節）。中身はレビュー事項 |
 | QLT-013 | planned | |
 | QLT-014 | planned | |
 | CNF-001 | active | xtask / `cargo test -p xtask`（[gate-proofs](quality/gate-proofs.md)） |
@@ -351,4 +351,4 @@ CNF-009（予定）が「本文に定義があるのにここに行が無い」�
 - PR 本文の欄が埋まっていること（`make ci` が見る）
 
 🔴 **リポジトリ設定（ruleset）を適用したら、その事実を [quality/gate-proofs.md](quality/gate-proofs.md) に記録する。**
-**設定していないものを「必須になっている」と書かない。** 設定して記録するまで GIT-001 / GIT-002 / GIT-004 / QLT-005 は planned。
+**設定していないものを「必須になっている」と書かない。** ruleset 26530802 と CI の実行は gate-proofs 第 51 節に記録してある（2026-11-04）。
