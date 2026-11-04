@@ -30,6 +30,9 @@ pub struct EncodingGuess {
 
 impl EncodingGuess {
     /// 入力の先頭（最大 `SAMPLE_LIMIT` バイト。方言の判別と同じ量）から文字コードを推し量る。
+    ///
+    /// 入力が `SAMPLE_LIMIT` を超えれば標本の後ろに続きがあるとみなし、末尾で切れた字を誤りとしない。原本から読むときは
+    /// [`READ_LIMIT`](crate::detecting::READ_LIMIT) だけ渡す（GitHub Issue #10）。
     #[must_use]
     pub fn of(input: &[u8]) -> Self {
         if let Some(encoding) = bom_encoding(input) {
@@ -92,6 +95,7 @@ impl EncodingGuess {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::detecting::READ_LIMIT;
     use alloc::vec;
 
     fn guess(input: &[u8]) -> (TextEncoding, bool) {
@@ -198,6 +202,33 @@ mod tests {
         assert_eq!(guess(&input), (TextEncoding::Utf8, true));
         // 標本がファイルの全部なら、欠けた文字は誤り。
         assert_ne!(guess(&"あ".as_bytes()[..2]).0, TextEncoding::Utf8);
+    }
+
+    /// 原本の先頭から [`READ_LIMIT`] だけ読んだ標本（app の読み方）で、`SAMPLE_LIMIT` の境目に字がまたがっても
+    /// 文字コードを取り違えない（GitHub Issue #10）。境目をずらして、字の切れ方をすべて通す。
+    #[test]
+    fn a_sample_read_up_to_the_read_limit_keeps_a_character_split_at_the_sample_limit() {
+        for (character, expected) in [
+            ("山".as_bytes(), TextEncoding::Utf8),
+            (&NIHONGO_SHIFT_JIS[..2], TextEncoding::ShiftJis),
+            (&NIHONGO_EUC_JP[..2], TextEncoding::EucJp),
+        ] {
+            for shift in 0..character.len() {
+                let input = repeated_past_the_read_limit(shift, character);
+                let read = &input[..READ_LIMIT];
+                assert_eq!(guess(read).0, expected, "shift {shift}");
+            }
+        }
+    }
+
+    /// `shift` バイトの `a` の後ろに、`READ_LIMIT` を超えるまで `character,` を並べる。
+    fn repeated_past_the_read_limit(shift: usize, character: &[u8]) -> Vec<u8> {
+        let mut input = vec![b'a'; shift];
+        while input.len() <= READ_LIMIT {
+            input.extend_from_slice(character);
+            input.push(b',');
+        }
+        input
     }
 
     #[test]

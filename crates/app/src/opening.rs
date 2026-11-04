@@ -4,6 +4,7 @@ use std::path::Path;
 
 use nene_ledger_application::format_summary::FormatSummary;
 use nene_ledger_core::binary_sniff::looks_binary;
+use nene_ledger_core::detecting::READ_LIMIT;
 use nene_ledger_core::detection::Detection;
 use nene_ledger_core::encoding_guess::EncodingGuess;
 use nene_ledger_core::text_encoding::TextEncoding;
@@ -19,8 +20,8 @@ use crate::guessed::Guessed;
 use crate::open_failure::OpenFailure;
 use crate::rows::{WINDOW_RECORDS, read_rows};
 
-/// 判別に読む量（方言の判別の標本と同じ 64 KiB）。
-const SAMPLE_BYTES: usize = 64 * 1024;
+/// 判別に読む量（core の標本の 64 KiB ＋ BOM ＋ 1。続きがあることを判別に伝える・GitHub Issue #10）。
+const SAMPLE_BYTES: usize = READ_LIMIT;
 
 /// 開いた先頭の行と、窓の題名と、推し量った読み方（の要約）と、見出しのレコードの番号と、判別に確信が無いときの点数。
 #[derive(Debug)]
@@ -107,7 +108,7 @@ pub(crate) fn detect(source: &Source, encoding: TextEncoding) -> Result<Detectio
     Ok(Detection::of_encoded(content, encoding.units()))
 }
 
-/// 判別に読む標本（先頭の 64 KiB）。
+/// 判別に読む標本（先頭の [`READ_LIMIT`] バイト）。
 fn read_sample(source: &Source) -> Result<Vec<u8>, ScanFailure> {
     let size = BlockSize::new(SAMPLE_BYTES).unwrap_or(BlockSize::MEBIBYTE);
     source.read_block(0, size)
@@ -133,6 +134,57 @@ mod tests {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("fixtures")
             .join(name)
+    }
+
+    /// `name` に `contents` を書いた一時ファイル（`target/tmp`）。
+    fn written(name: &str, contents: &[u8]) -> PathBuf {
+        let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/tmp");
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join(format!("opening-{name}"));
+        std::fs::write(&path, contents).unwrap();
+        path
+    }
+
+    /// 64 KiB の標本の境目に字がまたがる大きなファイルでも、文字コードを取り違えない（GitHub Issue #10）。
+    /// 直す前は、日本語の UTF-8 の表で境目をずらした 12 通りのうち 5 通りが Windows-1252 になった。
+    #[test]
+    fn a_character_across_the_sample_boundary_keeps_the_encoding() {
+        let shift_jis_row: &[u8] = b"1,\x93\xFA\x96\x7B\x8C\xEA\n";
+        for (name, bom, row, expected) in [
+            (
+                "utf8",
+                &b""[..],
+                "1,山田太郎,東京都\n".as_bytes(),
+                TextEncoding::Utf8,
+            ),
+            (
+                "utf8-bom",
+                &b"\xEF\xBB\xBF"[..],
+                "1,山田太郎,東京都\n".as_bytes(),
+                TextEncoding::Utf8WithBom,
+            ),
+            ("sjis", &b""[..], shift_jis_row, TextEncoding::ShiftJis),
+        ] {
+            for shift in 0..4 {
+                let contents = shifted_table(bom, shift, row);
+                let path = written(&format!("boundary-{name}-{shift}.csv"), &contents);
+                let source = Source::open(&path).unwrap();
+                let format = guess_format(&source).unwrap().format();
+                assert_eq!(format.encoding(), expected, "{name} shift {shift}");
+            }
+        }
+    }
+
+    /// `bom` と、`shift` バイトだけ長い見出しの後ろに、[`READ_LIMIT`] を超えるまで `row` を並べた表。
+    fn shifted_table(bom: &[u8], shift: usize, row: &[u8]) -> Vec<u8> {
+        let mut contents = bom.to_vec();
+        contents.extend_from_slice(b"id,name");
+        contents.extend(core::iter::repeat_n(b'x', shift));
+        contents.extend_from_slice(b",city\n");
+        while contents.len() <= READ_LIMIT + 64 {
+            contents.extend_from_slice(row);
+        }
+        contents
     }
 
     #[test]

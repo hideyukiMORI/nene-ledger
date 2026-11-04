@@ -26,11 +26,19 @@ use crate::record::Record;
 use crate::records::Records;
 use crate::row_shape::RowShape;
 use crate::scanning::trails_closing_quote;
+use crate::text_encoding::LONGEST_BOM;
 use crate::unclosed_quote::UnclosedQuote;
 use crate::value::value;
 
 /// 判別に読む上限（OPEN-17）。
 pub const SAMPLE_LIMIT: usize = 65_536;
+
+/// 判別のために原本の先頭から読む量。標本（[`SAMPLE_LIMIT`]）に、いちばん長い BOM と 1 バイトを足す。
+///
+/// 判別は「入力が [`SAMPLE_LIMIT`] を超えるか」で標本の後ろに続きがあるかを知り、続きがあれば標本の末尾で切れた字や
+/// レコードを壊れたとみなさない。🔴 ちょうど [`SAMPLE_LIMIT`] だけ読んで渡すと、64 KiB を超えるファイルで末尾の字が
+/// 切れたとき、文字コードを取り違える（GitHub Issue #10）。BOM の後ろを方言の判別に渡しても超えるように BOM の分を足す。
+pub const READ_LIMIT: usize = SAMPLE_LIMIT + LONGEST_BOM + 1;
 
 /// 前書きとみなす行の数の上限。
 pub const MAX_PREAMBLE_ROWS: usize = 32;
