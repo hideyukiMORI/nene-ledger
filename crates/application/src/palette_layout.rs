@@ -5,7 +5,6 @@ use nene_ledger_core::pixel_rect::PixelRect;
 use nene_ledger_core::pixel_size::PixelSize;
 
 use crate::command_palette::CommandPalette;
-use crate::palette_mode::PaletteMode;
 use crate::window_view::WindowView;
 
 /// 幅の下限と上限（窓の幅の半分をこの間に収める）。
@@ -61,12 +60,10 @@ impl PaletteLayout {
             inner_width,
             field_height,
         );
-        let hint = match palette.mode() {
-            PaletteMode::Themes { .. } | PaletteMode::Reading { .. } => {
-                Some(rect(inner_left, bottom(field), inner_width, row_height))
-            }
-            PaletteMode::Commands | PaletteMode::GoTo | PaletteMode::Keys => None,
-        };
+        let hint = palette
+            .mode()
+            .tries_the_selection()
+            .then(|| rect(inner_left, bottom(field), inner_width, row_height));
         let list_top = hint
             .map_or(bottom(field), bottom)
             .saturating_add(padding / 2);

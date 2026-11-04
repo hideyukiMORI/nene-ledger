@@ -505,6 +505,20 @@ Shift_JIS・縦棒区切りの見本（`crates/app/fixtures/shift-jis-pipe.csv`�
 | QLT-005 / GIT-001〜005 | PR #2 の CI `check`（`check.yml` → `make ci`・`ready_for_review` で起動） | 実行 41832653816: `rustc 1.98.0`・`Git conventions passed.`・`git diff --check origin/main...HEAD`・success。手元の `make ci` と同じ出力 |
 | GIT-003（CI） | PR #2 のタイトルを `公開リポジトリの CI と ruleset の実測を記録する`（type と `(#N)` 無し）に編集 | 実行 41832778822（`edited`）: `GIT-003: subject must be ... (PR title)`・`make: *** [Makefile:61: validate-git] Error 1`・failure。タイトルを戻して success |
 
+## 52. 判別の候補から選んで開き直す（GitHub Issue #3）— 仮想の X サーバでの確認（QLT-013）
+
+見本 `crates/app/fixtures/screenshot.csv`（7 行・引用の中の改行・欠けたセル）を開き、xdotool で送って撮った（2026-11-04）。この見本は core の判別が確信を持たない（1 位 カンマ・`""` 350、2 位 カンマ・`\"` 299。差が 100 に満たない。app の `the_screenshot_sample_is_opened_with_a_doubt_that_names_the_top_two_scores`）。
+
+| 操作 | 画面 |
+| --- | --- |
+| 開く | 状態の行に `判別に確信なし（1 位 35%・2 位 29%）· 候補は Ctrl+Shift+P → candidates`（一度だけの知らせ）。表は 1 位のカンマ区切りで、値はそのまま |
+| Ctrl+Shift+P → `candidates` → Enter | 2 段目に候補 7 つが点数の順（`7 / 7`）。`カンマ区切り・"" で引用符（RFC 4180）` に `今の読み方 · 35% · 6 列`、次が `カンマ区切り・" で引用・中は \ で逃がす　29% · 6 列`、`カンマ区切り・' で引用　10% · 6 列`、タブとセミコロンの 4 つは `0% · 1 列`。上に `試し中: カンマ区切り・"" で引用符（RFC 4180）　Enter で開き直す・Esc で戻す` |
+| ↓ | 表がその場で `\` で逃がす読み方で読み直され（`"二重""` のセルが変わる）、状態の行は `索引を作る準備をしています · UTF-8（BOM） · カンマ区切り · " で引用・中は \ で逃がす · LF · 6 列` |
+| Esc | 開いた直後の画面に戻る（撮った PNG が `cmp` でバイト一致） |
+| Ctrl+Shift+P → `candidates` → Enter → ↓↓ → Enter | シングルクォートの候補で開き直され、索引が作り直されて `8 行 · UTF-8（BOM） · カンマ区切り · ' で引用 · LF · 8 列`（`"` はセルの値として残る） |
+
+名前が長いときは右の字（印と点数）の手前で切る（application の `a_long_name_is_clipped_before_the_aside`）。試しの案内の行は窓の幅 1024 では末尾が切れる（Issue #52 の読み方の段と同じ・幅 1280 以上なら収まる・残るリスク）。Windows の実機での確認はまだ。
+
 ## 7. active の規則と、その証明
 
 CNF-009 は active の規則ごとに `| ID |` で始まる行がここにあることを要求する。

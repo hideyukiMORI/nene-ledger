@@ -34,6 +34,8 @@ pub enum CommandId {
     ZoomReset,
     /// 配色を選ぶ（2 段目で試して選ぶ）。
     ChooseTheme,
+    /// 判別の候補から選んで開き直す（2 段目に点数の順で並べ、試して選ぶ・Issue #3）。
+    ChooseDialect,
     /// 文字コードを選んで開き直す（2 段目で試して選ぶ・Issue #52）。
     ChooseEncoding,
     /// 区切りを選んで開き直す。
@@ -58,7 +60,7 @@ pub enum CommandId {
 
 impl CommandId {
     /// すべての操作（何も打たないときの順）。
-    pub const ALL: [Self; 21] = [
+    pub const ALL: [Self; 22] = [
         Self::Top,
         Self::Bottom,
         Self::GoTo,
@@ -70,6 +72,7 @@ impl CommandId {
         Self::ZoomOut,
         Self::ZoomReset,
         Self::ChooseTheme,
+        Self::ChooseDialect,
         Self::ChooseEncoding,
         Self::ChooseDelimiter,
         Self::ChooseQuoting,
@@ -101,6 +104,7 @@ impl CommandId {
             Self::ZoomOut => "文字を小さくする",
             Self::ZoomReset => "文字の大きさを戻す",
             Self::ChooseTheme => "配色を選ぶ…",
+            Self::ChooseDialect => "判別の候補から選んで開き直す…",
             Self::ChooseEncoding => "文字コードを選んで開き直す…",
             Self::ChooseDelimiter => "区切りを選んで開き直す…",
             Self::ChooseQuoting => "引用符の扱いを選んで開き直す…",
@@ -129,6 +133,7 @@ impl CommandId {
             Self::ZoomOut => "もじをちいさくする",
             Self::ZoomReset => "もじのおおきさをもどす",
             Self::ChooseTheme => "はいしょくをえらぶ",
+            Self::ChooseDialect => "はんべつのこうほからえらんでひらきなおす",
             Self::ChooseEncoding => "もじこーどをえらんでひらきなおす",
             Self::ChooseDelimiter => "くぎりをえらんでひらきなおす",
             Self::ChooseQuoting => "いんようふのあつかいをえらんでひらきなおす",
@@ -157,6 +162,14 @@ impl CommandId {
             Self::ZoomOut => &["zoom out", "smaller", "font"],
             Self::ZoomReset => &["zoom reset", "actual size", "font"],
             Self::ChooseTheme => &["theme", "color", "colour", "scheme"],
+            Self::ChooseDialect => &[
+                "candidates",
+                "dialect",
+                "detect",
+                "guess",
+                "confidence",
+                "reopen",
+            ],
             Self::ChooseEncoding => &["encoding", "charset", "reopen", "utf", "sjis"],
             Self::ChooseDelimiter => &["delimiter", "separator", "reopen", "tab", "comma"],
             Self::ChooseQuoting => &["quote", "quoting", "escape", "reopen"],
@@ -187,6 +200,7 @@ impl CommandId {
             Self::MoveColumnsLeft => Some("Ctrl+Shift+PageUp"),
             Self::MoveColumnsRight => Some("Ctrl+Shift+PageDown"),
             Self::ChooseTheme
+            | Self::ChooseDialect
             | Self::ChooseEncoding
             | Self::ChooseDelimiter
             | Self::ChooseQuoting
@@ -217,6 +231,7 @@ impl CommandId {
             | Self::ZoomOut
             | Self::ZoomReset
             | Self::ChooseTheme
+            | Self::ChooseDialect
             | Self::MoveColumnsLeft
             | Self::MoveColumnsRight
             | Self::ResetColumns
@@ -245,6 +260,7 @@ impl CommandId {
             Self::ZoomOut => Some(Intent::Zoom(ZoomStep::Out)),
             Self::ZoomReset => Some(Intent::Zoom(ZoomStep::Reset)),
             Self::ChooseTheme
+            | Self::ChooseDialect
             | Self::ChooseEncoding
             | Self::ChooseDelimiter
             | Self::ChooseQuoting
@@ -271,6 +287,7 @@ mod tests {
             assert!(!command.keywords().is_empty());
             // 2 段目を開く操作（「…」）は意図もキーの案内も持たない（キーの無い操作もある）。
             let opens_a_list = command == CommandId::ChooseTheme
+                || command == CommandId::ChooseDialect
                 || command == CommandId::ShowKeys
                 || command.reading_aspect().is_some();
             assert_eq!(command.intent().is_none(), opens_a_list);

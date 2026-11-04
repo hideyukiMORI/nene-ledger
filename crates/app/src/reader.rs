@@ -3,6 +3,8 @@
 use std::sync::Arc;
 
 use nene_ledger_application::wakeup::Wakeup;
+use nene_ledger_core::dialect_candidate::DialectCandidate;
+use nene_ledger_core::text_encoding::TextEncoding;
 use nene_ledger_core::text_format::TextFormat;
 use nene_ledger_scan::block_size::BlockSize;
 use nene_ledger_scan::index_job::IndexJob;
@@ -14,6 +16,7 @@ use nene_ledger_scan::scan_failure::ScanFailure;
 use nene_ledger_scan::source::Source;
 use nene_ledger_scan::sparse_index::SparseIndex;
 
+use crate::opening::detect;
 use crate::rows::{WINDOW_RECORDS, read_rows};
 
 /// 動いた先の範囲を読む材料。画面のスレッドが持つ原本と読み方と、作り終えた索引（まだなら作り始める前の索引）と、
@@ -60,6 +63,14 @@ impl Reader {
             format,
             RecordRange::new(0, WINDOW_RECORDS),
         )
+    }
+
+    /// 文字コード `encoding` で先頭の標本から方言を推し量った候補（点数の順）。判別の候補を選ぶ段で見せる（Issue #3）。
+    pub(crate) fn candidates(
+        &self,
+        encoding: TextEncoding,
+    ) -> Result<Vec<DialectCandidate>, ScanFailure> {
+        Ok(detect(&self.source, encoding)?.candidates().to_vec())
     }
 
     /// 読み方 `format` で開き直す。索引は作り始める前に戻し、裏で作り直す仕事を始めて返す。

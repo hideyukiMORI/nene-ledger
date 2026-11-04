@@ -241,13 +241,7 @@ impl Viewer {
             }
             PaletteOutcome::Commit(position) => {
                 self.palette = None;
-                let saved = self.preferences.commit_theme(ThemeState::at(position));
-                let theme = self.preferences.theme();
-                let notice = Notice::Theme {
-                    name: theme.name(),
-                    position: theme.position(),
-                };
-                self.notify_saved(notice, saved);
+                self.commit_theme(position);
                 None
             }
             PaletteOutcome::Revert(position) => {
@@ -283,6 +277,36 @@ impl Viewer {
                 }
                 None
             }
+            PaletteOutcome::OpenCandidates => {
+                self.open_candidates();
+                None
+            }
+        }
+    }
+
+    /// 位置 `position` の配色に決めて設定に残し、名前を知らせる（書けなければそちらを知らせる）。
+    fn commit_theme(&mut self, position: usize) {
+        let saved = self.preferences.commit_theme(ThemeState::at(position));
+        let theme = self.preferences.theme();
+        let notice = Notice::Theme {
+            name: theme.name(),
+            position: theme.position(),
+        };
+        self.notify_saved(notice, saved);
+    }
+
+    /// 判別の候補を選ぶ段へ入る。今の文字コードで標本を読み直して候補を作り、今の方言を選んだ状態にする（Issue #3）。
+    /// 標本を読めなければ候補は無い。
+    fn open_candidates(&mut self) {
+        let base = self.trial.as_ref().unwrap_or(&self.document);
+        let format = base.format_summary().format();
+        let candidates = self
+            .reader
+            .candidates(format.encoding())
+            .unwrap_or_default();
+        if let Some(open) = self.palette.as_mut() {
+            open.state_mut()
+                .enter_candidates(candidates, ReadingChoice::dialect(format.dialect()));
         }
     }
 

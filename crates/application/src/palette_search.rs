@@ -4,6 +4,7 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
+use nene_ledger_core::dialect_candidate::DialectCandidate;
 use nene_ledger_core::theme_catalog::SEEDS;
 
 use crate::command_id::CommandId;
@@ -119,6 +120,22 @@ pub fn readings(aspect: ReadingAspect, query: &str) -> Vec<PaletteItem> {
         .collect()
 }
 
+/// 判別の候補 `list`（点数の順）。何も打たなければ全部をその順で。打てば区切りの英字の検索語か名前に含むもの（Issue #3）。
+#[must_use]
+pub fn candidates(list: &[DialectCandidate], query: &str) -> Vec<PaletteItem> {
+    let wanted = compact(query);
+    list.iter()
+        .copied()
+        .filter(|candidate| {
+            let choice = ReadingChoice::dialect(candidate.dialect());
+            wanted.is_empty()
+                || compact(choice.keyword()).contains(&wanted)
+                || compact(&choice.name()).contains(&wanted)
+        })
+        .map(PaletteItem::Candidate)
+        .collect()
+}
+
 /// 区切りとして打った字。英数字でない半角の字（空白を含む）がちょうど 1 つなら、そのバイト。
 fn typed_delimiter(query: &str) -> Option<u8> {
     let mut characters = query.chars();
@@ -150,7 +167,10 @@ mod tests {
             .iter()
             .filter_map(|item| match item {
                 PaletteItem::Command(command) => Some(*command),
-                PaletteItem::Theme(_) | PaletteItem::Reading(_) | PaletteItem::Key(_) => None,
+                PaletteItem::Theme(_)
+                | PaletteItem::Reading(_)
+                | PaletteItem::Key(_)
+                | PaletteItem::Candidate(_) => None,
             })
             .collect()
     }
@@ -243,5 +263,29 @@ mod tests {
             Some(&PaletteItem::Theme(position_of("github-light").unwrap()))
         );
         assert!(themes("zzzz").is_empty());
+    }
+
+    #[test]
+    fn candidates_keep_the_score_order_and_filter_by_the_delimiter_word() {
+        use nene_ledger_core::delimiter::Delimiter;
+        use nene_ledger_core::dialect::Dialect;
+        use nene_ledger_core::quoting::Quoting;
+        let comma = DialectCandidate::new(Dialect::rfc4180(), 900, 5);
+        let tab = DialectCandidate::new(
+            Dialect::new(Delimiter::TAB, Quoting::Plain, b'"').unwrap(),
+            400,
+            2,
+        );
+        let list = [comma, tab];
+        assert_eq!(
+            candidates(&list, ""),
+            vec![PaletteItem::Candidate(comma), PaletteItem::Candidate(tab)]
+        );
+        assert_eq!(candidates(&list, "tab"), vec![PaletteItem::Candidate(tab)]);
+        assert_eq!(
+            candidates(&list, "RFC"),
+            vec![PaletteItem::Candidate(comma)]
+        );
+        assert!(candidates(&list, "xyz").is_empty());
     }
 }

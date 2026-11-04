@@ -3,6 +3,7 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
+use nene_ledger_core::dialect_candidate::DialectCandidate;
 use nene_ledger_core::draw_command::DrawCommand;
 use nene_ledger_core::palette::Palette;
 
@@ -16,7 +17,7 @@ use crate::palette_layout::PaletteLayout;
 use crate::palette_mode::PaletteMode;
 use crate::palette_outcome::PaletteOutcome;
 use crate::palette_painter::PalettePainter;
-use crate::palette_search::{commands, key_list, readings, themes};
+use crate::palette_search::{self, commands, key_list, readings, themes};
 use crate::reading_aspect::ReadingAspect;
 use crate::reading_choice::ReadingChoice;
 use crate::window_view::WindowView;
@@ -24,12 +25,14 @@ use crate::window_view::WindowView;
 /// `PageUp` / `PageDown` で動く候補の数。
 const PAGE: usize = 10;
 
-/// コマンドパレットの状態。段・検索の文字列・選んでいる候補。開いている間は、どのキーもここへ来る（表には届かない）。
+/// コマンドパレットの状態。段・検索の文字列・選んでいる候補・判別の候補（候補を選ぶ段で見せる）。
+/// 開いている間は、どのキーもここへ来る（表には届かない）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandPalette {
     mode: PaletteMode,
     query: String,
     selected: usize,
+    candidates: Vec<DialectCandidate>,
 }
 
 impl CommandPalette {
@@ -40,6 +43,7 @@ impl CommandPalette {
             mode: PaletteMode::GoTo,
             query: String::new(),
             selected: 0,
+            candidates: Vec::new(),
         }
     }
 
@@ -50,6 +54,7 @@ impl CommandPalette {
             mode: PaletteMode::Commands,
             query: String::new(),
             selected: 0,
+            candidates: Vec::new(),
         }
     }
 
@@ -75,7 +80,16 @@ impl CommandPalette {
             PaletteMode::Keys => key_list(&self.query),
             PaletteMode::Themes { .. } => themes(&self.query),
             PaletteMode::Reading { aspect, .. } => readings(aspect, &self.query),
+            PaletteMode::Candidates { .. } => {
+                palette_search::candidates(&self.candidates, &self.query)
+            }
         }
+    }
+
+    /// 判別の候補（候補を選ぶ段で見せる全部・点数の順）。ほかの段では空。
+    #[must_use]
+    pub fn candidates(&self) -> &[DialectCandidate] {
+        &self.candidates
     }
 
     /// 選んでいる候補の番目（候補の数に収める）。
@@ -106,7 +120,9 @@ impl CommandPalette {
                     PaletteOutcome::Close
                 }
                 PaletteMode::Themes { original } => PaletteOutcome::Revert(original),
-                PaletteMode::Reading { .. } => PaletteOutcome::RevertReading,
+                PaletteMode::Reading { .. } | PaletteMode::Candidates { .. } => {
+                    PaletteOutcome::RevertReading
+                }
             },
             Intent::Scroll(_)
             | Intent::Point { .. }
@@ -144,6 +160,17 @@ impl CommandPalette {
             .unwrap_or(0);
     }
 
+    /// 判別の候補 `candidates`（点数の順）を選ぶ段へ入る。`current` は今の読み方で、候補にあればそれを選んだ状態にする（Issue #3）。
+    pub fn enter_candidates(&mut self, candidates: Vec<DialectCandidate>, current: ReadingChoice) {
+        self.selected = candidates
+            .iter()
+            .position(|candidate| ReadingChoice::dialect(candidate.dialect()) == current)
+            .unwrap_or(0);
+        self.candidates = candidates;
+        self.mode = PaletteMode::Candidates { current };
+        self.query.clear();
+    }
+
     /// 候補の `index` 番目をクリックした（選んで決める）。
     pub fn click(&mut self, index: usize, current_theme: usize) -> PaletteOutcome {
         self.selected = index;
@@ -172,6 +199,9 @@ impl CommandPalette {
         match self.items().get(self.selected()) {
             Some(&PaletteItem::Theme(position)) => PaletteOutcome::Preview(position),
             Some(&PaletteItem::Reading(choice)) => PaletteOutcome::PreviewReading(choice),
+            Some(&PaletteItem::Candidate(candidate)) => {
+                PaletteOutcome::PreviewReading(ReadingChoice::dialect(candidate.dialect()))
+            }
             Some(&PaletteItem::Command(_) | &PaletteItem::Key(_)) | None => PaletteOutcome::Stay,
         }
     }
@@ -183,26 +213,35 @@ impl CommandPalette {
             None | Some(&PaletteItem::Key(_)) => PaletteOutcome::Stay,
             Some(&PaletteItem::Theme(position)) => PaletteOutcome::Commit(position),
             Some(&PaletteItem::Reading(choice)) => PaletteOutcome::CommitReading(choice),
-            Some(&PaletteItem::Command(command)) => {
-                if let Some(intent) = command.intent() {
-                    return PaletteOutcome::Run(intent);
-                }
-                if let Some(aspect) = command.reading_aspect() {
-                    return PaletteOutcome::OpenReading(aspect);
-                }
-                self.query.clear();
-                if command == CommandId::ShowKeys {
-                    self.mode = PaletteMode::Keys;
-                    self.selected = 0;
-                    return PaletteOutcome::Stay;
-                }
-                self.mode = PaletteMode::Themes {
-                    original: current_theme,
-                };
-                self.selected = current_theme;
-                PaletteOutcome::Stay
+            Some(&PaletteItem::Candidate(candidate)) => {
+                PaletteOutcome::CommitReading(ReadingChoice::dialect(candidate.dialect()))
             }
+            Some(&PaletteItem::Command(command)) => self.choose(command, current_theme),
         }
+    }
+
+    /// 操作 `command` で決める。意図があれば実行し、2 段目のある操作はその段へ入る（読み方と判別の候補は合成ルートが候補を渡す）。
+    fn choose(&mut self, command: CommandId, current_theme: usize) -> PaletteOutcome {
+        if let Some(intent) = command.intent() {
+            return PaletteOutcome::Run(intent);
+        }
+        if let Some(aspect) = command.reading_aspect() {
+            return PaletteOutcome::OpenReading(aspect);
+        }
+        if command == CommandId::ChooseDialect {
+            return PaletteOutcome::OpenCandidates;
+        }
+        self.query.clear();
+        if command == CommandId::ShowKeys {
+            self.mode = PaletteMode::Keys;
+            self.selected = 0;
+            return PaletteOutcome::Stay;
+        }
+        self.mode = PaletteMode::Themes {
+            original: current_theme,
+        };
+        self.selected = current_theme;
+        PaletteOutcome::Stay
     }
 }
 
@@ -348,13 +387,17 @@ mod tests {
         };
         palette.handle(moving(CursorStep::Bottom), 0);
         assert_eq!(palette.selected(), CommandId::ALL.len() - 1);
-        // 1 回の PageUp は 10 件。操作は 14 なので 2 回で先頭。
+        // 1 回の PageUp は 10 件。操作は 22 なので 3 回で先頭（最後は 0 で止まる）。
         palette.handle(moving(CursorStep::PageUp), 0);
         assert_eq!(palette.selected(), CommandId::ALL.len() - 1 - 10);
+        palette.handle(moving(CursorStep::PageUp), 0);
+        assert_eq!(palette.selected(), CommandId::ALL.len() - 1 - 20);
         palette.handle(moving(CursorStep::PageUp), 0);
         assert_eq!(palette.selected(), 0);
         palette.handle(moving(CursorStep::PageDown), 0);
         assert_eq!(palette.selected(), 10);
+        palette.handle(moving(CursorStep::PageDown), 0);
+        assert_eq!(palette.selected(), 20);
         palette.handle(moving(CursorStep::PageDown), 0);
         assert_eq!(palette.selected(), CommandId::ALL.len() - 1);
         palette.handle(moving(CursorStep::RowStart), 0);
@@ -416,6 +459,79 @@ mod tests {
         assert_eq!(
             palette.items(),
             alloc::vec![PaletteItem::Reading(ReadingChoice::Delimiter(b'|'))]
+        );
+    }
+
+    #[test]
+    fn the_candidate_list_marks_the_current_dialect_previews_and_commits() {
+        use nene_ledger_core::delimiter::Delimiter;
+        use nene_ledger_core::dialect::Dialect;
+        use nene_ledger_core::quoting::Quoting;
+        let mut palette = CommandPalette::open();
+        typed(&mut palette, "candidates");
+        assert_eq!(
+            palette.items(),
+            alloc::vec![PaletteItem::Command(CommandId::ChooseDialect)]
+        );
+        assert_eq!(
+            palette.handle(Intent::Confirm, 0),
+            PaletteOutcome::OpenCandidates
+        );
+        let comma = DialectCandidate::new(Dialect::rfc4180(), 900, 5);
+        let tab = DialectCandidate::new(
+            Dialect::new(Delimiter::TAB, Quoting::Doubled, b'"').unwrap(),
+            400,
+            2,
+        );
+        // 合成ルートが候補と今の読み方（タブ）を渡す。2 番目を選んだ状態で、試しはまだしない。
+        let current = ReadingChoice::dialect(tab.dialect());
+        palette.enter_candidates(alloc::vec![comma, tab], current);
+        assert_eq!(palette.mode(), PaletteMode::Candidates { current });
+        assert_eq!(palette.query(), "");
+        assert_eq!(palette.selected(), 1);
+        assert_eq!(palette.candidates(), [comma, tab]);
+        let up = Intent::Move {
+            step: CursorStep::Up,
+            mode: SelectionMode::Collapse,
+        };
+        assert_eq!(
+            palette.handle(up, 0),
+            PaletteOutcome::PreviewReading(ReadingChoice::dialect(comma.dialect()))
+        );
+        assert_eq!(
+            palette.handle(Intent::Confirm, 0),
+            PaletteOutcome::CommitReading(ReadingChoice::dialect(comma.dialect()))
+        );
+        assert_eq!(
+            palette.handle(Intent::Cancel, 0),
+            PaletteOutcome::RevertReading
+        );
+    }
+
+    #[test]
+    fn a_current_dialect_outside_the_candidates_selects_the_first_and_typing_filters() {
+        use nene_ledger_core::delimiter::Delimiter;
+        use nene_ledger_core::dialect::Dialect;
+        use nene_ledger_core::quoting::Quoting;
+        let mut palette = CommandPalette::open();
+        let comma = DialectCandidate::new(Dialect::rfc4180(), 900, 5);
+        let tab = DialectCandidate::new(
+            Dialect::new(Delimiter::TAB, Quoting::Doubled, b'"').unwrap(),
+            400,
+            2,
+        );
+        palette.enter_candidates(alloc::vec![comma, tab], ReadingChoice::Delimiter(b'#'));
+        assert_eq!(palette.selected(), 0);
+        // 英字で絞ると先頭の候補を試し、クリックで開き直す。
+        assert_eq!(
+            palette.handle(Intent::Type('t'), 0),
+            PaletteOutcome::PreviewReading(ReadingChoice::dialect(tab.dialect()))
+        );
+        typed(&mut palette, "ab");
+        assert_eq!(palette.items(), alloc::vec![PaletteItem::Candidate(tab)]);
+        assert_eq!(
+            palette.click(0, 0),
+            PaletteOutcome::CommitReading(ReadingChoice::dialect(tab.dialect()))
         );
     }
 

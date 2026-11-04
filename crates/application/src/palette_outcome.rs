@@ -27,4 +27,6 @@ pub enum PaletteOutcome {
     CommitReading(ReadingChoice),
     /// 試した読み方をやめて元に戻す。
     RevertReading,
+    /// 判別の候補を選ぶ段を開く（合成ルートが今の文字コードで候補を作り `CommandPalette::enter_candidates` を呼ぶ・Issue #3）。
+    OpenCandidates,
 }

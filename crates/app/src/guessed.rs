@@ -5,7 +5,10 @@ use nene_ledger_core::header_guess::HeaderGuess;
 use nene_ledger_core::line_ending_counts::LineEndingCounts;
 use nene_ledger_core::text_format::TextFormat;
 
-/// 推し量った読み方（文字コードと方言）と、見出しの前の前書きの行の数と、見出しのレコードの番号と、標本の改行の内訳。
+use crate::dialect_doubt::DialectDoubt;
+
+/// 推し量った読み方（文字コードと方言）と、見出しの前の前書きの行の数と、見出しのレコードの番号と、標本の改行の内訳と、
+/// 方言の判別に確信が無いときの点数。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Guessed {
     format: TextFormat,
@@ -13,6 +16,7 @@ pub(crate) struct Guessed {
     header: Option<u64>,
     line_endings: LineEndingCounts,
     binary: bool,
+    doubt: Option<DialectDoubt>,
 }
 
 impl Guessed {
@@ -29,7 +33,13 @@ impl Guessed {
             header,
             line_endings: detection.line_endings(),
             binary,
+            doubt: DialectDoubt::of(detection),
         }
+    }
+
+    /// 方言の判別に確信が無ければ、その上位 2 つの点数（Issue #3）。
+    pub(crate) fn doubt(self) -> Option<DialectDoubt> {
+        self.doubt
     }
 
     /// 判別の標本の改行の内訳。
