@@ -11,7 +11,8 @@ use crate::scan_failure::ScanFailure;
 use crate::windowing::{nearest_mark, read_records_from};
 
 /// 塊 `chunks`（先頭から続く範囲）のレコードを順に読み、1 つずつ `fold` に渡す。塊を終えるたびに、渡した数を
-/// `report` に知らせ、`Break` なら止める。ファイルが範囲より先に終われば、そこで終わる。
+/// `report` に知らせ、`Break` なら止める。ファイルが範囲より先に終われば、そこで終わる。上限を超えるレコードが
+/// あっても、索引が後ろを数えていれば窓は短くならない（GitHub Issue #13）ので、短い窓は索引の知る終わり。
 ///
 /// 次の塊は前の塊の最後のレコードの続きから切り進める（塊ごとに目印から切り直さない）。ただし索引の目印の方が
 /// 近ければそちらから。最後のレコードが読み出しの上限を超えて長さが分からなければ、目印から切り直す。
@@ -37,7 +38,7 @@ where
         let mark = carried
             .filter(|mark| mark.record() <= chunk.first() && mark.record() >= indexed.record())
             .unwrap_or(indexed);
-        let window = read_records_from(from.source(), from.format(), mark, chunk)?;
+        let window = read_records_from(from.source(), (from.index(), from.format()), mark, chunk)?;
         let records = window.records();
         if records.is_empty() {
             break;

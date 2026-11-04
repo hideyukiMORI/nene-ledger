@@ -10,8 +10,9 @@ pub const RECORD_READ_LIMIT: BlockSize = BlockSize::MEBIBYTE;
 
 /// 範囲の取り出しで返す、1 つのレコード。原本の位置・全体の長さ・読んだバイト列・切った結果。
 ///
-/// 🔴 全体が `RECORD_READ_LIMIT` を超えると先頭の上限分だけを読む（`is_truncated`）。そのとき長さは
-/// `RecordLength::MoreThan` で、終わりは探していない（Issue #23）。そのときの `record` は
+/// 🔴 全体が `RECORD_READ_LIMIT` を超えると先頭の上限分だけを読む（`is_truncated`）。索引が後ろのレコードを
+/// 数えていれば終わりまで探して長さは `RecordLength::Exact`（GitHub Issue #13）、数えていなければ
+/// `RecordLength::MoreThan` で、終わりは探していない（公開前の Issue #23）。どちらでも `record` は
 /// 先頭の分だけを切ったもので、終わり方と形（閉じない引用符か）は全体のものではない。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WindowRecord {

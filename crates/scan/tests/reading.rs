@@ -218,16 +218,16 @@ mod reading {
         assert_window_matches_in(input, source, (index, Dialect::rfc4180()), range);
     }
 
-    /// 上限を超えたレコードで止まったら、その後ろは返らない（Issue #23）。止まらなければ全部。
+    /// 作り終えた索引があれば、上限を超えたレコードがあっても、範囲のレコードは全部返る（GitHub Issue #13）。
+    /// 長さが分からない（`MoreThan`）のは、索引がその後ろを数えていない最後のレコードだけ。
     fn assert_count(got: &[WindowRecord], expected: usize, range: RecordRange) {
-        let stopped = got
-            .last()
-            .is_some_and(|record| matches!(record.length(), RecordLength::MoreThan(_)));
-        if stopped {
-            assert!(got.len() <= expected, "{range:?}");
-        } else {
-            assert_eq!(got.len(), expected, "{range:?}");
-        }
+        assert_eq!(got.len(), expected, "{range:?}");
+        let unknown = got
+            .iter()
+            .rev()
+            .skip(1)
+            .any(|record| matches!(record.length(), RecordLength::MoreThan(_)));
+        assert!(!unknown, "{range:?}");
     }
 
     /// 長さは、終わりまで見つけたなら一致し、上限を超えたなら実際の長さが上限より長い。
@@ -305,8 +305,13 @@ mod reading {
             .iter()
             .map(WindowRecord::is_truncated)
             .collect();
-        // 2 つ目が上限を超えたので、そこで止まって 3 つ目は返らない（終わりを探しに行かない・Issue #23）。
-        assert_eq!(truncated, vec![false, true]);
+        // 2 つ目は上限を超えたので先頭の分だけ。索引が後ろに 3 つ目を数えているので、終わりまで切り進めて
+        // 3 つ目も返す（GitHub Issue #13。直す前はここで止まり、3 つ目が消えていた）。
+        assert_eq!(truncated, vec![false, true, false]);
+        assert_eq!(
+            window.records()[1].length(),
+            RecordLength::Exact(u64::try_from(input.len() - 10).unwrap())
+        );
         assert_window_matches(&input, &source, &index, RecordRange::new(0, 3));
         assert_window_matches(&input, &source, &index, RecordRange::new(2, 1));
     }
@@ -357,6 +362,238 @@ mod reading {
                 let range = RecordRange::new(first, count);
                 assert_window_matches_in(&input, &source, (&index, literal()), range);
             }
+        }
+    }
+
+    /// 閉じた引用のセルが 2 MiB ある 10 レコードの表（GitHub Issue #13 の 1）。
+    fn long_closed_cell() -> Vec<u8> {
+        let mut input = b"h1,h2\n1,\"".to_vec();
+        input.extend(core::iter::repeat_n(b'z', 2 << 20_u32));
+        input.extend(b"\"\n");
+        for row in 2..10_u32 {
+            input.extend(format!("{row},x\n").as_bytes());
+        }
+        input
+    }
+
+    #[test]
+    fn the_records_after_a_long_closed_cell_are_returned() {
+        let input = long_closed_cell();
+        let source = Source::open(&fixture("long-closed-cell", &input)).unwrap();
+        let index = index_of(&source, 1 << 20);
+        assert_eq!(index.records(), 10);
+        let window = read_records(
+            &source,
+            &index,
+            utf8(Dialect::rfc4180()),
+            RecordRange::new(0, 10),
+        )
+        .unwrap();
+        let truncated: Vec<bool> = window
+            .records()
+            .iter()
+            .map(WindowRecord::is_truncated)
+            .collect();
+        // 直す前は 2 件で止まり、3 件目から後ろが消えていた。
+        let mut expected = vec![false; 10];
+        expected[1] = true;
+        assert_eq!(truncated, expected);
+        for (first, count) in [(0_u64, 10_usize), (1, 9), (1, 1), (2, 8), (0, 3)] {
+            assert_window_matches(&input, &source, &index, RecordRange::new(first, count));
+        }
+    }
+
+    #[test]
+    fn literal_reads_on_after_an_unclosed_quote_longer_than_the_limit() {
+        // 引用符が閉じないまま 1 MiB を超えて続く（GitHub Issue #13 の 2）。
+        let mut input = b"a\n\"b\n".to_vec();
+        input.extend(b"x,y\n".repeat(300_000));
+        let source = Source::open(&fixture("literal-long", &input)).unwrap();
+        let index = index_with(&source, literal(), 1 << 20);
+        assert_eq!(index.records(), 300_002);
+        assert_eq!(index.unclosed_quotes(), &[2]);
+        let window =
+            read_records(&source, &index, utf8(literal()), RecordRange::new(0, 5)).unwrap();
+        // 直す前は 2 件だけで、3 バイトの 2 件目を切り詰めと示していた。
+        assert_eq!(window.records().len(), 5);
+        assert!(!window.records().iter().any(WindowRecord::is_truncated));
+        for (first, count) in [(0_u64, 5_usize), (1, 1), (2, 3), (1023, 3), (299_990, 20)] {
+            let range = RecordRange::new(first, count);
+            assert_window_matches_in(&input, &source, (&index, literal()), range);
+        }
+    }
+
+    #[test]
+    fn without_the_index_a_long_record_stops_the_window_at_the_limit() {
+        // 索引を作る前は、後ろにレコードがあるかを知らないので、上限で止める（BIG-01・公開前の Issue #23）。
+        let input = long_closed_cell();
+        let source = Source::open(&fixture("long-closed-cell-unindexed", &input)).unwrap();
+        let window = read_records(
+            &source,
+            &SparseIndex::empty(),
+            utf8(Dialect::rfc4180()),
+            RecordRange::new(0, 10),
+        )
+        .unwrap();
+        let lengths: Vec<RecordLength> =
+            window.records().iter().map(WindowRecord::length).collect();
+        assert_eq!(
+            lengths,
+            vec![
+                RecordLength::Exact(6),
+                RecordLength::MoreThan(u64::try_from(RECORD_READ_LIMIT.get()).unwrap())
+            ]
+        );
+    }
+
+    #[test]
+    fn an_unclosed_quote_to_the_end_stops_at_the_limit_even_with_the_index() {
+        // 索引が最後のレコードと知っているので、終わりを探しに行かない（BIG-01）。
+        let mut input = b"a,b\n\"".to_vec();
+        input.extend(b"x,y\n".repeat(600_000));
+        let source = Source::open(&fixture("unclosed-last", &input)).unwrap();
+        let index = index_of(&source, 1 << 20);
+        let window = read_records(
+            &source,
+            &index,
+            utf8(Dialect::rfc4180()),
+            RecordRange::new(1, 5),
+        )
+        .unwrap();
+        let lengths: Vec<RecordLength> =
+            window.records().iter().map(WindowRecord::length).collect();
+        let limit = u64::try_from(RECORD_READ_LIMIT.get()).unwrap();
+        assert_eq!(lengths, vec![RecordLength::MoreThan(limit)]);
+    }
+
+    /// 種を固定した xorshift（テストは乱数の名前に頼らない・ARC-007）。
+    struct Xorshift(u64);
+
+    impl Xorshift {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13_u32;
+            self.0 ^= self.0 >> 7_u32;
+            self.0 ^= self.0 << 17_u32;
+            self.0
+        }
+
+        fn below(&mut self, bound: usize) -> usize {
+            usize::try_from(self.next() % u64::try_from(bound).unwrap()).unwrap()
+        }
+    }
+
+    /// 乱数の表の字。引用符は少なめ（引用が長く続きすぎない）、改行は多め（目印をまたぐ数のレコード）。
+    const TABLE_ALPHABET: [&[u8]; 20] = [
+        b"a",
+        b"a",
+        b"a",
+        b"a",
+        b"a",
+        b"a",
+        b"b",
+        b"0",
+        b",",
+        b",",
+        b",",
+        b"\n",
+        b"\n",
+        b"\n",
+        b"\n",
+        b"\r\n",
+        b"\r",
+        "\u{3042}".as_bytes(),
+        b"\\",
+        b"\"",
+    ];
+
+    /// `tokens` 個の字の乱数の表。`long` なら、どこかに上限の 2 倍を少し超える `z` の並びを挟む
+    /// （閉じた引用の中・閉じない引用の中・引用の外のどこに落ちるかも乱数）。範囲の取り出しは 1 MiB の塊の
+    /// 終わりで長さを見るので、上限を少し超えるだけでは、塊の境目の位置によっては上限に当たらない。
+    fn random_table(rng: &mut Xorshift, tokens: usize, long: bool) -> Vec<u8> {
+        let at = rng.below(tokens);
+        let mut out = Vec::new();
+        for token in 0..tokens {
+            if long && token == at {
+                let extra = rng.below(64);
+                out.extend(core::iter::repeat_n(
+                    b'z',
+                    2 * RECORD_READ_LIMIT.get() + 1 + extra,
+                ));
+            }
+            out.extend_from_slice(TABLE_ALPHABET[rng.below(20)]);
+        }
+        out
+    }
+
+    fn random_dialects() -> [Dialect; 3] {
+        let backslash = Dialect::new(
+            nene_ledger_core::delimiter::Delimiter::COMMA,
+            nene_ledger_core::quoting::Quoting::QuotedBackslash,
+            b'"',
+        )
+        .unwrap();
+        [
+            Dialect::rfc4180(),
+            literal(),
+            backslash.with_unclosed_quote(UnclosedQuote::Literal),
+        ]
+    }
+
+    /// 全体と、乱数の 6 つの範囲（始まりはファイルの終わりを少し越えるまで・長さは目印を 2 つまたぐまで）。
+    fn random_ranges(rng: &mut Xorshift, records: usize) -> Vec<RecordRange> {
+        let picked = (0..6_u32).map(|_| {
+            let first = u64::try_from(rng.below(records + 3)).unwrap();
+            RecordRange::new(first, rng.below(2100))
+        });
+        core::iter::once(RecordRange::new(0, records))
+            .chain(picked)
+            .collect()
+    }
+
+    /// 乱数の表を、索引の塊の大きさ `sizes` ごとに索引を作り、乱数の範囲で参照実装と突き合わせる。
+    fn assert_random_ranges(rng: &mut Xorshift, input: &[u8], name: &str, sizes: &[usize]) {
+        let source = Source::open(&fixture(name, input)).unwrap();
+        let cases = random_dialects()
+            .into_iter()
+            .flat_map(|dialect| sizes.iter().map(move |&size| (dialect, size)));
+        for (dialect, size) in cases {
+            let records = Records::new(input, dialect).count();
+            let index = index_with(&source, dialect, size);
+            assert_eq!(index.records(), u64::try_from(records).unwrap());
+            for range in random_ranges(rng, records) {
+                assert_window_matches_in(input, &source, (&index, dialect), range);
+            }
+        }
+    }
+
+    #[test]
+    fn random_ranges_match_the_reference_for_every_index_block_size() {
+        // 範囲の始まり・目印をまたぐ長さ・ファイルの終わりを越える範囲を乱数で選ぶ（QLT-008）。
+        let mut rng = Xorshift(0x2545_F491_4F6C_DD1D);
+        for round in 0..12_u32 {
+            let input = random_table(&mut rng, 9000, false);
+            assert_random_ranges(
+                &mut rng,
+                &input,
+                &format!("random-{round}"),
+                &[7, 4096, 1 << 20_u32],
+            );
+        }
+    }
+
+    #[test]
+    fn random_ranges_around_a_record_longer_than_the_limit_match_the_reference() {
+        // 上限を超える並びが、閉じた引用・閉じない引用・引用の外のどこに落ちても、索引が数えたレコードは全部返る
+        // （GitHub Issue #13）。
+        let mut rng = Xorshift(0x9E6C_63D0_676A_9A99);
+        for round in 0..5_u32 {
+            let input = random_table(&mut rng, 6000, true);
+            assert_random_ranges(
+                &mut rng,
+                &input,
+                &format!("random-long-{round}"),
+                &[1 << 20_u32],
+            );
         }
     }
 }
