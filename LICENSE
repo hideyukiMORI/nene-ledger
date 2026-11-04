@@ -1,0 +1,49 @@
+NeNe Ledger License, version 1.0 (SPDX: LicenseRef-NeNe-Ledger-1.0)
+
+Copyright (c) 2026 Hideyuki Mori
+
+Permission is granted, free of charge, to any person obtaining a copy of this
+software and its source code (the "Software") to do the following, subject to
+the conditions below.
+
+1. Use. You may use the Software for any purpose, including commercial and
+   private purposes.
+
+2. Modification. You may modify the Software and create works based on it
+   (a "Modified Version"). A Modified Version must keep this license, the
+   copyright notice above, and a visible credit stating that it is based on
+   "NeNe Ledger by Hideyuki Mori". The credit must appear in the source code
+   and in the program's about or credits screen. You must not remove or hide
+   the credit.
+
+3. Redistribution without charge. You may redistribute the Software or a
+   Modified Version, in source or binary form, only free of charge. You must
+   include this license with every copy.
+
+4. No sale. You must not sell the Software or a Modified Version, charge a fee
+   for obtaining or downloading it, or include it in a product or bundle that
+   is sold. This applies to the Software as a whole and to any part of it.
+
+5. No warranty. THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+   EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+   MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO
+   EVENT SHALL THE AUTHOR OR COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES
+   OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
+   ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+   DEALINGS IN THE SOFTWARE.
+
+---
+
+参考訳（日本語）。解釈は上の英文が優先する。
+
+1. 利用: 商用・私用を問わず、どの目的にも使ってよい。
+2. 改変: 改変してよい。改変版は、このライセンス・上の著作権表示・
+   「NeNe Ledger by Hideyuki Mori をもとにしている」というクレジットを保ち、
+   クレジットはソースコードとプログラムの「このアプリについて」の画面に出す。
+   クレジットを外したり隠したりしてはならない。
+3. 無償の再配布: 本ソフトウェアと改変版は、無償に限り再配布してよい。
+   どの複製にもこのライセンスを添える。
+4. 販売の禁止: 本ソフトウェアや改変版を販売すること、入手やダウンロードに
+   料金を取ること、販売される製品や組み合わせに含めることをしてはならない。
+   全体にも一部にも当てはまる。
+5. 無保証: 本ソフトウェアは現状のまま提供され、いかなる保証もない。

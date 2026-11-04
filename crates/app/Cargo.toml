@@ -1,0 +1,26 @@
+[package]
+name = "nene-ledger"
+description = "NeNe Ledger の合成ルート。引数のファイルを開き、読み取りと画面を結ぶ"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+# 合成ルートだけが全部のクレートを結ぶ（PROJECT_LAYOUT 第 2 節）。X11 の画面は Windows 以外でだけ組む（ADR 0002）。
+[dependencies]
+nene-ledger-application = { path = "../application" }
+nene-ledger-core = { path = "../core" }
+nene-ledger-scan = { path = "../scan" }
+
+[target.'cfg(not(windows))'.dependencies]
+nene-ledger-adapters-x11 = { path = "../adapters-x11" }
+nene-ledger-ui-x11 = { path = "../ui-x11" }
+
+# Windows は窓（ui-win32）と OS のアダプタ（adapters-windows）を取り替えるだけ（Issue #55）。
+[target.'cfg(windows)'.dependencies]
+nene-ledger-adapters-windows = { path = "../adapters-windows" }
+nene-ledger-ui-win32 = { path = "../ui-win32" }

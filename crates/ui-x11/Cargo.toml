@@ -1,0 +1,18 @@
+[package]
+name = "nene-ledger-ui-x11"
+description = "NeNe Ledger の X11 の画面。x11rb の窓に、cairo の画面外の面で描いたフレームを転送する"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+# 外部は x11rb と cairo-rs だけ（ADR 0016）。どちらも既定の機能を外す。
+[dependencies]
+nene-ledger-application = { path = "../application" }
+nene-ledger-core = { path = "../core" }
+x11rb = { version = "0.14.0", default-features = false }
+cairo-rs = { version = "0.22.9", default-features = false }

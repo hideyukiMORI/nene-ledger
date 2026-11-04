@@ -1,0 +1,32 @@
+//! 状態の行に一度だけ出す知らせ。
+
+use crate::zoom_level::ZoomLevel;
+
+/// 状態の行に一度だけ出す知らせ。次の操作で消える。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Notice {
+    /// `rows` 行 × `columns` 列をコピーした。
+    Copied {
+        /// 行の数。
+        rows: u64,
+        /// 列の数。
+        columns: usize,
+    },
+    /// 開いたファイルが文字のファイルでないようだ（NUL のバイトがある・Issue #57）。
+    LooksBinary,
+    /// 選択が大きすぎてコピーしなかった。
+    TooLargeToCopy,
+    /// 離れた範囲の行も列も揃っていないのでコピーしなかった（Issue #46）。
+    RangesNotAligned,
+    /// 設定を書けなかった（変えた見た目はこの起動の間だけ）。
+    SettingsUnsaved,
+    /// 文字の大きさを変えた。
+    Zoom(ZoomLevel),
+    /// 配色を替えた。
+    Theme {
+        /// 配色の名前。
+        name: &'static str,
+        /// 表の中の位置（0 始まり）。
+        position: usize,
+    },
+}

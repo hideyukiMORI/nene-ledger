@@ -1,0 +1,15 @@
+[package]
+name = "nene-ledger-application"
+description = "NeNe Ledger の振る舞いの調整。開いたファイルの見え方の状態と、表示のフレームの生成。no_std"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+# 🔴 依存は core だけ（PROJECT_LAYOUT 第 2 節・CNF-013）。
+[dependencies]
+nene-ledger-core = { path = "../core" }

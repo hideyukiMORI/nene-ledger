@@ -1,0 +1,40 @@
+name: Check
+
+on:
+  pull_request:
+    types: [ready_for_review, synchronize, edited, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: check-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: check
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha }}
+      # 版は rust-toolchain.toml が決める。ここでは何も指定しない（QLT-011）。
+      - name: Show toolchain
+        run: |
+          rustc --version
+          cargo --version
+      # 🔴 ここで個別の検査を並べないこと（QLT-005）。判定は make ci（xtask）にあり、
+      #    ここは PR のメタデータを渡すだけ。製品テストは差分ごとの検証記録で担う（QLT-001 / QLT-012）。
+      - name: make ci
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_DRAFT: ${{ github.event.pull_request.draft }}
+        run: make ci

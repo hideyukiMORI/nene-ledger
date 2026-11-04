@@ -1,0 +1,18 @@
+kind,value,note
+zero,00123,leading zero
+date,2026/01/02,slash date
+range,1-2,looks like Jan 2
+fraction,3/4,looks like Mar 4
+gene,MARCH1,gene
+gene,SEPT2,gene
+gene,DEC1,gene
+long,12345678901234567890,20 digits
+exponent,1.20E+03,exponent
+exponent,1e5,exponent
+hex,0x1F,hex
+spaces, 7 ,spaces
+bool,TRUE,boolean
+nan,NaN,not a number
+sign,-0,negative zero
+phone,+81-3-1234-5678,phone
+decimal,001.50,trailing zero

@@ -1,0 +1,16 @@
+[package]
+name = "xtask"
+description = "NeNe Ledger 固有の規約検査（CNF-0xx）・Git 規約・ゲート発火の証明。docs/ を機械で見る"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+# 🔴 道具であって成果物ではない。
+publish = false
+
+[lints]
+workspace = true
+
+# 🔴 依存ゼロを保つ（ARC-013）。CNF-0xx は全て構文で判定できる。
+#    型情報が要る規則が出てきたら ADR を立てて再検討する。
+[dependencies]

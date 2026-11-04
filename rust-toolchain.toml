@@ -1,0 +1,8 @@
+# 版を固定する。「手元では通る」を環境差で作らないため（QLT-011）。
+# xi-tools と同じ 1.98.0。lint 名の生存はこの版で確かめてある（docs/quality/gate-proofs.md）。
+[toolchain]
+channel = "1.98.0"
+# llvm-tools-preview は make coverage（cargo-llvm-cov）が要る。
+components = ["rustfmt", "clippy", "llvm-tools-preview"]
+# Windows 版を Linux から検査・ビルドする（ADR 0002）。リンクには mingw-w64（x86_64-w64-mingw32-gcc）が要る。
+targets = ["x86_64-pc-windows-gnu"]

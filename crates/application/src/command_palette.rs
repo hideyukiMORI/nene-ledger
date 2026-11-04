@@ -1,0 +1,436 @@
+//! コマンドパレットの状態（AUTO-03・Issue #41）。
+
+use alloc::string::String;
+use alloc::vec::Vec;
+
+use nene_ledger_core::draw_command::DrawCommand;
+use nene_ledger_core::palette::Palette;
+
+use crate::command_id::CommandId;
+use crate::cursor_step::CursorStep;
+use crate::detail_pane::DetailPane;
+use crate::go_to_target::GoToTarget;
+use crate::intent::Intent;
+use crate::palette_item::PaletteItem;
+use crate::palette_layout::PaletteLayout;
+use crate::palette_mode::PaletteMode;
+use crate::palette_outcome::PaletteOutcome;
+use crate::palette_painter::PalettePainter;
+use crate::palette_search::{commands, key_list, readings, themes};
+use crate::reading_aspect::ReadingAspect;
+use crate::reading_choice::ReadingChoice;
+use crate::window_view::WindowView;
+
+/// `PageUp` / `PageDown` で動く候補の数。
+const PAGE: usize = 10;
+
+/// コマンドパレットの状態。段・検索の文字列・選んでいる候補。開いている間は、どのキーもここへ来る（表には届かない）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommandPalette {
+    mode: PaletteMode,
+    query: String,
+    selected: usize,
+}
+
+impl CommandPalette {
+    /// 飛ぶ先を打つ段で開く（Ctrl+G・Issue #54）。
+    #[must_use]
+    pub fn open_go_to() -> Self {
+        Self {
+            mode: PaletteMode::GoTo,
+            query: String::new(),
+            selected: 0,
+        }
+    }
+
+    /// 操作の一覧を、何も打たずに開く。
+    #[must_use]
+    pub fn open() -> Self {
+        Self {
+            mode: PaletteMode::Commands,
+            query: String::new(),
+            selected: 0,
+        }
+    }
+
+    /// 段。
+    #[must_use]
+    pub fn mode(&self) -> PaletteMode {
+        self.mode
+    }
+
+    /// 検索の文字列。
+    #[must_use]
+    pub fn query(&self) -> &str {
+        &self.query
+    }
+
+    /// 今の候補（絞り込んだ順）。
+    #[must_use]
+    pub fn items(&self) -> Vec<PaletteItem> {
+        match self.mode {
+            PaletteMode::Commands => commands(&self.query),
+            // 飛ぶ先は候補ではなく、打った番号そのもの。
+            PaletteMode::GoTo => Vec::new(),
+            PaletteMode::Keys => key_list(&self.query),
+            PaletteMode::Themes { .. } => themes(&self.query),
+            PaletteMode::Reading { aspect, .. } => readings(aspect, &self.query),
+        }
+    }
+
+    /// 選んでいる候補の番目（候補の数に収める）。
+    #[must_use]
+    pub fn selected(&self) -> usize {
+        self.selected.min(self.items().len().saturating_sub(1))
+    }
+
+    /// 意図を受ける。`current_theme` は今の配色の位置（配色を選ぶ段へ入るとき、元に戻す先として覚える）。
+    pub fn handle(&mut self, intent: Intent, current_theme: usize) -> PaletteOutcome {
+        match intent {
+            Intent::Type(character) => {
+                self.query.push(character);
+                self.retarget(0)
+            }
+            Intent::Erase => {
+                self.query.pop();
+                self.retarget(0)
+            }
+            Intent::Move { step, .. } => self.step(step),
+            Intent::Confirm if self.mode == PaletteMode::GoTo => GoToTarget::parse(&self.query)
+                .map_or(PaletteOutcome::Stay, |target| {
+                    PaletteOutcome::Run(Intent::GoTo(target))
+                }),
+            Intent::Confirm => self.confirm(current_theme),
+            Intent::Cancel | Intent::OpenPalette | Intent::OpenGoTo => match self.mode {
+                PaletteMode::Commands | PaletteMode::GoTo | PaletteMode::Keys => {
+                    PaletteOutcome::Close
+                }
+                PaletteMode::Themes { original } => PaletteOutcome::Revert(original),
+                PaletteMode::Reading { .. } => PaletteOutcome::RevertReading,
+            },
+            Intent::Scroll(_)
+            | Intent::Point { .. }
+            | Intent::Drag { .. }
+            | Intent::Release
+            | Intent::SelectAll
+            | Intent::SelectRows
+            | Intent::SelectColumns
+            | Intent::MoveColumns(_)
+            | Intent::ResetColumns
+            | Intent::ResetWidths
+            | Intent::GoTo(_)
+            | Intent::Copy
+            | Intent::ToggleDetail
+            | Intent::Theme(_)
+            | Intent::Zoom(_) => PaletteOutcome::Stay,
+        }
+    }
+
+    /// 窓 `view` に重ねる描画命令。色 `colors` はパレットを開いたときの配色（試しても動かない）。`detail` は詳細ペインの開閉。
+    #[must_use]
+    pub fn paint(&self, view: WindowView, colors: Palette, detail: DetailPane) -> Vec<DrawCommand> {
+        PalettePainter::new(self, PaletteLayout::new(view, self), view.metrics(), colors)
+            .paint(detail)
+    }
+
+    /// 読み方の面 `aspect` を選ぶ段へ入る。`current` は今の読み方で、それを選んだ状態にする（Issue #52）。
+    pub fn enter_reading(&mut self, aspect: ReadingAspect, current: ReadingChoice) {
+        self.mode = PaletteMode::Reading { aspect, current };
+        self.query.clear();
+        self.selected = aspect
+            .options()
+            .iter()
+            .position(|&choice| choice == current)
+            .unwrap_or(0);
+    }
+
+    /// 候補の `index` 番目をクリックした（選んで決める）。
+    pub fn click(&mut self, index: usize, current_theme: usize) -> PaletteOutcome {
+        self.selected = index;
+        self.confirm(current_theme)
+    }
+
+    /// 選んでいる候補を `step` で動かす。
+    fn step(&mut self, step: CursorStep) -> PaletteOutcome {
+        let last = self.items().len().saturating_sub(1);
+        let current = self.selected();
+        let next = match step {
+            CursorStep::Up => current.saturating_sub(1),
+            CursorStep::Down => current.saturating_add(1).min(last),
+            CursorStep::PageUp => current.saturating_sub(PAGE),
+            CursorStep::PageDown => current.saturating_add(PAGE).min(last),
+            CursorStep::RowStart | CursorStep::Top => 0,
+            CursorStep::RowEnd | CursorStep::Bottom => last,
+            CursorStep::Left | CursorStep::Right => current,
+        };
+        self.retarget(next)
+    }
+
+    /// `index` 番目を選ぶ。配色の段なら、その配色をその場で試す。
+    fn retarget(&mut self, index: usize) -> PaletteOutcome {
+        self.selected = index;
+        match self.items().get(self.selected()) {
+            Some(&PaletteItem::Theme(position)) => PaletteOutcome::Preview(position),
+            Some(&PaletteItem::Reading(choice)) => PaletteOutcome::PreviewReading(choice),
+            Some(&PaletteItem::Command(_) | &PaletteItem::Key(_)) | None => PaletteOutcome::Stay,
+        }
+    }
+
+    /// 選んでいる候補で決める。候補が無ければ何もしない。配色を選ぶは 2 段目へ入り、今の配色を選んだ状態にする。
+    fn confirm(&mut self, current_theme: usize) -> PaletteOutcome {
+        match self.items().get(self.selected()) {
+            // パレットに無いキーの行は読むだけ。
+            None | Some(&PaletteItem::Key(_)) => PaletteOutcome::Stay,
+            Some(&PaletteItem::Theme(position)) => PaletteOutcome::Commit(position),
+            Some(&PaletteItem::Reading(choice)) => PaletteOutcome::CommitReading(choice),
+            Some(&PaletteItem::Command(command)) => {
+                if let Some(intent) = command.intent() {
+                    return PaletteOutcome::Run(intent);
+                }
+                if let Some(aspect) = command.reading_aspect() {
+                    return PaletteOutcome::OpenReading(aspect);
+                }
+                self.query.clear();
+                if command == CommandId::ShowKeys {
+                    self.mode = PaletteMode::Keys;
+                    self.selected = 0;
+                    return PaletteOutcome::Stay;
+                }
+                self.mode = PaletteMode::Themes {
+                    original: current_theme,
+                };
+                self.selected = current_theme;
+                PaletteOutcome::Stay
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::selection_mode::SelectionMode;
+    use crate::zoom_step::ZoomStep;
+
+    fn down() -> Intent {
+        Intent::Move {
+            step: CursorStep::Down,
+            mode: SelectionMode::Collapse,
+        }
+    }
+
+    fn typed(palette: &mut CommandPalette, text: &str) {
+        for character in text.chars() {
+            palette.handle(Intent::Type(character), 0);
+        }
+    }
+
+    #[test]
+    fn typing_filters_and_enter_runs_the_selected_command() {
+        let mut palette = CommandPalette::open();
+        typed(&mut palette, "zoom");
+        assert_eq!(palette.query(), "zoom");
+        assert_eq!(palette.items().len(), 3);
+        assert_eq!(palette.handle(down(), 0), PaletteOutcome::Stay);
+        assert_eq!(
+            palette.handle(Intent::Confirm, 0),
+            PaletteOutcome::Run(Intent::Zoom(ZoomStep::Out))
+        );
+        palette.handle(Intent::Erase, 0);
+        assert_eq!(palette.query(), "zoo");
+        assert_eq!(palette.selected(), 0);
+    }
+
+    #[test]
+    fn nothing_matching_makes_enter_do_nothing_and_escape_closes() {
+        let mut palette = CommandPalette::open();
+        typed(&mut palette, "xyz");
+        assert!(palette.items().is_empty());
+        assert_eq!(palette.handle(Intent::Confirm, 0), PaletteOutcome::Stay);
+        assert_eq!(palette.handle(Intent::Cancel, 0), PaletteOutcome::Close);
+        assert_eq!(
+            palette.handle(Intent::OpenPalette, 0),
+            PaletteOutcome::Close
+        );
+        // 開いている間の他のキーは表に届かない。
+        assert_eq!(palette.handle(Intent::Copy, 0), PaletteOutcome::Stay);
+    }
+
+    #[test]
+    fn the_key_list_runs_commands_and_only_shows_the_other_keys() {
+        use crate::key_guide::KeyGuide;
+        let mut palette = CommandPalette::open();
+        typed(&mut palette, "keys");
+        assert_eq!(palette.items(), [PaletteItem::Command(CommandId::ShowKeys)]);
+        assert_eq!(palette.handle(Intent::Confirm, 0), PaletteOutcome::Stay);
+        assert_eq!(palette.mode(), PaletteMode::Keys);
+        assert_eq!(palette.query(), "");
+        // キーのある操作が先で、Enter で実行する。
+        assert_eq!(
+            palette.items().first(),
+            Some(&PaletteItem::Command(CommandId::Top))
+        );
+        assert_eq!(
+            palette.handle(Intent::Confirm, 0),
+            PaletteOutcome::Run(CommandId::Top.intent().unwrap())
+        );
+        // パレットに無いキーの行は読むだけ（閉じない）。Esc で閉じる。
+        palette.handle(
+            Intent::Move {
+                step: CursorStep::Bottom,
+                mode: SelectionMode::Collapse,
+            },
+            0,
+        );
+        assert_eq!(
+            palette.items().get(palette.selected()),
+            Some(&PaletteItem::Key(KeyGuide::Cancel))
+        );
+        assert_eq!(palette.handle(Intent::Confirm, 0), PaletteOutcome::Stay);
+        assert_eq!(palette.handle(Intent::Cancel, 0), PaletteOutcome::Close);
+    }
+
+    #[test]
+    fn typing_one_symbol_offers_it_as_the_delimiter_and_letters_still_search() {
+        let mut palette = CommandPalette::open();
+        palette.enter_reading(ReadingAspect::Delimiter, ReadingChoice::Delimiter(b','));
+        // 1 字の記号はその字で区切る候補になり、その場で試す。Enter で開き直す。
+        assert_eq!(
+            palette.handle(Intent::Type('#'), 0),
+            PaletteOutcome::PreviewReading(ReadingChoice::Delimiter(b'#'))
+        );
+        assert_eq!(
+            palette.items(),
+            alloc::vec![PaletteItem::Reading(ReadingChoice::Delimiter(b'#'))]
+        );
+        assert_eq!(
+            palette.handle(Intent::Confirm, 0),
+            PaletteOutcome::CommitReading(ReadingChoice::Delimiter(b'#'))
+        );
+        // 2 字目からは検索。英字 1 字も検索（`t` はタブの検索語）。
+        palette.handle(Intent::Type('#'), 0);
+        assert_eq!(
+            palette.items().len(),
+            ReadingAspect::Delimiter.options().len()
+        );
+        palette.handle(Intent::Erase, 0);
+        palette.handle(Intent::Erase, 0);
+        palette.handle(Intent::Type('t'), 0);
+        assert!(
+            palette
+                .items()
+                .contains(&PaletteItem::Reading(ReadingChoice::Delimiter(b'\t')))
+        );
+        // 空白 1 つは空白区切り。ほかの面では字を区切りにしない。
+        palette.handle(Intent::Erase, 0);
+        palette.handle(Intent::Type(' '), 0);
+        assert_eq!(
+            palette.items(),
+            alloc::vec![PaletteItem::Reading(ReadingChoice::Delimiter(b' '))]
+        );
+        palette.enter_reading(
+            ReadingAspect::Encoding,
+            ReadingChoice::Encoding(nene_ledger_core::text_encoding::TextEncoding::Utf8),
+        );
+        palette.handle(Intent::Type('#'), 0);
+        assert_eq!(
+            palette.items().len(),
+            ReadingAspect::Encoding.options().len()
+        );
+    }
+
+    #[test]
+    fn page_and_end_keys_move_through_the_list() {
+        let mut palette = CommandPalette::open();
+        let moving = |step| Intent::Move {
+            step,
+            mode: SelectionMode::Collapse,
+        };
+        palette.handle(moving(CursorStep::Bottom), 0);
+        assert_eq!(palette.selected(), CommandId::ALL.len() - 1);
+        // 1 回の PageUp は 10 件。操作は 14 なので 2 回で先頭。
+        palette.handle(moving(CursorStep::PageUp), 0);
+        assert_eq!(palette.selected(), CommandId::ALL.len() - 1 - 10);
+        palette.handle(moving(CursorStep::PageUp), 0);
+        assert_eq!(palette.selected(), 0);
+        palette.handle(moving(CursorStep::PageDown), 0);
+        assert_eq!(palette.selected(), 10);
+        palette.handle(moving(CursorStep::PageDown), 0);
+        assert_eq!(palette.selected(), CommandId::ALL.len() - 1);
+        palette.handle(moving(CursorStep::RowStart), 0);
+        palette.handle(moving(CursorStep::Left), 0);
+        assert_eq!(palette.selected(), 0);
+    }
+
+    #[test]
+    fn choosing_a_theme_previews_commits_and_reverts() {
+        let mut palette = CommandPalette::open();
+        typed(&mut palette, "theme");
+        // 「配色を選ぶ…」で 2 段目へ。今の配色（5 番目）を選んだ状態で、試しはまだしない。
+        assert_eq!(palette.handle(Intent::Confirm, 5), PaletteOutcome::Stay);
+        assert_eq!(palette.mode(), PaletteMode::Themes { original: 5 });
+        assert_eq!(palette.query(), "");
+        assert_eq!(palette.selected(), 5);
+        assert_eq!(palette.handle(down(), 5), PaletteOutcome::Preview(6));
+        assert_eq!(
+            palette.handle(Intent::Confirm, 6),
+            PaletteOutcome::Commit(6)
+        );
+        assert_eq!(palette.handle(Intent::Cancel, 6), PaletteOutcome::Revert(5));
+        // 名前で絞ると、先頭の候補を試す。
+        let solarized = nene_ledger_core::theme_catalog::position_of("solarized-dark").unwrap();
+        palette.handle(Intent::Erase, 5);
+        typed(&mut palette, "solarized");
+        assert_eq!(
+            palette.items().first(),
+            Some(&PaletteItem::Theme(solarized))
+        );
+        assert_eq!(palette.click(0, 5), PaletteOutcome::Commit(solarized));
+    }
+
+    #[test]
+    fn choosing_a_reading_opens_its_list_previews_and_commits() {
+        let mut palette = CommandPalette::open();
+        typed(&mut palette, "delimiter");
+        assert_eq!(
+            palette.handle(Intent::Confirm, 0),
+            PaletteOutcome::OpenReading(ReadingAspect::Delimiter)
+        );
+        // 合成ルートが今の読み方（カンマ）を渡して段に入る。カンマを選んだ状態。
+        palette.enter_reading(ReadingAspect::Delimiter, ReadingChoice::Delimiter(b','));
+        assert_eq!(palette.selected(), 0);
+        assert_eq!(
+            palette.handle(down(), 0),
+            PaletteOutcome::PreviewReading(ReadingChoice::Delimiter(b'\t'))
+        );
+        assert_eq!(
+            palette.handle(Intent::Confirm, 0),
+            PaletteOutcome::CommitReading(ReadingChoice::Delimiter(b'\t'))
+        );
+        assert_eq!(
+            palette.handle(Intent::Cancel, 0),
+            PaletteOutcome::RevertReading
+        );
+        // 英字で絞る。
+        typed(&mut palette, "pipe");
+        assert_eq!(
+            palette.items(),
+            alloc::vec![PaletteItem::Reading(ReadingChoice::Delimiter(b'|'))]
+        );
+    }
+
+    #[test]
+    fn the_go_to_stage_runs_a_jump_for_a_readable_number() {
+        let mut palette = CommandPalette::open_go_to();
+        assert!(palette.items().is_empty());
+        typed(&mut palette, "x");
+        assert_eq!(palette.handle(Intent::Confirm, 0), PaletteOutcome::Stay);
+        palette.handle(Intent::Erase, 0);
+        typed(&mut palette, "12,2");
+        assert_eq!(
+            palette.handle(Intent::Confirm, 0),
+            PaletteOutcome::Run(Intent::GoTo(GoToTarget::parse("12,2").unwrap()))
+        );
+        assert_eq!(palette.handle(Intent::Cancel, 0), PaletteOutcome::Close);
+    }
+}
