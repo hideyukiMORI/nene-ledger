@@ -533,6 +533,17 @@ Shift_JIS・縦棒区切りの見本（`crates/app/fixtures/shift-jis-pipe.csv`�
 
 固定した列の幅が本体の幅（行番号の列を除く）の 2/3 を超えるときは、収まる数まで減らす（application の `freezing_more_than_fits_keeps_room_for_the_scrolling_columns`）。固定した列と動く列のクリックの位置は `frozen_and_scrolled_cells_are_hit_where_they_are_drawn`、横の移動の下限は `scrolling_left_stops_at_the_frozen_columns_until_they_are_unfrozen`、配置は core の `frozen_columns_stay_left_of_the_scrolled_ones` ほか 2 つ。列の入れ替えと幅のドラッグは固定した列でも同じ経路（`visible_columns` を見る）だが、撮っていない。Windows の実機での確認はまだ。
 
+## 54. 判別の標本の境目（GitHub Issue #10）— 仮想の X サーバでの確認（QLT-013）
+
+日本郵便の郵便番号の UTF-8 版（`utf_ken_all.csv`・18.4 MB・124,527 行・BOM 無し）を、直す前（`main` `458bf5f`）と直した後（`main` `a8b247b`）の release の窓で開き、幅 1024 で撮った（2026-11-05）。標本の 65,536 バイト目が字の途中にあるファイル。
+
+| 版 | 画面 |
+| --- | --- |
+| `458bf5f` | 状態の行が `124,527 行 · Windows-1252 · カンマ区切り · CRLF · 15 列`。4 列目以降が `ãƒ›ãƒƒã‚«ã‚¤ãƒ‰ã‚¦` のように化け、詳細ペインは `Windows-1252 で 5 バイト` |
+| `a8b247b` | 状態の行が `124,527 行 · UTF-8 · カンマ区切り · CRLF · 15 列`。`ホッカイドウ`・`サッポロシチュウオウク`・`北海道`・`札幌市中央区` と読め、詳細ペインは `UTF-8 で 5 バイト` |
+
+試験は core の `a_sample_read_up_to_the_read_limit_keeps_a_character_split_at_the_sample_limit` と app の `a_character_across_the_sample_boundary_keeps_the_encoding`。実データの突き合わせは benchmarks 第 2 節、経緯は [research/2026-11-05-quality-sweep](../research/2026-11-05-quality-sweep.md)。Windows の実機での確認はまだ（読む経路は OS に依らない）。
+
 ## 7. active の規則と、その証明
 
 CNF-009 は active の規則ごとに `| ID |` で始まる行がここにあることを要求する。
