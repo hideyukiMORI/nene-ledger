@@ -19,9 +19,25 @@ pub enum PaletteMode {
     },
     /// キーの一覧（Issue #63）。
     Keys,
+    /// 判別の候補を選ぶ段（Issue #3）。候補そのものは `CommandPalette` が持つ。`current` は今の読み方（印を付け、Esc で戻す先）。
+    Candidates {
+        /// 今の読み方（方言）。
+        current: ReadingChoice,
+    },
     /// 配色の一覧。`original` は開いたときの配色の、表の中の位置（Esc で戻す先）。
     Themes {
         /// 開いたときの配色の位置。
         original: usize,
     },
+}
+
+impl PaletteMode {
+    /// 選んでいる候補をその場で試す段か（配色・読み方・判別の候補）。試しの案内の行を持つ。
+    #[must_use]
+    pub fn tries_the_selection(self) -> bool {
+        match self {
+            Self::Themes { .. } | Self::Reading { .. } | Self::Candidates { .. } => true,
+            Self::Commands | Self::GoTo | Self::Keys => false,
+        }
+    }
 }

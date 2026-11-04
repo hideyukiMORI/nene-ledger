@@ -1,5 +1,7 @@
 //! パレットの候補。
 
+use nene_ledger_core::dialect_candidate::DialectCandidate;
+
 use crate::command_id::CommandId;
 use crate::key_guide::KeyGuide;
 use crate::reading_choice::ReadingChoice;
@@ -15,4 +17,6 @@ pub enum PaletteItem {
     Reading(ReadingChoice),
     /// パレットに無いキーの操作（キーの一覧の後半・読むだけ・Issue #63）。
     Key(KeyGuide),
+    /// 判別の候補の方言（点数の順・Issue #3）。
+    Candidate(DialectCandidate),
 }

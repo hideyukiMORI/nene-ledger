@@ -6,12 +6,15 @@ use nene_ledger_application::format_summary::FormatSummary;
 use nene_ledger_core::binary_sniff::looks_binary;
 use nene_ledger_core::detection::Detection;
 use nene_ledger_core::encoding_guess::EncodingGuess;
+use nene_ledger_core::text_encoding::TextEncoding;
 use nene_ledger_core::text_format::TextFormat;
 use nene_ledger_scan::block_size::BlockSize;
 use nene_ledger_scan::record_range::RecordRange;
+use nene_ledger_scan::scan_failure::ScanFailure;
 use nene_ledger_scan::source::Source;
 use nene_ledger_scan::sparse_index::SparseIndex;
 
+use crate::dialect_doubt::DialectDoubt;
 use crate::guessed::Guessed;
 use crate::open_failure::OpenFailure;
 use crate::rows::{WINDOW_RECORDS, read_rows};
@@ -19,7 +22,7 @@ use crate::rows::{WINDOW_RECORDS, read_rows};
 /// 判別に読む量（方言の判別の標本と同じ 64 KiB）。
 const SAMPLE_BYTES: usize = 64 * 1024;
 
-/// 開いた先頭の行と、窓の題名と、推し量った読み方（の要約）と、見出しのレコードの番号。
+/// 開いた先頭の行と、窓の題名と、推し量った読み方（の要約）と、見出しのレコードの番号と、判別に確信が無いときの点数。
 #[derive(Debug)]
 pub(crate) struct Opened {
     rows: Vec<Vec<String>>,
@@ -27,6 +30,7 @@ pub(crate) struct Opened {
     summary: FormatSummary,
     header: Option<u64>,
     binary: bool,
+    doubt: Option<DialectDoubt>,
 }
 
 impl Opened {
@@ -48,6 +52,11 @@ impl Opened {
     /// 見出しのレコードの番号。
     pub(crate) fn header(&self) -> Option<u64> {
         self.header
+    }
+
+    /// 方言の判別に確信が無ければ、その上位 2 つの点数（状態の行で知らせる・Issue #3）。
+    pub(crate) fn doubt(&self) -> Option<DialectDoubt> {
+        self.doubt
     }
 
     pub(crate) fn title(&self) -> &str {
@@ -75,25 +84,49 @@ pub(crate) fn open(path: &Path) -> Result<Opened, OpenFailure> {
         summary: FormatSummary::new(format, guessed.line_endings()),
         header: guessed.header(),
         binary: guessed.looks_binary(),
+        doubt: guessed.doubt(),
     })
 }
 
 /// 先頭を読んで文字コードを推し量り、BOM の後ろから方言を推し量る。
 pub(crate) fn guess_format(source: &Source) -> Result<Guessed, OpenFailure> {
-    let size = BlockSize::new(SAMPLE_BYTES).unwrap_or(BlockSize::MEBIBYTE);
-    let sample = source.read_block(0, size)?;
+    let sample = read_sample(source)?;
     let encoding = EncodingGuess::of(&sample).best();
-    let start = usize::try_from(source.content_start(encoding)?).unwrap_or(0);
-    let content = sample.get(start..).unwrap_or_default();
+    let content = after_bom(source, &sample, encoding)?;
     let detection = Detection::of_encoded(content, encoding.units());
     let format = TextFormat::new(encoding, detection.best());
     let binary = looks_binary(content, encoding.units());
     Ok(Guessed::new(format, &detection, binary))
 }
 
+/// 文字コード `encoding` で、原本 `source` の先頭の標本から方言を推し量る。開くときと、判別の候補を選ぶ段（Issue #3）で
+/// 同じ標本・同じ判別を使う 1 経路（ARC-001）。
+pub(crate) fn detect(source: &Source, encoding: TextEncoding) -> Result<Detection, ScanFailure> {
+    let sample = read_sample(source)?;
+    let content = after_bom(source, &sample, encoding)?;
+    Ok(Detection::of_encoded(content, encoding.units()))
+}
+
+/// 判別に読む標本（先頭の 64 KiB）。
+fn read_sample(source: &Source) -> Result<Vec<u8>, ScanFailure> {
+    let size = BlockSize::new(SAMPLE_BYTES).unwrap_or(BlockSize::MEBIBYTE);
+    source.read_block(0, size)
+}
+
+/// 標本 `sample` の、文字コード `encoding` の BOM の後ろ。
+fn after_bom<'sample>(
+    source: &Source,
+    sample: &'sample [u8],
+    encoding: TextEncoding,
+) -> Result<&'sample [u8], ScanFailure> {
+    let start = usize::try_from(source.content_start(encoding)?).unwrap_or(0);
+    Ok(sample.get(start..).unwrap_or_default())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use nene_ledger_core::quoting::Quoting;
     use std::path::PathBuf;
 
     fn fixture(name: &str) -> PathBuf {
@@ -138,6 +171,38 @@ mod tests {
         assert_eq!(rows[3][5], "引用符の中の \"二重\" 引用符");
         assert_eq!(rows[5].len(), 2);
         assert_eq!(rows[6][4], "1.20E+03");
+    }
+
+    #[test]
+    fn the_pipe_sample_leads_its_candidates_with_the_pipe() {
+        let pipe = detect(
+            &Source::open(&fixture("shift-jis-pipe.csv")).unwrap(),
+            TextEncoding::ShiftJis,
+        )
+        .unwrap();
+        assert_eq!(pipe.candidates()[0].dialect().delimiter().byte(), b'|');
+        assert_eq!(pipe.candidates()[0].columns(), 3);
+        assert!(pipe.candidates().len() > 1);
+    }
+
+    #[test]
+    fn the_screenshot_sample_is_opened_with_a_doubt_that_names_the_top_two_scores() {
+        // 見本は 7 行で、引用の中の改行・欠けたセルがあり、カンマの 2 つの流儀（`""` と `\"`）の差が 100 に満たない。
+        // 判別は確信を持たず、開いたときに 1 位と 2 位の点数を知らせる。
+        let path = fixture("screenshot.csv");
+        let detection = detect(&Source::open(&path).unwrap(), TextEncoding::Utf8WithBom).unwrap();
+        assert!(!detection.confident());
+        let (best, second) = (detection.candidates()[0], detection.candidates()[1]);
+        assert_eq!(best.dialect().delimiter().byte(), b',');
+        assert_eq!(best.dialect().quoting(), Quoting::Doubled);
+        assert_eq!(best.columns(), 6);
+        assert_eq!(second.dialect().quoting(), Quoting::QuotedBackslash);
+        let doubt = open(&path).unwrap().doubt().unwrap();
+        assert_eq!(
+            (doubt.top(), doubt.second()),
+            (best.score(), second.score())
+        );
+        assert!(doubt.top().saturating_sub(doubt.second()) < 100);
     }
 
     #[test]

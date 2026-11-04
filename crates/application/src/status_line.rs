@@ -63,14 +63,19 @@ pub fn format_status(summary: FormatSummary) -> String {
 
 /// 状態の行の、引用の扱いの短い名前。既定（`"` を `""` で書く・RFC 4180）なら `None`。
 fn quoting_status(quoting: Quoting, quote: u8) -> Option<String> {
+    ((quoting, quote) != (Quoting::Doubled, b'"')).then(|| quoting_short_name(quoting, quote))
+}
+
+/// 引用の扱いの短い名前（状態の行と、判別の候補の一覧で使う）。
+pub(crate) fn quoting_short_name(quoting: Quoting, quote: u8) -> String {
     match (quoting, quote) {
-        (Quoting::Doubled, b'"') => None,
-        (Quoting::Doubled, other) => Some(format!("{} で引用", char::from(other))),
+        (Quoting::Doubled, b'"') => String::from("\"\" で引用符（RFC 4180）"),
+        (Quoting::Doubled, other) => format!("{} で引用", char::from(other)),
         (Quoting::QuotedBackslash, other) => {
-            Some(format!("{} で引用・中は \\ で逃がす", char::from(other)))
+            format!("{} で引用・中は \\ で逃がす", char::from(other))
         }
-        (Quoting::Backslash, _) => Some(String::from("\\ で逃がす")),
-        (Quoting::Plain, _) => Some(String::from("引用なし")),
+        (Quoting::Backslash, _) => String::from("\\ で逃がす"),
+        (Quoting::Plain, _) => String::from("引用なし"),
     }
 }
 
@@ -104,6 +109,11 @@ pub fn notice_status(notice: Notice) -> String {
             "配色 {name}（{} / {}）",
             position.saturating_add(1),
             nene_ledger_core::theme_catalog::COUNT
+        ),
+        Notice::DialectUnsure { top, second } => format!(
+            "判別に確信なし（1 位 {}%・2 位 {}%）· 候補は Ctrl+Shift+P → candidates",
+            top / 10,
+            second / 10
         ),
     }
 }
@@ -446,6 +456,13 @@ mod tests {
         assert_eq!(
             notice_status(Notice::TooLargeToCopy),
             "選択が大きすぎるのでコピーしませんでした"
+        );
+        assert_eq!(
+            notice_status(Notice::DialectUnsure {
+                top: 412,
+                second: 398
+            }),
+            "判別に確信なし（1 位 41%・2 位 39%）· 候補は Ctrl+Shift+P → candidates"
         );
     }
 

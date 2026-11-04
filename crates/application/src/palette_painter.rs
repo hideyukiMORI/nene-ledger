@@ -5,6 +5,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use nene_ledger_core::color::Color;
+use nene_ledger_core::dialect_candidate::DialectCandidate;
 use nene_ledger_core::display_width::display_columns;
 use nene_ledger_core::draw_command::DrawCommand;
 use nene_ledger_core::glyph_metrics::GlyphMetrics;
@@ -24,6 +25,7 @@ use crate::palette_layout::PaletteLayout;
 use crate::palette_mode::PaletteMode;
 use crate::palette_search::key_list;
 use crate::reading_aspect::ReadingAspect;
+use crate::reading_choice::ReadingChoice;
 
 /// 選んでいる候補の左の帯の太さ（詳細ペインの帯と同じ）。
 const BAR: u32 = 3;
@@ -117,6 +119,9 @@ impl<'state> PalettePainter<'state> {
                     ..
                 } => "英字で絞るか、区切りの字を 1 つ打つ（例: tab, #）",
                 PaletteMode::Reading { .. } => "英字で絞る（例: sjis, tab）",
+                PaletteMode::Candidates { .. } => {
+                    "英字で絞る（例: tab, comma）。上から判別の点数の順"
+                }
             };
             self.text_at(
                 from_left(field, left),
@@ -145,16 +150,23 @@ impl<'state> PalettePainter<'state> {
             ),
             self.colors.cursor(),
         );
-        let total = match self.palette.mode() {
-            // 飛ぶ先は数を出さない。
-            PaletteMode::GoTo => return,
-            PaletteMode::Commands => CommandId::ALL.len(),
-            PaletteMode::Keys => key_list("").len(),
-            PaletteMode::Themes { .. } => COUNT,
-            PaletteMode::Reading { aspect, .. } => aspect.options().len(),
+        let Some(total) = self.total() else {
+            return;
         };
         let count = format!("{} / {total}", self.palette.items().len());
         self.right_text(field, count);
+    }
+
+    /// 段の候補の全部の数（検索欄の右端の「該当 / 全部」）。飛ぶ先の段は数を出さない。
+    fn total(&self) -> Option<usize> {
+        match self.palette.mode() {
+            PaletteMode::GoTo => None,
+            PaletteMode::Commands => Some(CommandId::ALL.len()),
+            PaletteMode::Keys => Some(key_list("").len()),
+            PaletteMode::Themes { .. } => Some(COUNT),
+            PaletteMode::Reading { aspect, .. } => Some(aspect.options().len()),
+            PaletteMode::Candidates { .. } => Some(self.palette.candidates().len()),
+        }
     }
 
     /// 配色の段の、試しの案内（試している配色の名前と、決める・戻すのキー）。
@@ -172,6 +184,10 @@ impl<'state> PalettePainter<'state> {
             Some(&PaletteItem::Reading(choice)) => {
                 format!("試し中: {}　Enter で開き直す・Esc で戻す", choice.name())
             }
+            Some(&PaletteItem::Candidate(candidate)) => format!(
+                "試し中: {}　Enter で開き直す・Esc で戻す",
+                ReadingChoice::dialect(candidate.dialect()).name()
+            ),
             Some(&PaletteItem::Command(_) | &PaletteItem::Key(_)) | None => String::new(),
         };
         self.text_at(
@@ -192,6 +208,7 @@ impl<'state> PalettePainter<'state> {
             PaletteMode::Keys => "キー",
             PaletteMode::Themes { .. } => "配色",
             PaletteMode::Reading { aspect, .. } => aspect.noun(),
+            PaletteMode::Candidates { .. } => "候補",
         };
         let text = format!("“{}” に合う{kind}は無い", self.palette.query());
         let row = self.layout.row(0);
@@ -231,19 +248,22 @@ impl<'state> PalettePainter<'state> {
         let (name, aside) = match item {
             PaletteItem::Command(command) => (
                 String::from(command.name(detail)),
-                command.keys().unwrap_or(""),
+                String::from(command.keys().unwrap_or("")),
             ),
-            PaletteItem::Reading(choice) => {
-                let current = match self.palette.mode() {
-                    PaletteMode::Reading { current, .. } => current == choice,
-                    PaletteMode::Commands
-                    | PaletteMode::GoTo
-                    | PaletteMode::Keys
-                    | PaletteMode::Themes { .. } => false,
-                };
-                (choice.name(), if current { "今の読み方" } else { "" })
+            PaletteItem::Reading(choice) => (
+                choice.name(),
+                String::from(if self.is_current(choice) {
+                    "今の読み方"
+                } else {
+                    ""
+                }),
+            ),
+            PaletteItem::Candidate(candidate) => {
+                let choice = ReadingChoice::dialect(candidate.dialect());
+                let aside = candidate_aside(candidate, self.is_current(choice));
+                (choice.name(), aside)
             }
-            PaletteItem::Key(guide) => (String::from(guide.name()), guide.keys()),
+            PaletteItem::Key(guide) => (String::from(guide.name()), String::from(guide.keys())),
             PaletteItem::Theme(position) => {
                 left = self.swatches(row, left, position);
                 let seed = at(position);
@@ -251,11 +271,39 @@ impl<'state> PalettePainter<'state> {
                     nene_ledger_core::appearance::Appearance::Light => "ライト",
                     nene_ledger_core::appearance::Appearance::Dark => "ダーク",
                 };
-                (String::from(seed.name()), appearance)
+                (String::from(seed.name()), String::from(appearance))
             }
         };
-        self.text_at(from_left(row, left), name, self.colors.text());
-        self.right_text(row, String::from(aside));
+        // 名前は右の字（キー・印・点数）に重ねない。長ければ手前で切る。
+        let reserved = self
+            .width_of(&aside)
+            .saturating_add(self.px(TEXT_INSET).saturating_mul(2));
+        let name_area = from_left(row, left);
+        self.text_at(
+            PixelRect::new(
+                name_area.origin(),
+                PixelSize::new(
+                    name_area.size().width().saturating_sub(reserved),
+                    name_area.size().height(),
+                ),
+            ),
+            name,
+            self.colors.text(),
+        );
+        self.right_text(row, aside);
+    }
+
+    /// 読み方の候補 `choice` が、今の読み方（読み方を選ぶ段・判別の候補を選ぶ段で印を付ける）か。
+    fn is_current(&self, choice: ReadingChoice) -> bool {
+        match self.palette.mode() {
+            PaletteMode::Reading { current, .. } | PaletteMode::Candidates { current } => {
+                current == choice
+            }
+            PaletteMode::Commands
+            | PaletteMode::GoTo
+            | PaletteMode::Keys
+            | PaletteMode::Themes { .. } => false,
+        }
     }
 
     /// 配色の 3 色（背景・前景・強調）の見本を並べ、その右の位置を返す。行の中では色を変えない。
@@ -331,6 +379,16 @@ impl<'state> PalettePainter<'state> {
 
     fn fill(&mut self, rect: PixelRect, color: Color) {
         self.commands.push(DrawCommand::Fill { rect, color });
+    }
+}
+
+/// 判別の候補の右に添える字。今の読み方の印・点数（千分率を百分率に）・いちばん多い列の数（OPEN-02）。
+fn candidate_aside(candidate: DialectCandidate, current: bool) -> String {
+    let score = format!("{}% · {} 列", candidate.score() / 10, candidate.columns());
+    if current {
+        format!("今の読み方 · {score}")
+    } else {
+        score
     }
 }
 
@@ -411,7 +469,7 @@ mod tests {
         let commands = palette.paint(view(), colors(), DetailPane::Open);
         let shown = texts(&commands);
         assert!(shown.contains(&"操作の名前を英字かローマ字で（例: theme, haishoku）"));
-        assert!(shown.contains(&"21 / 21"));
+        assert!(shown.contains(&"22 / 22"));
         assert!(shown.contains(&"詳細ペインを閉じる") && shown.contains(&"Ctrl+Shift+U"));
         assert!(shown.contains(&"文字を大きくする") && shown.contains(&"Ctrl+Plus"));
         // 選んでいる最初の行は選択の色で塗り、左に強調の色の 3px の帯。
@@ -462,8 +520,69 @@ mod tests {
         let commands = palette.paint(view(), colors(), DetailPane::Closed);
         let shown = texts(&commands);
         assert!(shown.contains(&"“xyz” に合う操作は無い"));
-        assert!(shown.contains(&"0 / 21") && shown.contains(&"xyz"));
+        assert!(shown.contains(&"0 / 22") && shown.contains(&"xyz"));
         assert!(fills(&commands, colors().selection()).is_empty());
+    }
+
+    /// 判別の候補の段（カンマ 87%・6 列が今の読み方、タブ・引用なし 12%・1 列）。
+    fn candidate_palette() -> CommandPalette {
+        use nene_ledger_core::delimiter::Delimiter;
+        use nene_ledger_core::dialect::Dialect;
+        use nene_ledger_core::quoting::Quoting;
+        let mut palette = CommandPalette::open();
+        let comma = DialectCandidate::new(Dialect::rfc4180(), 874, 6);
+        let tab = DialectCandidate::new(
+            Dialect::new(Delimiter::TAB, Quoting::Plain, b'"').unwrap(),
+            120,
+            1,
+        );
+        palette.enter_candidates(vec![comma, tab], ReadingChoice::dialect(comma.dialect()));
+        palette
+    }
+
+    #[test]
+    fn the_candidate_list_shows_scores_columns_and_the_current_mark() {
+        let mut palette = candidate_palette();
+        let commands = palette.paint(view(), colors(), DetailPane::Open);
+        let shown = texts(&commands);
+        assert!(shown.contains(&"英字で絞る（例: tab, comma）。上から判別の点数の順"));
+        assert!(shown.contains(&"2 / 2"));
+        assert!(shown.contains(&"カンマ区切り・\"\" で引用符（RFC 4180）"));
+        assert!(shown.contains(&"今の読み方 · 87% · 6 列"));
+        assert!(shown.contains(&"タブ区切り・引用なし"));
+        assert!(shown.contains(&"12% · 1 列"));
+        assert!(shown.contains(
+            &"試し中: カンマ区切り・\"\" で引用符（RFC 4180）　Enter で開き直す・Esc で戻す"
+        ));
+        for character in "zz".chars() {
+            palette.handle(Intent::Type(character), 0);
+        }
+        let nothing = palette.paint(view(), colors(), DetailPane::Open);
+        assert!(texts(&nothing).contains(&"“zz” に合う候補は無い"));
+    }
+
+    #[test]
+    fn a_long_name_is_clipped_before_the_aside() {
+        let palette = candidate_palette();
+        let commands = palette.paint(view(), colors(), DetailPane::Open);
+        // 名前の描く矩形は、右の字（今の読み方の印と点数）の手前で終わる（重ねない）。
+        let first_row = PaletteLayout::new(view(), &palette).row(0);
+        let name_clip = commands
+            .iter()
+            .find_map(|command| match command {
+                DrawCommand::Text { text, clip, .. } if text.starts_with("カンマ区切り") => {
+                    Some(*clip)
+                }
+                DrawCommand::Text { .. } | DrawCommand::Fill { .. } | DrawCommand::Line { .. } => {
+                    None
+                }
+            })
+            .unwrap();
+        let aside_width = display_columns("今の読み方 · 87% · 6 列") * 8;
+        assert!(
+            name_clip.origin().x() + name_clip.size().width() + aside_width
+                < first_row.origin().x() + first_row.size().width()
+        );
     }
 
     #[test]

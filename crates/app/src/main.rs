@@ -5,6 +5,7 @@
 
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
+mod dialect_doubt;
 mod dumping;
 mod guessed;
 mod open_failure;
@@ -84,7 +85,6 @@ fn run_window(
     opened: &opening::Opened,
     theme: Option<ThemeState>,
 ) -> Result<(), String> {
-    use nene_ledger_application::document::Document;
     use nene_ledger_application::ticker::Ticker;
     use nene_ledger_scan::block_size::BlockSize;
     use nene_ledger_scan::index_job::IndexJob;
@@ -116,24 +116,35 @@ fn run_window(
         report(&message);
     }
     let mut viewer = viewer::Viewer::new(
-        {
-            let mut document = Document::open(
-                opened.title().to_owned(),
-                opened.summary(),
-                opened.header(),
-                opened.rows(),
-            );
-            if opened.looks_binary() {
-                document.notify(nene_ledger_application::notice::Notice::LooksBinary);
-            }
-            document
-        },
+        first_document(opened),
         workers::Workers::new(job, ticker),
         reader,
         preferences,
     );
     ui.run(&mut viewer)
         .map_err(|failure| format!("窓が止まった: {failure:?}"))
+}
+
+/// 開いた先頭の行の画面。方言の判別に確信が無ければそれを知らせ（Issue #3）、文字のファイルでないようならそちらを知らせる
+/// （知らせは 1 つなので、後のほうが残る）。
+fn first_document(opened: &opening::Opened) -> nene_ledger_application::document::Document {
+    use nene_ledger_application::notice::Notice;
+    let mut document = nene_ledger_application::document::Document::open(
+        opened.title().to_owned(),
+        opened.summary(),
+        opened.header(),
+        opened.rows(),
+    );
+    if let Some(doubt) = opened.doubt() {
+        document.notify(Notice::DialectUnsure {
+            top: doubt.top(),
+            second: doubt.second(),
+        });
+    }
+    if opened.looks_binary() {
+        document.notify(Notice::LooksBinary);
+    }
+    document
 }
 
 /// 開けなかった理由を、利用者に向けた文にする。🔴 表示言語の文言の表（ADR 0011）を入れるまでの仮の日本語。
