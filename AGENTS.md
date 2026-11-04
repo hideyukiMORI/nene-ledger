@@ -19,7 +19,7 @@ From 2026-10-22 to 2026-11-02 the project advanced through 68 local issues (no r
 
 ## Required reading before changing production code
 
-0. `SPECIFICATION.md` and `docs/FEATURES.md` (the 189 features, their phase and status; mark `確認済み` only with a named test or measurement)
+0. `SPECIFICATION.md` and `docs/FEATURES.md` (the 219 features, their phase and status; mark `確認済み` only with a named test or measurement)
 1. `docs/ARCHITECTURE_CONSTITUTION.md`
 2. `docs/PROJECT_LAYOUT.md`
 3. `docs/CODING_RULES.md`
