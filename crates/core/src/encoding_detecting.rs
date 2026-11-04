@@ -13,6 +13,9 @@ pub(crate) fn bom_encoding(input: &[u8]) -> Option<TextEncoding> {
     .find(|encoding| input.starts_with(encoding.bom()))
 }
 
+/// BOM の無い UTF-16 らしさを決める、片側の NUL の数の下限。
+const MIN_UTF16_NULS: u32 = 2;
+
 /// BOM の無い UTF-16 らしさ。NUL が奇数の位置（LE の ASCII）か偶数の位置（BE の ASCII）に偏るか。
 pub(crate) fn utf16_without_bom(sample: &[u8]) -> Option<TextEncoding> {
     let (pairs, _) = sample.as_chunks::<2>();
@@ -25,7 +28,8 @@ pub(crate) fn utf16_without_bom(sample: &[u8]) -> Option<TextEncoding> {
     // 4 分の 1 以上の単位で片側だけが NUL なら UTF-16 とみなす（ASCII の多い CSV では半分を超える）。
     let leaning =
         |many: u32, few: u32| many.saturating_mul(4) >= units && few.saturating_mul(10) < many;
-    if units < 2 {
+    // NUL が 1 つだけの標本（`a\tb\n\0\x01`）は、偏りを数えるには足りない（GitHub Issue #25）。
+    if units < 2 || even.max(odd) < MIN_UTF16_NULS {
         None
     } else if leaning(odd, even) {
         Some(TextEncoding::Utf16Le)

@@ -196,6 +196,13 @@ mod tests {
         );
     }
 
+    /// NUL が 1 つだけの短い標本は UTF-16 とみなさない（GitHub Issue #25）。2 字の UTF-16 は UTF-16 のまま。
+    #[test]
+    fn a_single_nul_is_not_enough_to_lean_towards_utf16() {
+        assert_eq!(guess(b"a\tb\n\x00\x01").0, TextEncoding::Utf8);
+        assert_eq!(guess(b"a\x00\n\x00").0, TextEncoding::Utf16Le);
+    }
+
     #[test]
     fn a_character_cut_at_the_end_of_the_sample_is_not_an_error() {
         let mut input = b"ab".to_vec();
