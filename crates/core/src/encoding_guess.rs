@@ -4,7 +4,8 @@ use alloc::vec::Vec;
 
 use crate::detecting::SAMPLE_LIMIT;
 use crate::encoding_detecting::{
-    bom_encoding, euc_jp_has_hiragana, euc_jp_valid, shift_jis_valid, utf8_valid, utf16_without_bom,
+    bom_encoding, euc_jp_has_hiragana, euc_jp_valid, shift_jis_lacks_common_characters,
+    shift_jis_valid, utf8_valid, utf16_without_bom,
 };
 use crate::text_encoding::TextEncoding;
 
@@ -51,6 +52,9 @@ impl EncodingGuess {
             shift_jis_valid(sample, complete),
             euc_jp_valid(sample, complete),
         ) {
+            (true, false) if shift_jis_lacks_common_characters(sample) => {
+                Self::led_by(TextEncoding::Windows1252, false)
+            }
             (true, false) => Self::led_by(TextEncoding::ShiftJis, true),
             (false, true) => Self::led_by(TextEncoding::EucJp, true),
             (true, true) if euc_jp_has_hiragana(sample) => Self::led_by(TextEncoding::EucJp, false),
@@ -229,6 +233,37 @@ mod tests {
             input.push(b',');
         }
         input
+    }
+
+    /// Windows-1252 のフランス語が、たまたま CP932 として正しい並びでも、CP932 と確信しない（GitHub Issue #18）。
+    #[test]
+    fn latin_text_that_is_also_valid_shift_jis_is_not_taken_as_japanese() {
+        // `nom;ville` / `Hélène;Orléans` / `Jérôme;Évry` の Windows-1252。`é` + ASCII が CP932 の第二水準の字になる。
+        let latin = b"nom;ville\nH\xE9l\xE8ne;Orl\xE9ans\nJ\xE9r\xF4me;\xC9vry\n";
+        assert!(shift_jis_valid(latin, true));
+        assert_eq!(guess(latin), (TextEncoding::Windows1252, false));
+        assert!(
+            EncodingGuess::of(latin)
+                .candidates()
+                .contains(&TextEncoding::ShiftJis)
+        );
+    }
+
+    /// 日本語の CP932 は、漢字だけでも半角カナだけ（全銀の形式）でも CP932 のまま。
+    #[test]
+    fn japanese_shift_jis_with_kanji_or_halfwidth_kana_only_stays_shift_jis() {
+        // 「山田」「名前」（第一水準）・「ｱｲｳ」（半角カナ・1 バイト）。
+        let kanji = line(&[b"\x8E\x52\x93\x63", b"\x96\xBC\x91\x4F"]);
+        assert_eq!(guess(&kanji), (TextEncoding::ShiftJis, true));
+        let kana = line(&[b"\xB1\xB2\xB3", b"123"]);
+        assert_eq!(guess(&kana).0, TextEncoding::ShiftJis);
+        // 第一水準と第二水準が混ざっても、第一水準が 1 割あれば日本語とみなす。
+        let mut mixed = Vec::new();
+        for _ in 0..9_u32 {
+            mixed.extend_from_slice(b"\xE9\x6C");
+        }
+        mixed.extend_from_slice(b"\x8E\x52");
+        assert_eq!(guess(&mixed), (TextEncoding::ShiftJis, true));
     }
 
     #[test]

@@ -104,6 +104,34 @@ pub(crate) fn euc_jp_valid(sample: &[u8], complete: bool) -> bool {
     true
 }
 
+/// CP932 として読んだ 2 バイトの字が、先行バイト `0x81`〜`0x9F`（記号・かな・第一水準の漢字）をほとんど含まないか。
+///
+/// 日本語の文章は、かなや第一水準の漢字をまず必ず含む。Windows-1252 の `é`（`E9`）や `ü`（`FC`）の後ろに ASCII の字が続くと
+/// CP932 の 2 バイトの字としても正しい並びになるが、先行バイトは `0xE0` 以上（第二水準の漢字・拡張）に限られる
+/// （`Hélène` → `H駘鈩e`）。2 バイトの字が 1 つも無い（ASCII と半角カナだけの）標本では偽。
+pub(crate) fn shift_jis_lacks_common_characters(sample: &[u8]) -> bool {
+    let (mut frequent, mut rare) = (0_usize, 0_usize);
+    let mut bytes = sample.iter().copied();
+    while let Some(byte) = bytes.next() {
+        match byte {
+            0x81..=0x9F => {
+                frequent = frequent.saturating_add(1);
+                bytes.next();
+            }
+            0xE0..=0xFC => {
+                rare = rare.saturating_add(1);
+                bytes.next();
+            }
+            0x00..=0x80 | 0xA0..=0xDF | 0xFD..=0xFF => {}
+        }
+    }
+    let double = frequent.saturating_add(rare);
+    double > 0 && frequent.saturating_mul(FREQUENT_SHARE_DIVISOR) < double
+}
+
+/// 2 バイトの字のうち、先行バイト `0x81`〜`0x9F` の字が 10 分の 1 に満たなければ日本語の文章とみなさない。
+const FREQUENT_SHARE_DIVISOR: usize = 10;
+
 /// EUC-JP として読むと、ひらがな（`A4 A1`〜`A4 F3`）があるか。
 ///
 /// CP932 のひらがな（先頭 `0x82`）は EUC-JP として誤りなので、両方として読める標本でひらがなが見えるのは EUC-JP の文章。
