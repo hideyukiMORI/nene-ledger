@@ -1,5 +1,6 @@
 //! 窓を出さずに、全部のレコードを RFC 4180 の UTF-8 で標準出力に書く（測定・BIG-11）。
 
+use std::io::{BufWriter, ErrorKind, Write};
 use std::ops::ControlFlow;
 use std::path::Path;
 
@@ -18,10 +19,27 @@ use crate::rows::read_rows;
 /// 一度に読む行の数（索引の目印の間隔と同じにして、毎回目印から読む）。
 const DUMP_RECORDS: usize = 1024;
 
-/// `path` を窓と同じ経路（判別・索引・範囲の取り出し・復号）で読み、全部のレコードを書く。
+/// `path` を窓と同じ経路（判別・索引・範囲の取り出し・復号）で読み、全部のレコードを標準出力に書く。
 ///
 /// 🔴 Pollock などの測定のための出力で、保存ではない（原本のバイト列を写さず、値を書き直す）。
+/// 読む側が先に閉じた（`| head`）ら、そこで黙って終える（GitHub Issue #20。`print!` は閉じた管で panic した）。
 pub(crate) fn dump(path: &Path) -> Result<(), OpenFailure> {
+    let stdout = std::io::stdout();
+    let mut out = BufWriter::new(stdout.lock());
+    let written = dump_to(path, &mut out).and_then(|()| out.flush().map_err(OpenFailure::Write));
+    quiet_when_the_reader_left(written)
+}
+
+/// 読む側が閉じた（`BrokenPipe`）だけなら成功とみなす。
+fn quiet_when_the_reader_left(result: Result<(), OpenFailure>) -> Result<(), OpenFailure> {
+    match result {
+        Err(OpenFailure::Write(error)) if error.kind() == ErrorKind::BrokenPipe => Ok(()),
+        Ok(()) | Err(OpenFailure::Scan(_) | OpenFailure::Write(_)) => result,
+    }
+}
+
+/// `path` の全部のレコードを、RFC 4180 の UTF-8 で `out` に書く。
+fn dump_to(path: &Path, out: &mut impl Write) -> Result<(), OpenFailure> {
     let source = Source::open(path)?;
     let guessed = guess_format(&source)?;
     let format = guessed.format();
@@ -46,18 +64,11 @@ pub(crate) fn dump(path: &Path) -> Result<(), OpenFailure> {
             return Ok(());
         }
         for row in &rows {
-            emit(&rfc4180_record(row));
+            out.write_all(rfc4180_record(row).as_bytes())
+                .map_err(OpenFailure::Write)?;
         }
         first = first.saturating_add(u64::try_from(rows.len()).unwrap_or(u64::MAX));
     }
-}
-
-#[expect(
-    clippy::print_stdout,
-    reason = "RS-014: 合成ルートの測定の出力（--dump）は標準出力に書いてよい唯一の場所"
-)]
-fn emit(line: &str) {
-    print!("{line}");
 }
 
 #[cfg(test)]
@@ -82,6 +93,44 @@ mod tests {
         )
         .unwrap();
         rows.iter().map(|row| rfc4180_record(row)).collect()
+    }
+
+    /// 書き込みを `failure` で断る書き手。
+    struct Refusing(ErrorKind);
+
+    impl Write for Refusing {
+        fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::from(self.0))
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn fixture(name: &str) -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("fixtures")
+            .join(name)
+    }
+
+    /// 読む側が閉じたら黙って終え、ほかの書き込みの失敗は失敗として返す（GitHub Issue #20）。
+    #[test]
+    fn a_closed_reader_ends_quietly_but_other_write_failures_are_reported() {
+        let path = fixture("screenshot.csv");
+        let closed = dump_to(&path, &mut Refusing(ErrorKind::BrokenPipe));
+        assert!(matches!(closed, Err(OpenFailure::Write(_))));
+        assert!(quiet_when_the_reader_left(closed).is_ok());
+        let full = dump_to(&path, &mut Refusing(ErrorKind::StorageFull));
+        assert!(quiet_when_the_reader_left(full).is_err());
+    }
+
+    /// `dump` と同じ関数で書いた出力が、範囲の取り出しの行と同じ。
+    #[test]
+    fn the_dump_writes_the_same_rows_as_the_window() {
+        let mut out = Vec::new();
+        dump_to(&fixture("screenshot.csv"), &mut out).unwrap();
+        assert_eq!(String::from_utf8(out).unwrap(), dumped("screenshot.csv"));
     }
 
     #[test]
