@@ -4,7 +4,7 @@ use alloc::vec::Vec;
 
 use crate::detecting::{
     SAMPLE_LIMIT, candidate_dialects, header_guess, preamble_rows, sample_records, score,
-    segmentation, trial_dialect,
+    segmentation,
 };
 use crate::dialect::Dialect;
 use crate::dialect_candidate::DialectCandidate;
@@ -58,7 +58,10 @@ impl Detection {
             || Dialect::rfc4180().with_units(units),
             |candidate| candidate.dialect(),
         );
-        let records = sample_records(sample, trial_dialect(sample, best, complete), complete);
+        // 前書き・見出し・改行は、ファイルを実際に読む方言（`best`・厳格）で切ったレコードで数える。🔴 点を付ける試し切り
+        // （`trial_dialect`・閉じない引用符を文字として読むことがある）で数えると、レコードの番号が実際の読みとずれ、
+        // 迷子の引用符の後ろで前書きの数が表のレコードの数を超えて、表が空になる（GitHub Issue #12）。
+        let records = sample_records(sample, best, complete);
         let preamble = preamble_rows(sample, &records, &best);
         let table = records.get(preamble..).unwrap_or_default();
         Self {
@@ -126,8 +129,75 @@ mod tests {
     use crate::detecting::SAMPLE_LIMIT;
     use crate::line_ending::LineEnding;
     use crate::quoting::Quoting;
+    use crate::records::Records;
     use alloc::string::String;
     use alloc::vec::Vec;
+
+    /// 返す方言（`best`）で `input` を切ったレコードの数。
+    fn strict_records(input: &[u8], detection: &Detection) -> usize {
+        Records::new(input, detection.best()).count()
+    }
+
+    /// 前書きは、返す方言で切ったレコードを少なくとも 1 つ残す（GitHub Issue #12）。
+    #[test]
+    fn a_stray_quote_before_the_header_does_not_count_a_preamble_past_the_strict_records() {
+        let input = b"\"Report Q3\nid,name,price\n1,a,2\n2,b,3\n3,c,4\n";
+        let detection = Detection::of(input);
+        assert_eq!(
+            detection.best().unclosed_quote(),
+            crate::unclosed_quote::UnclosedQuote::ToEnd
+        );
+        assert_eq!(strict_records(input, &detection), 1);
+        assert_eq!(detection.preamble_rows(), 0);
+    }
+
+    /// 種を固定した xorshift（テストは乱数の名前に頼らない・ARC-007）。
+    struct Xorshift(u64);
+
+    impl Xorshift {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13_u32;
+            self.0 ^= self.0 >> 7_u32;
+            self.0 ^= self.0 << 17_u32;
+            self.0
+        }
+    }
+
+    /// 前書きらしい行・表の行・迷子の引用符を混ぜた入力。
+    fn random_table(rng: &mut Xorshift) -> Vec<u8> {
+        const PIECES: [&[u8]; 8] = [
+            b"title\n",
+            b"a,b,c,d\n",
+            b"1,2,3,4\n",
+            b",,,\n",
+            b"\"",
+            b"x,\"y\",z,w\n",
+            b"note,,,\n",
+            b"\n",
+        ];
+        let length = usize::try_from(rng.next() % 24).unwrap();
+        let mut out = Vec::new();
+        for _ in 0..length {
+            out.extend_from_slice(PIECES[usize::try_from(rng.next() % 8).unwrap()]);
+        }
+        out
+    }
+
+    #[test]
+    fn random_preambles_never_reach_past_the_records_of_the_returned_dialect() {
+        let mut rng = Xorshift(0x9E37_79B9_7F4A_7C15);
+        for _ in 0_u32..3_000 {
+            let input = random_table(&mut rng);
+            let detection = Detection::of(&input);
+            let records = strict_records(&input, &detection);
+            assert!(
+                detection.preamble_rows() == 0 || detection.preamble_rows() < records,
+                "{:?}: preamble {} of {records}",
+                String::from_utf8_lossy(&input),
+                detection.preamble_rows(),
+            );
+        }
+    }
 
     fn best(input: &str) -> (u8, Quoting, u8) {
         let dialect = Detection::of(input.as_bytes()).best();
