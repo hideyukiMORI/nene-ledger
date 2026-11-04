@@ -110,6 +110,10 @@ pub fn notice_status(notice: Notice) -> String {
             position.saturating_add(1),
             nene_ledger_core::theme_catalog::COUNT
         ),
+        Notice::Frozen { columns: 0 } => String::from("列の固定を外しました"),
+        Notice::Frozen { columns } => {
+            format!("左の {columns} 列を固定しました（横に動いても残ります）")
+        }
         Notice::DialectUnsure { top, second } => format!(
             "判別に確信なし（1 位 {}%・2 位 {}%）· 候補は Ctrl+Shift+P → candidates",
             top / 10,
@@ -456,6 +460,14 @@ mod tests {
         assert_eq!(
             notice_status(Notice::TooLargeToCopy),
             "選択が大きすぎるのでコピーしませんでした"
+        );
+        assert_eq!(
+            notice_status(Notice::Frozen { columns: 2 }),
+            "左の 2 列を固定しました（横に動いても残ります）"
+        );
+        assert_eq!(
+            notice_status(Notice::Frozen { columns: 0 }),
+            "列の固定を外しました"
         );
         assert_eq!(
             notice_status(Notice::DialectUnsure {

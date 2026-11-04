@@ -81,6 +81,8 @@ pub struct Document {
     widths: ColumnWidths,
     view: TableView,
     first_column: usize,
+    /// 左に固定した列の数（表示の位置で数える・VIEW-01）。横の表示はこの次の列から。
+    frozen: usize,
     selection: Selection,
     detail: DetailPane,
     notice: Option<Notice>,
@@ -150,6 +152,7 @@ impl Document {
             header,
             view,
             first_column: 0,
+            frozen: 0,
             selection: Selection::at(CellPosition::new(0, 0)),
             detail: DetailPane::Open,
             notice: None,
@@ -245,10 +248,16 @@ impl Document {
         self.selection
     }
 
-    /// 表示の最初の列。
+    /// 表示の最初の列（横に動く列の最初。固定した列はその左に残る）。
     #[must_use]
     pub fn first_column(&self) -> usize {
         self.first_column
+    }
+
+    /// 左に固定した列の数（表示の位置で数える・VIEW-01）。
+    #[must_use]
+    pub fn frozen_columns(&self) -> usize {
+        self.frozen
     }
 
     /// 窓 `window` での利用者の意図を取り込み、合成ルートがすることを返す。カーソル・選択・横の表示はすぐ変える。
@@ -292,18 +301,16 @@ impl Document {
             | Intent::SelectColumns
             | Intent::MoveColumns(_)
             | Intent::ResetColumns
-            | Intent::ResetWidths => {
+            | Intent::ResetWidths
+            | Intent::FreezeColumns
+            | Intent::UnfreezeColumns => {
                 self.arrange(intent, window);
                 current
             }
             Intent::GoTo(target) => self.jump(target, page, window),
             // 開閉はすでに済ませた。ペインの分だけ表が狭まるので、カーソルが見えるように縦の表示を動かす。
             Intent::ToggleDetail => reveal_row(current, self.selection.cursor().body(), page),
-            Intent::Scroll(scroll) => {
-                let target = self.scroll(scroll, current);
-                self.follow_wheel(target, page, window);
-                target
-            }
+            Intent::Scroll(scroll) => self.wheel(scroll, current, window),
             Intent::Move { step, mode } => {
                 let to = step_cursor(self.selection.cursor(), step, page, self.extent());
                 self.select(to, mode);
@@ -318,6 +325,13 @@ impl Document {
         self.go_to(target, page)
     }
 
+    /// ホイール。横はその場で動かし、縦は動いた先の本体の先頭を返す。ドラッグ中なら、動いた後の指の下まで選択を広げる。
+    fn wheel(&mut self, scroll: Scroll, current: u64, window: WindowView) -> u64 {
+        let target = self.scroll(scroll, current);
+        self.follow_wheel(target, self.page_rows(window), window);
+        target
+    }
+
     /// 縦の表示を動かさない、すべて・行全体・列全体の選択と、列の並びの意図（Issue #62）。ほかの意図は何もしない。
     fn arrange(&mut self, intent: Intent, window: WindowView) {
         match intent {
@@ -330,6 +344,10 @@ impl Document {
                 self.counted = None;
             }
             Intent::ResetWidths => self.custom.clear(),
+            Intent::FreezeColumns => {
+                self.freeze_columns(self.selection.cursor().column().saturating_add(1), window);
+            }
+            Intent::UnfreezeColumns => self.freeze_columns(0, window),
             Intent::Scroll(_)
             | Intent::Move { .. }
             | Intent::Point { .. }
@@ -405,8 +423,9 @@ impl Document {
         }
         let grip = window.metrics().px(COLUMN_GRIP);
         let layout = self.layout(self.first_column, window.content_metrics());
-        (self.first_column..self.widths.columns().len())
-            .map_while(|column| layout.column_right(column).map(|right| (column, right)))
+        layout
+            .visible_columns()
+            .filter_map(|column| layout.column_right(column).map(|right| (column, right)))
             .find(|&(_, right)| right.abs_diff(x) <= grip)
             .map(|(column, _)| column)
     }
@@ -535,6 +554,8 @@ impl Document {
             | Intent::MoveColumns(_)
             | Intent::ResetColumns
             | Intent::ResetWidths
+            | Intent::FreezeColumns
+            | Intent::UnfreezeColumns
             | Intent::GoTo(_)
             | Intent::OpenGoTo => None,
         }
@@ -835,23 +856,18 @@ impl Document {
         let body = self.bars(window).body();
         let layout = self.layout(self.first_column, window.content_metrics());
         let x = i64::from(at.x()) - i64::from(body.origin().x());
-        let count = self.widths.columns().len();
-        for column in self.first_column..count {
-            let Some(right) = layout.column_right(column) else {
+        for column in layout.visible_columns() {
+            let (Some(left), Some(right)) =
+                (layout.column_left(column), layout.column_right(column))
+            else {
                 break;
-            };
-            let left = match column.checked_sub(1) {
-                Some(previous) if column > self.first_column => {
-                    layout.column_right(previous).unwrap_or(0)
-                }
-                Some(_) | None => layout.gutter_width(),
             };
             let middle = i64::from(left.midpoint(right));
             if x < middle {
                 return column;
             }
         }
-        count
+        self.widths.columns().len()
     }
 
     /// 表示の列 `block` を、表示の位置 `before` の前へ移す（表示だけ・原本は変えない）。移した列を列全体で選び直す。
@@ -902,13 +918,19 @@ impl Document {
         let layout = self.layout(self.first_column, metrics);
         let before = self.drop_index(at, window);
         let line = metrics.px(DROP_LINE);
-        let x = if before <= self.first_column {
-            layout.gutter_width()
-        } else {
-            layout
-                .column_right(before - 1)
-                .unwrap_or_else(|| layout.table_width())
-        };
+        // 前の列の右端。先頭なら行番号の列の右端、隠れた列（固定した列と表示の最初の列の間）の後ろなら固定した列の右端。
+        let x = before
+            .checked_sub(1)
+            .and_then(|previous| layout.column_right(previous))
+            .unwrap_or_else(|| {
+                if before == 0 {
+                    layout.gutter_width()
+                } else if before <= self.first_column {
+                    layout.gutter_width().saturating_add(layout.frozen_width())
+                } else {
+                    layout.table_width()
+                }
+            });
         Some(DrawCommand::Fill {
             rect: PixelRect::new(
                 PixelPoint::new(x.saturating_sub(line / 2), 0),
@@ -978,7 +1000,7 @@ impl Document {
         let x = u32::try_from(right.clamp(0, i64::from(body.size().width().saturating_sub(1))))
             .unwrap_or(0);
         let column = if x < fixed.gutter() {
-            self.first_column
+            layout.visible_columns().next().unwrap_or(self.first_column)
         } else {
             layout.column_at(x).unwrap_or(last_column)
         };
@@ -1049,6 +1071,7 @@ impl Document {
             .saturating_add(columns);
         self.first_column = usize::try_from(shifted.max(0))
             .unwrap_or(0)
+            .max(self.frozen)
             .min(last_column);
         let page = self.page_rows(window);
         let current = self.view.first_body();
@@ -1154,7 +1177,7 @@ impl Document {
                 let shown = self.columns_shown(window).max(1);
                 let last = self.widths.columns().len().saturating_sub(1);
                 self.first_column = match side {
-                    TrackSide::Before => self.first_column.saturating_sub(shown),
+                    TrackSide::Before => self.first_column.saturating_sub(shown).max(self.frozen),
                     TrackSide::After => self.first_column.saturating_add(shown).min(last),
                 };
                 DocumentEffect::Stay
@@ -1238,15 +1261,24 @@ impl Document {
             )
             | None => self.row_total(),
         };
-        let columns = u64::from(whole.table_width().saturating_sub(gutter));
+        // 横は、固定した列を除いた動く列の画素で測る（VIEW-01）。
+        let frozen = whole.frozen_width();
+        let columns = u64::from(
+            whole
+                .table_width()
+                .saturating_sub(gutter)
+                .saturating_sub(frozen),
+        );
         Scrollbars::fit(
             area,
-            FixedParts::new(header, row, gutter).with_scale(metrics.scale()),
+            FixedParts::new(header, row, gutter)
+                .with_frozen(frozen)
+                .with_scale(metrics.scale()),
             ScrollAxis::new(rows, 0, self.view.first_body()),
             ScrollAxis::new(
                 columns,
                 0,
-                u64::from(column_left(&whole, self.first_column)),
+                u64::from(column_left(&whole, self.first_column).saturating_sub(frozen)),
             ),
         )
     }
@@ -1285,14 +1317,18 @@ impl Document {
         }
     }
 
-    /// 列の画素 `position`（行番号の列を除いた左端から）の所から見せる、表示の最初の列。その位置より後ろで最初に始まる列
-    /// （つまみを右端まで寄せたら最後の列まで見える）。
+    /// 列の画素 `position`（行番号の列と固定した列を除いた左端から）の所から見せる、表示の最初の列。その位置より後ろで
+    /// 最初に始まる列（つまみを右端まで寄せたら最後の列まで見える）。固定した列より前にはしない。
     fn column_from(&self, position: u64, window: WindowView) -> usize {
         let whole = self.layout(0, window.content_metrics());
+        let frozen = whole.frozen_width();
         let count = self.widths.columns().len();
-        (0..count)
-            .find(|&column| u64::from(column_left(&whole, column)) >= position)
+        (self.frozen..count)
+            .find(|&column| {
+                u64::from(column_left(&whole, column).saturating_sub(frozen)) >= position
+            })
             .unwrap_or(count.saturating_sub(1))
+            .max(self.frozen)
     }
 
     /// 今の最初の列から、本体の幅に全部入る列の数。
@@ -1556,7 +1592,7 @@ impl Document {
             Scroll::Up { rows } => current.saturating_sub(rows),
             Scroll::Down { rows } => current.saturating_add(rows),
             Scroll::Left { columns } => {
-                self.first_column = self.first_column.saturating_sub(columns);
+                self.first_column = self.first_column.saturating_sub(columns).max(self.frozen);
                 current
             }
             Scroll::Right { columns } => {
@@ -1575,7 +1611,11 @@ impl Document {
     }
 
     /// 列 `column` が表の幅に全部入るようにした、表示の最初の列。今の最初の列から見えていれば動かさない。
+    /// 固定した列は常に見えているので動かさない。
     fn reveal_column(&self, column: usize, window: WindowView) -> usize {
+        if column < self.frozen {
+            return self.first_column;
+        }
         if column < self.first_column {
             return column;
         }
@@ -1620,7 +1660,7 @@ impl Document {
         )
     }
 
-    /// 表示の最初の列 `first_column` からの表の配置。
+    /// 表示の最初の列 `first_column` からの表の配置（左に固定した列を含む）。
     fn layout(&self, first_column: usize, metrics: GlyphMetrics) -> TableLayout {
         TableLayout::new(
             &self.widths.resized(&self.custom).reordered(&self.order),
@@ -1628,6 +1668,31 @@ impl Document {
             self.last_number(),
             metrics,
         )
+        .with_frozen(self.frozen)
+    }
+
+    /// 左の `wanted` 列を固定する（0 で外す・表示だけ・原本も列の順も変えない・VIEW-01）。固定した列の幅が本体の幅
+    /// （行番号の列を除く）の 2/3 を超えるなら、収まる数まで減らす（横に動く列の場所を残す）。横の表示は固定した列の次から。
+    fn freeze_columns(&mut self, wanted: usize, window: WindowView) {
+        let room = self
+            .bars(window)
+            .body()
+            .size()
+            .width()
+            .saturating_sub(self.layout(0, window.content_metrics()).gutter_width());
+        let fits = |frozen: usize| {
+            self.layout(frozen, window.content_metrics())
+                .with_frozen(frozen)
+                .frozen_width()
+                <= room / 3 * 2
+        };
+        let frozen = (0..=wanted.min(self.widths.columns().len()))
+            .rev()
+            .find(|&frozen| fits(frozen))
+            .unwrap_or(0);
+        self.frozen = frozen;
+        self.first_column = self.first_column.max(frozen);
+        self.notice = Some(Notice::Frozen { columns: frozen });
     }
 
     /// 行番号の列の幅を決める最後の行の番号。見えている最後の行と（分かれば）レコードの数の大きいほう。
@@ -2330,6 +2395,106 @@ mod tests {
         let frame = document.frame(window, palette());
         // 1 つのセルの選択: カーソルの枠 4 辺 ＋ 選んだ範囲の外周 4 辺 ＋ 横のスクロールバーの範囲の棒。
         assert_eq!(fills(&frame, palette().cursor()).len(), 9);
+    }
+
+    /// 3 字の列が 10（`c0`〜`c9`）。
+    fn narrow() -> Document {
+        let row: Vec<String> = (0..10_u32).map(|n| format!("c{n}")).collect();
+        closed(Document::open(String::from("t"), summary(), None, &[row]))
+    }
+
+    fn shown_texts(frame: &Frame) -> Vec<&str> {
+        frame
+            .commands()
+            .iter()
+            .filter_map(|command| match command {
+                DrawCommand::Text { text, .. } => Some(text.as_str()),
+                DrawCommand::Fill { .. } | DrawCommand::Line { .. } => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn frozen_columns_stay_while_scrolling_sideways() {
+        let window = view(300, 300, WindowPlacement::Normal);
+        let mut document = narrow();
+        document.apply(moving(CursorStep::Right), window);
+        document.apply(moving(CursorStep::Right), window);
+        document.apply(Intent::FreezeColumns, window);
+        assert_eq!(document.frozen_columns(), 3);
+        assert_eq!(document.first_column(), 3);
+        assert!(
+            shown_texts(&document.frame(window, palette()))
+                .contains(&"左の 3 列を固定しました（横に動いても残ります）")
+        );
+        document.apply(Intent::Scroll(Scroll::Right { columns: 4 }), window);
+        assert_eq!(document.first_column(), 7);
+        let frame = document.frame(window, palette());
+        let texts = shown_texts(&frame);
+        assert!(texts.contains(&"c0") && texts.contains(&"c2") && texts.contains(&"c7"));
+        assert!(!texts.contains(&"c3"));
+    }
+
+    #[test]
+    fn scrolling_left_stops_at_the_frozen_columns_until_they_are_unfrozen() {
+        let window = view(300, 300, WindowPlacement::Normal);
+        let mut document = narrow();
+        document.apply(moving(CursorStep::Right), window);
+        document.apply(moving(CursorStep::Right), window);
+        document.apply(Intent::FreezeColumns, window);
+        document.apply(Intent::Scroll(Scroll::Right { columns: 4 }), window);
+        assert_eq!(document.first_column(), 7);
+        // 左へは固定した列の次まで。固定を外せば先頭まで。
+        document.apply(Intent::Scroll(Scroll::Left { columns: 30 }), window);
+        assert_eq!(document.first_column(), 3);
+        document.apply(Intent::UnfreezeColumns, window);
+        assert_eq!(document.frozen_columns(), 0);
+        assert!(shown_texts(&document.frame(window, palette())).contains(&"列の固定を外しました"));
+        document.apply(Intent::Scroll(Scroll::Left { columns: 30 }), window);
+        assert_eq!(document.first_column(), 0);
+    }
+
+    #[test]
+    fn frozen_and_scrolled_cells_are_hit_where_they_are_drawn() {
+        let window = view(300, 300, WindowPlacement::Normal);
+        let mut document = narrow();
+        document.apply(moving(CursorStep::Right), window);
+        document.apply(Intent::FreezeColumns, window);
+        document.apply(Intent::Scroll(Scroll::Right { columns: 5 }), window);
+        assert_eq!((document.frozen_columns(), document.first_column()), (2, 7));
+        let layout = document.layout(7, window.content_metrics());
+        let body = document.bars(window).body();
+        let inside = |column: usize| {
+            let rect = layout.cell_rect(1, column).unwrap();
+            PixelPoint::new(
+                body.origin().x() + rect.origin().x() + 5,
+                body.origin().y() + rect.origin().y() + 5,
+            )
+        };
+        document.apply(pressing(inside(0), SelectionMode::Collapse), window);
+        document.apply(Intent::Release, window);
+        assert_eq!(document.selection().cursor(), CellPosition::new(0, 0));
+        document.apply(pressing(inside(8), SelectionMode::Collapse), window);
+        document.apply(Intent::Release, window);
+        assert_eq!(document.selection().cursor(), CellPosition::new(0, 8));
+        // 固定した列へカーソルを戻しても横の表示は動かない。
+        document.apply(moving(CursorStep::RowStart), window);
+        assert_eq!(document.selection().cursor(), CellPosition::new(0, 0));
+        assert_eq!(document.first_column(), 7);
+    }
+
+    #[test]
+    fn freezing_more_than_fits_keeps_room_for_the_scrolling_columns() {
+        let window = view(300, 300, WindowPlacement::Normal);
+        let mut document = narrow();
+        document.apply(moving(CursorStep::RowEnd), window);
+        document.apply(Intent::FreezeColumns, window);
+        // 本体の幅から行番号の列 41 を除いた 2/3 に収まる、41 の列の数まで。
+        let room = document.bars(window).body().size().width() - 41;
+        let expected = usize::try_from(room / 3 * 2 / 41).unwrap();
+        assert_eq!(document.frozen_columns(), expected);
+        assert!((1..10).contains(&expected));
+        assert!(document.first_column() >= expected);
     }
 
     #[test]

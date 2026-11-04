@@ -29,6 +29,11 @@ pub enum Notice {
         /// 表の中の位置（0 始まり）。
         position: usize,
     },
+    /// 左の `columns` 列を固定した（0 なら外した・VIEW-01・Issue #4）。
+    Frozen {
+        /// 固定した列の数。
+        columns: usize,
+    },
     /// 方言の判別に確信が無い（FR-023・Issue #3）。黙って 1 位で開いたことを知らせ、候補から選ぶ入口を示す。
     DialectUnsure {
         /// 1 位の点数（千分率）。
