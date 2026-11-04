@@ -29,7 +29,7 @@ Claude Code / AI エージェントがこのリポジトリで作業するため
 2. **ゲートを弱めて通さない。** 検査が落ちたらコードを直す。閾値・`forbid` の降格・免除・`deny.toml` を触るのは ADR 相当の判断（QLT-010）
 3. **`planned` を `active` と書かない。** 未実装の強制を実装済みに見せるのは、この規約体系で唯一「壊す」行為（[ADR 0001](docs/adr/0001-strictness-is-mechanically-enforced.md)）
 
-🔴 機械（lint の表・`xtask`・`Makefile`・commit-msg フック・CI）を置き、このリポジトリで測れた規則だけを active にしてある（ADR 0010）。CI と ruleset が要る GIT-001 / 002 / 004 / QLT-005 は、実測を gate-proofs に記録するまで planned（ADR 0021）。
+🔴 機械（lint の表・`xtask`・`Makefile`・commit-msg フック・CI）を置き、このリポジトリで測れた規則だけを active にしてある（ADR 0010）。CI と ruleset は公開初日の PR #2 で実測して記録した（ADR 0021・gate-proofs 第 51 節）。
 
 ---
 

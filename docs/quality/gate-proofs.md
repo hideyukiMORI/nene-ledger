@@ -1,6 +1,6 @@
 # ゲート発火の証明 — NeNe Ledger
 
-> 記録: 2026-10-22 / Issue #1（文書だけ・第 2 節）、Issue #2（機械の移植・第 3〜7 節）、Issue #9（中核の最初のクレート・第 8 節）、Issue #11 / #12（scan・第 9 節・2026-10-23）、Issue #16（カバレッジの作業領域・第 10 節）、Issue #18（最初の外部の依存・第 11 節）、Issue #19（application・第 12 節）、Issue #20（最初の窓・第 13 節）、Issue #21（裏の索引と状態の行・第 14 節）、Issue #22（キーでの移動・第 15 節）、Issue #23（閉じない引用符と判別・第 16 節）。以下は実行した結果のみ。
+> 記録: 2026-10-22 / Issue #1（文書だけ・第 2 節）、Issue #2（機械の移植・第 3〜7 節）、Issue #9（中核の最初のクレート・第 8 節）、Issue #11 / #12（scan・第 9 節・2026-10-23）、Issue #16（カバレッジの作業領域・第 10 節）、Issue #18（最初の外部の依存・第 11 節）、Issue #19（application・第 12 節）、Issue #20（最初の窓・第 13 節）、Issue #21（裏の索引と状態の行・第 14 節）、Issue #22（キーでの移動・第 15 節）、Issue #23（閉じない引用符と判別・第 16 節）。公開後は GitHub の Issue #1（CI と ruleset・第 51 節）。以下は実行した結果のみ。
 > 関連: QLT-007 / QLT-011 / QLT-013 / ADR 0001 / ADR 0010
 > 🔴 2026-11-04 に公開リポジトリへ移った（ADR 0021）。本書の `Issue #N`（#1〜#68）は**公開前のローカル履歴の番号**で、GitHub の Issue とは別物。節の番号と記録はそのまま残す。
 
@@ -492,6 +492,19 @@ Shift_JIS・縦棒区切りの見本（`crates/app/fixtures/shift-jis-pipe.csv`�
 
 - X11（Xvfb・2026-11-02・xdotool）: `'` で囲んだファイル（`'Smith, John'`・`'O''Brien'`）は `'` の引用と判別され、値は `Smith, John`・`O'Brien`。状態の行は `4 行 · UTF-8 · カンマ区切り · ' で引用 · LF · 3 列`。Ctrl+Shift+P → `quote` → Enter で 5 つの候補（`5 / 5`）が出て、「シングルクォート（'）で囲む」に `今の読み方` の印（`out/single-quote.png`）。最初の名前（`… '' で ' を書く`）では試し中の案内が右で切れたので短くした
 
+## 51. 公開リポジトリの CI と ruleset（GitHub Issue #1・2026-11-04）
+
+公開リポジトリ `hideyukiMORI/nene-ledger` へ移り（ADR 0021）、`xtask validate-git` を PR のメタデータを読む形に戻した。以下は実行した結果のみ。
+
+| 規則 | 入れた違反・設定 | 実出力・事実 |
+| --- | --- | --- |
+| GIT-003 | `xtask commit-msg` に件名 `update docs` | `GIT-003: subject must be ...`・終了 1。正しい件名 `build: 公開リポジトリとして置き直す (#1)` は終了 0 |
+| GIT-001 / GIT-004 / QLT-012 | `cargo test -p xtask`（92 件） | `pull_request_rejects_draft_missing_close_and_bad_title`（QLT-012 / GIT-001 / GIT-004 / GIT-003 の 4 つが出る）・`pull_request_field_must_start_a_line`（本文の途中の `目的:` は欄ではない）・`pull_request_body_with_a_machine_path_is_rejected`（GIT-005） |
+| GIT-002 / GIT-004 | リポジトリ設定 | squash のみ（`merge_commit` / `rebase` 不可）・`delete_branch_on_merge: true`（`gh repo view --json`） |
+| GIT-002 / GIT-004 | ruleset `main`（id 26530802・enforcement active・対象 `~DEFAULT_BRANCH`） | `deletion` / `non_fast_forward` / `pull_request`（`allowed_merge_methods: ["squash"]`・会話の解決必須）/ `required_status_checks`（`check`・strict）。`gh api repos/hideyukiMORI/nene-ledger/rulesets/26530802` |
+| QLT-005 / GIT-001〜005 | PR #2 の CI `check`（`check.yml` → `make ci`・`ready_for_review` で起動） | 実行 41832653816: `rustc 1.98.0`・`Git conventions passed.`・`git diff --check origin/main...HEAD`・success。手元の `make ci` と同じ出力 |
+| GIT-003（CI） | PR #2 のタイトルを `公開リポジトリの CI と ruleset の実測を記録する`（type と `(#N)` 無し）に編集 | 実行 41832778822（`edited`）: `GIT-003: subject must be ... (PR title)`・`make: *** [Makefile:61: validate-git] Error 1`・failure。タイトルを戻して success |
+
 ## 7. active の規則と、その証明
 
 CNF-009 は active の規則ごとに `| ID |` で始まる行がここにあることを要求する。
@@ -540,5 +553,10 @@ CNF-009 は active の規則ごとに `| ID |` で始まる行がここにある
 | CNF-013 | 許されない依存 | 同上 ＋ 実ファイル（第 5 節） | xtask |
 | CNF-014 | unsafe を許すクレートの lint の表のずれ | 同上 | xtask |
 | CNF-015 | scan の `File::create`・`.write(true`・書き込める写像 | 同上 | xtask |
-| GIT-003 | 形の違う件名 | commit-msg フック（第 6 節） | xtask |
-| GIT-005 | 管理するファイルの絶対パス | `validate-git`（第 6 節） | xtask |
+| GIT-001 | `Closes #N` の無い PR 本文 | 単体テスト ＋ CI の `make ci`（第 51 節） | xtask |
+| GIT-002 | 形の違う枝名・`main` への直接 push | `validate-git`（第 6 節）＋ ruleset（第 51 節） | xtask / GitHub |
+| GIT-003 | 形の違う件名・PR タイトル | commit-msg フック（第 6 節）＋ CI（第 51 節・実行 41832778822 が失敗） | xtask |
+| GIT-004 | 欄の無い PR 本文・squash 以外のマージ | 単体テスト ＋ CI（第 51 節）＋ ruleset（第 51 節） | xtask / GitHub |
+| GIT-005 | 管理するファイル・コミット・PR 本文の絶対パス | `validate-git`（第 6 節・第 51 節） | xtask |
+| QLT-005 | CI 側にだけある検査 | `check.yml` は `make ci` だけを呼ぶ。手元と同じ出力（第 51 節） | GitHub Actions |
+| QLT-012 | draft の PR で必須 check が走る・欄の無い本文 | 単体テスト（`pull_request_rejects_draft_missing_close_and_bad_title`）＋ `check.yml` の `if: draft == false` | xtask / GitHub Actions |

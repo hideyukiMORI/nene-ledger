@@ -14,7 +14,7 @@
 Issue は GitHub の Issue。問題と根拠・意図する結果・影響する規則 ID とモジュール・受け入れ条件・検証の計画・**やらないこと**を書く。
 読み取りだけの調査は Issue 無しでよい。公開リポジトリの最初のコミット（Issue #1 を指す）だけが PR を通らない例外。
 
-- 機械強制: **planned**（PR テンプレート＋`make ci` が PR 本文の `Closes #N` を検査する。CI での実行を Issue #1 の PR で [gate-proofs](quality/gate-proofs.md) に記録したら active にする）
+- 機械強制: **active**（PR テンプレート＋`make ci` が PR 本文の `Closes #N` を検査する。CI の実行証拠は PR #2 の実行 41832653816・[gate-proofs](quality/gate-proofs.md) 第 51 節）
 - 不能: Issue の中身の妥当性
 
 ### GIT-002 — ブランチ名は一つの形
@@ -26,7 +26,7 @@ Issue は GitHub の Issue。問題と根拠・意図する結果・影響する
 例: `build/2-port-machinery`。`main` での直接開発・force push・既定ブランチの削除は禁止（最初のコミットを除く）。
 クラウドセッションが harness から割り当てた枝名（`claude/…`）で作業するときは、PR の本文にその事実を書き、squash merge の件名を GIT-003 の形に揃える。
 
-- 機械強制: **planned**（ブランチ名の形は `make ci` が PR の head で検査する。`main` の保護（PR 必須・force push と削除の禁止）は ruleset。設定の事実を gate-proofs に記録したら active にする）
+- 機械強制: **active**（ブランチ名の形は `make ci` が PR の head で検査する。`main` の保護（PR 必須・force push と削除の禁止）は ruleset 26530802・gate-proofs 第 51 節）
 
 ### GIT-003 — コミットメッセージは一つの形
 
@@ -42,7 +42,7 @@ Conventional Commits を、この正確な形で書く。
 - 互換性を壊す公開契約の変更（設定ファイルの版を含む）は `:` の前に `!` を付け、フッタに `BREAKING CHANGE:` を書く
 - 件名には「何を」ではなく**判断**を置く（例: `原本は保存の置き換えまで書かず、編集は差分として重ねる`）
 
-- 機械強制: **active**（`.githooks/commit-msg` → `xtask commit-msg`・[gate-proofs](quality/gate-proofs.md) 第 6 節。CI は `make ci` が PR の全コミットと PR タイトルを同じ検証器で検査する。CI での実行は Issue #1 の PR で記録する）
+- 機械強制: **active**（`.githooks/commit-msg` → `xtask commit-msg`・[gate-proofs](quality/gate-proofs.md) 第 6 節。CI は `make ci` が PR の全コミットと PR タイトルを同じ検証器で検査する。形の外の PR タイトルで CI が落ちた実行 41832778822・gate-proofs 第 51 節）
 - 補足: squash merge の件名も同じ形。**マージ時に人が書き換える件名が最後の穴**なので、PR タイトルを同じ形に揃える。`gh pr merge --squash --subject` で件名を渡し、`(#Issue) (#PR)` の二重を作らない（nene-ruler 2026-10-20 の教訓）
 
 ### GIT-004 — PR が統合の境界
@@ -54,7 +54,7 @@ PR には目的・使った正典経路・規則 ID・振る舞いの変更・�
 CI の必須 `check` は Git 規約・検証記録の欄・差分の空白を確認する。記録の妥当性はレビューし、CI 成功を製品テストの実行証拠とは扱わない。
 文書だけの PR でも本文は全欄書く（nene-ruler で欄を欠いた PR が ruleset 未設定のまま merge された）。
 
-- 機械強制: **planned**（PR テンプレート＋`make ci` が欄を行の始まりで検査する。squash のみ・`check` の必須は ruleset。設定の事実を gate-proofs に記録したら active にする）
+- 機械強制: **active**（PR テンプレート＋`make ci` が欄を行の始まりで検査する。squash のみ・`check` の必須は ruleset 26530802・gate-proofs 第 51 節）
 
 ### GIT-005 — リポジトリには対外的に要るものだけを置く
 
