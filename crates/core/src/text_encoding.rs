@@ -25,6 +25,9 @@ pub enum TextEncoding {
     Windows1252,
 }
 
+/// いちばん長い BOM のバイト数（UTF-8 の `EF BB BF`）。
+pub const LONGEST_BOM: usize = 3;
+
 impl TextEncoding {
     /// 切り出しの文字の単位（ADR 0019）。
     #[must_use]
@@ -97,6 +100,31 @@ mod tests {
         assert_eq!(TextEncoding::Utf16LeWithBom.units(), TextUnits::Utf16Le);
         assert_eq!(TextEncoding::Utf16Be.units(), TextUnits::Utf16Be);
         assert_eq!(TextEncoding::EucJp.units(), TextUnits::SingleByte);
+    }
+
+    #[test]
+    fn no_bom_is_longer_than_the_longest_bom() {
+        let every = [
+            TextEncoding::Utf8,
+            TextEncoding::Utf8WithBom,
+            TextEncoding::Utf16LeWithBom,
+            TextEncoding::Utf16BeWithBom,
+            TextEncoding::Utf16Le,
+            TextEncoding::Utf16Be,
+            TextEncoding::ShiftJis,
+            TextEncoding::EucJp,
+            TextEncoding::Windows1252,
+        ];
+        assert!(
+            every
+                .iter()
+                .all(|encoding| encoding.bom().len() <= LONGEST_BOM)
+        );
+        assert!(
+            every
+                .iter()
+                .any(|encoding| encoding.bom().len() == LONGEST_BOM)
+        );
     }
 
     #[test]
