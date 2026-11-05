@@ -84,6 +84,7 @@ use nene_ledger_core::pixel_point::PixelPoint;
 use nene_ledger_core::pixel_rect::PixelRect;
 use nene_ledger_core::pixel_size::PixelSize;
 use nene_ledger_core::pointer_point::PointerPoint;
+use nene_ledger_core::preedit::Preedit;
 use nene_ledger_core::row_id::RowId;
 use nene_ledger_core::scroll_axis::ScrollAxis;
 use nene_ledger_core::table_layout::{GRID_LINE, TableLayout};
@@ -708,6 +709,61 @@ impl Document {
         };
         self.editor = Some(editor);
         true
+    }
+
+    /// IME の確定前の文字列を欄に出す（`None` で消す・ADR 0026 の決定 4）。編集していなければ、
+    /// 空でない文字列が始まったときに入力の状態で編集に入る。尋ねる画面と保存中は受けない（確定のほうで知らせる）。
+    pub fn compose(&mut self, preedit: Option<Preedit>) {
+        if self.closing != CloseState::Open || self.saving {
+            return;
+        }
+        let starting = preedit
+            .as_ref()
+            .is_some_and(|preedit| !preedit.text().is_empty());
+        if self.editor.is_none() && !(starting && self.begin_edit(EditMode::Entering)) {
+            return;
+        }
+        if let Some(editor) = self.editor.as_mut() {
+            editor.compose(preedit);
+        }
+    }
+
+    /// IME の確定（ADR 0026 の決定 4）。欄に挿し、確定前の文字列は消える。編集していなければ入力の状態で編集に入る。
+    /// 尋ねる画面では受けない。保存中は知らせるだけ。
+    pub fn commit_text(&mut self, text: &str) {
+        if self.closing != CloseState::Open || text.is_empty() {
+            return;
+        }
+        if self.saving {
+            self.notice = Some(Notice::StillSaving);
+            return;
+        }
+        self.notice = None;
+        if self.editor.is_none() && !self.begin_edit(EditMode::Entering) {
+            return;
+        }
+        if let Some(editor) = self.editor.as_mut() {
+            editor.insert(text);
+        }
+    }
+
+    /// 編集中のセルの、窓の中の矩形（IME の候補の窓を置く所）。編集していないか、セルが見えていなければ `None`。
+    #[must_use]
+    pub fn composition_area(&self, window: WindowView) -> Option<PixelRect> {
+        self.editor.as_ref()?;
+        let cursor = self.selection.cursor();
+        let index = usize::try_from(cursor.body().checked_sub(self.view.first_body())?).ok()?;
+        self.view.rows().get(index)?;
+        let layout = self.layout(self.first_column, window.content_metrics());
+        // 最初の行は上に固定した行（見出しか列の番号）。
+        let cell = layout.cell_rect(index.checked_add(1)?, cursor.column())?;
+        let body = self.bars(window).body();
+        let origin = PixelPoint::new(
+            body.origin().x().saturating_add(cell.origin().x()),
+            body.origin().y().saturating_add(cell.origin().y()),
+        );
+        let bottom = cell.origin().y().saturating_add(cell.size().height());
+        (bottom <= body.size().height()).then_some(PixelRect::new(origin, cell.size()))
     }
 
     /// 編集を確定して、差分に入れる（見えていた値のままなら何もしない・原本の値に戻ったら差分を消す）。
@@ -4727,6 +4783,93 @@ mod tests {
             Some(&CellValue::Text(String::from("A-0012")))
         );
         assert_eq!(document.selection().cursor(), CellPosition::new(0, 1));
+    }
+
+    #[test]
+    fn a_preedit_starts_entering_and_the_commit_goes_into_the_field() {
+        let mut document = editable();
+        // 組み立ての始まり（空）では編集に入らない。
+        document.compose(Some(Preedit::new("", 0)));
+        assert_eq!(document.editor(), None);
+        document.compose(Some(Preedit::new("にほ", 2)));
+        assert_eq!(
+            document.editor().map(CellEditor::mode),
+            Some(EditMode::Entering)
+        );
+        // 確定前の文字列はセルの中に描くが、差分にはまだ入らない。
+        assert!(
+            document
+                .editing_cell()
+                .is_some_and(|cell| cell.text() == "にほ"
+                    && cell.caret() == 4
+                    && cell.underline() == Some((0, 4)))
+        );
+        assert!(document.edits().is_empty());
+        document.commit_text("日本");
+        document.compose(None);
+        document.apply(Intent::Confirm, normal());
+        assert_eq!(
+            edited(&document, 0, 0),
+            Some(&CellValue::Text(String::from("日本")))
+        );
+        // 編集していないときの確定だけでも、入力の状態で入る。
+        document.commit_text("語");
+        document.apply(Intent::Confirm, normal());
+        assert_eq!(
+            edited(&document, 1, 0),
+            Some(&CellValue::Text(String::from("語")))
+        );
+    }
+
+    #[test]
+    fn a_preedit_inside_f2_keeps_the_value_and_esc_drops_both() {
+        let mut document = editable();
+        document.apply(Intent::Edit, normal());
+        document.compose(Some(Preedit::new("か", 1)));
+        assert!(
+            document
+                .editing_cell()
+                .is_some_and(|cell| cell.text() == "0012か" && cell.underline() == Some((4, 6)))
+        );
+        document.compose(None);
+        document.apply(Intent::Cancel, normal());
+        assert_eq!(document.editor(), None);
+        assert!(document.edits().is_empty());
+    }
+
+    #[test]
+    fn composing_is_ignored_while_saving_or_asking_to_close() {
+        let mut document = editable();
+        typed(&mut document, "x");
+        document.apply(Intent::Confirm, normal());
+        document.begin_saving();
+        document.compose(Some(Preedit::new("に", 1)));
+        assert_eq!(document.editor(), None);
+        document.commit_text("に");
+        assert_eq!(document.editor(), None);
+        assert_eq!(document.notice, Some(Notice::StillSaving));
+
+        let mut asking = editable();
+        typed(&mut asking, "x");
+        assert!(!asking.ask_close());
+        asking.compose(Some(Preedit::new("す", 1)));
+        asking.commit_text("す");
+        assert_eq!(asking.editor(), None);
+        assert_eq!(asking.close_state(), CloseState::Asking);
+    }
+
+    #[test]
+    fn the_composition_area_is_the_editing_cell() {
+        let mut document = editable();
+        assert_eq!(document.composition_area(normal()), None);
+        document.apply(Intent::Advance(CursorStep::Right), normal());
+        document.apply(Intent::Confirm, normal());
+        document.compose(Some(Preedit::new("と", 1)));
+        let area = document.composition_area(normal()).unwrap();
+        assert_eq!(
+            document.cell_at(center(area), normal()),
+            Some(CellPosition::new(1, 1))
+        );
     }
 
     #[test]

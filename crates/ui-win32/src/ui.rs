@@ -18,6 +18,7 @@ use nene_ledger_application::wakeup::Wakeup;
 use nene_ledger_core::chrome_button::ChromeButton;
 use nene_ledger_core::display_scale::DisplayScale;
 use nene_ledger_core::pixel_size::PixelSize;
+use nene_ledger_core::preedit::Preedit;
 use nene_ledger_core::window_placement::WindowPlacement;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Dwm::{
@@ -42,7 +43,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     SM_CXPADDEDBORDER, SM_CYFRAME, SW_SHOW, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE,
     SWP_NOSIZE, SWP_NOZORDER, SetCursor, SetWindowLongPtrW, SetWindowPos, ShowWindow,
     TranslateMessage, WINDOW_EX_STYLE, WM_CAPTURECHANGED, WM_CHAR, WM_CLOSE, WM_DESTROY,
-    WM_DPICHANGED, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEHWHEEL,
+    WM_DPICHANGED, WM_ERASEBKGND, WM_IME_COMPOSITION, WM_IME_ENDCOMPOSITION, WM_IME_SETCONTEXT,
+    WM_IME_STARTCOMPOSITION, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEHWHEEL,
     WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCALCSIZE, WM_NCHITTEST, WM_NCLBUTTONDBLCLK, WM_NCLBUTTONDOWN,
     WM_NCLBUTTONUP, WM_NCMOUSEMOVE, WM_PAINT, WM_SETCURSOR, WM_SIZE, WM_SYSCHAR, WM_SYSCOMMAND,
     WM_SYSKEYDOWN, WM_TIMER, WNDCLASSEXW, WS_OVERLAPPEDWINDOW,
@@ -50,6 +52,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::{HSTRING, PCWSTR, w};
 
 use crate::hit_code::{HTCLIENT, button_of, hit_code};
+use crate::ime;
 use crate::key_intent::{
     Modifiers, key_intent, press_intent, sideways_wheel_intent, typed_intent, wheel_intent,
 };
@@ -325,6 +328,18 @@ unsafe extern "system" fn procedure(
     if message == WM_NCCALCSIZE && wparam.0 != 0 {
         return client_covers_window(window, lparam);
     }
+    // 確定前の文字列はセルの中に自分で描くので、IME の組み立ての窓は出させない（ADR 0026 の決定 4）。
+    if message == WM_IME_SETCONTEXT {
+        // SAFETY: 届いたメッセージを、lparam の印を 1 つ落として既定の手続きへ渡す。
+        return unsafe {
+            DefWindowProcW(
+                window,
+                message,
+                wparam,
+                ime::without_composition_window(lparam),
+            )
+        };
+    }
     // SAFETY: GWLP_USERDATA は run が結んだ状態か 0。状態は run の終わりまで生き、run はループの後で 0 に戻す。
     // 共有の参照だけを作り、書き換えは RefCell の借用を通す。
     let cell = unsafe {
@@ -471,6 +486,9 @@ fn dispatch(
         }
         WM_KEYDOWN | WM_SYSKEYDOWN | WM_SYSCHAR | WM_CHAR => keyboard(state, message, wparam),
         WM_DPICHANGED => rescale(state, wparam),
+        WM_IME_STARTCOMPOSITION | WM_IME_COMPOSITION | WM_IME_ENDCOMPOSITION => {
+            ime_message(state, window, (message, lparam))
+        }
         WM_TIMER if wparam.0 == TICK_TIMER => {
             state.tick();
             Some(LRESULT(0))
@@ -487,6 +505,28 @@ fn dispatch(
         }
         _ => None,
     }
+}
+
+/// IME の組み立て（ADR 0026 の決定 4）。既定の手続きへは渡さない（渡すと IME の窓が組み立てを描き、確定が `WM_CHAR` でも届く）。
+/// 始まり・組み立て・終わりを描く相手に渡し、候補の窓を編集中のセルの位置に置く。
+fn ime_message(
+    state: &mut WindowState<'_>,
+    window: HWND,
+    (message, lparam): (u32, LPARAM),
+) -> Option<LRESULT> {
+    match message {
+        WM_IME_STARTCOMPOSITION => state.composition(None, Some(Preedit::new("", 0))),
+        WM_IME_COMPOSITION => {
+            let (result, preedit) = ime::read_composition(window, lparam);
+            state.composition(result.as_deref(), Some(preedit));
+        }
+        WM_IME_ENDCOMPOSITION => state.composition(None, None),
+        _ => return None,
+    }
+    if let Some(cell) = state.composition_area() {
+        ime::place_windows(window, cell);
+    }
+    Some(LRESULT(0))
 }
 
 /// `WM_DPICHANGED`: wparam の下位語が新しい dpi（上位語と同じ）。字を測り直す。置き直しは `procedure` が借用を
