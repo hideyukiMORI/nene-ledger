@@ -67,6 +67,7 @@ pub mod row_band;
 mod row_style;
 pub mod save_plan_failure;
 pub mod save_planning;
+pub mod save_problem;
 pub mod scroll;
 pub mod scroll_bar;
 pub mod scroll_orientation;

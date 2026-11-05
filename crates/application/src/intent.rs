@@ -83,4 +83,6 @@ pub enum Intent {
     BreakLine,
     /// 確定してその向きへ動く（Tab・Shift+Tab・Shift+Enter）。編集していなければ動くだけ。
     Advance(CursorStep),
+    /// 書き換えを保存する（Ctrl+S・ADR 0026 の決定 6）。
+    Save,
 }

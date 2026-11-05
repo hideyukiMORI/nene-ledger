@@ -28,11 +28,14 @@ use nene_ledger_scan::index_job::IndexJob;
 use nene_ledger_scan::index_outcome::IndexOutcome;
 use nene_ledger_scan::range_job::RangeJob;
 use nene_ledger_scan::range_outcome::RangeOutcome;
+use nene_ledger_store::save_job::SaveJob;
 
 use crate::open_palette::OpenPalette;
 use crate::preferences::Preferences;
 use crate::reader::Reader;
+use crate::saving::{SavingFailure, describe, problem_of, start_saving};
 use crate::totals_fold::TotalsFold;
+use crate::warn;
 use crate::workers::Workers;
 
 /// 窓が描く相手（`Session` の実装）。状態は application、索引の仕事と読み取りは scan が持ち、ここは結ぶだけ（ARC-006）。
@@ -47,6 +50,8 @@ pub(crate) struct Viewer {
     totals: Option<RangeJob<TotalsFold>>,
     /// 読み方を試している間の、元の画面（Esc で戻す・Issue #52）。
     trial: Option<Document>,
+    /// 裏で回っている保存（ADR 0026 の決定 6）。
+    saving: Option<SaveJob>,
 }
 
 impl Viewer {
@@ -67,6 +72,49 @@ impl Viewer {
             palette: None,
             totals: None,
             trial: None,
+            saving: None,
+        }
+    }
+
+    /// 書き換えの保存を裏で始める。始められなければ理由を知らせる。
+    fn start_saving(&mut self) {
+        match start_saving(self.document.edits(), &self.reader) {
+            Ok(job) => {
+                self.saving = Some(job);
+                self.document.begin_saving();
+            }
+            Err(failure) => {
+                warn(&describe(&failure));
+                self.document.save_failed(problem_of(&failure));
+            }
+        }
+    }
+
+    /// 裏の保存が終わっていれば、結果を画面に取り込む。成功したら置き換えた後のファイルを開き直す。
+    fn finish_saving(&mut self) {
+        let Some(outcome) = self.saving.as_mut().and_then(SaveJob::take_result) else {
+            return;
+        };
+        self.saving = None;
+        if let Err(failure) = outcome {
+            let failure = SavingFailure::Save(failure);
+            warn(&describe(&failure));
+            self.document.save_failed(problem_of(&failure));
+            return;
+        }
+        // 前の索引の仕事と集計は、置き換える前のファイルのもの。捨ててから開き直す。
+        self.totals = None;
+        match self.reader.reopen_saved() {
+            Ok(job) => {
+                self.job = job;
+                let reread = self.document.saved();
+                self.effect(reread);
+            }
+            Err(failure) => {
+                warn(&format!("保存した後に開き直せなかった: {failure:?}"));
+                let _reread = self.document.saved();
+                self.document.notify(Notice::ReopenFailed);
+            }
         }
     }
 
@@ -140,6 +188,10 @@ impl Viewer {
                 if let Some(job) = &self.totals {
                     job.cancel();
                 }
+                None
+            }
+            DocumentEffect::Save => {
+                self.start_saving();
                 None
             }
         }
@@ -228,6 +280,9 @@ impl Viewer {
         outcome: PaletteOutcome,
         view: WindowView,
     ) -> Option<ClipboardText> {
+        if self.reading_blocked(outcome) {
+            return None;
+        }
         match outcome {
             PaletteOutcome::Stay => None,
             PaletteOutcome::Close => {
@@ -285,6 +340,21 @@ impl Viewer {
                 None
             }
         }
+    }
+
+    /// 書き換えがある間（保存の途中も）に読み方を変えようとしたら、パレットを閉じて知らせ、`true`。
+    /// 読み方を変えると原本のレコードの番号の意味が変わり、書き換えが別のセルに付く（ADR 0024）。
+    fn reading_blocked(&mut self, outcome: PaletteOutcome) -> bool {
+        let reading = matches!(
+            outcome,
+            PaletteOutcome::OpenReading(_) | PaletteOutcome::OpenCandidates
+        );
+        if !reading || (self.document.edits().is_empty() && !self.document.is_saving()) {
+            return false;
+        }
+        self.palette = None;
+        self.document.notify(Notice::ReadingNeedsSave);
+        true
     }
 
     /// 位置 `position` の配色に決めて設定に残し、名前を知らせる（書けなければそちらを知らせる）。
@@ -380,6 +450,7 @@ impl Session for Viewer {
     }
 
     fn refresh(&mut self, view: WindowView) {
+        self.finish_saving();
         let report = self.report();
         // 読み方を試している間の索引の知らせは、元の読み方の画面のもの。
         // 索引を作り終えたら今の表示の行を読み直す（試している読み方の画面は、元の読み方の索引では読めないので読み直さない）。

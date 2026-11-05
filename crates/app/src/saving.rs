@@ -8,6 +8,7 @@ use nene_ledger_application::file_stamp::FileStamp;
 use nene_ledger_application::replace_failure::ReplaceFailure;
 use nene_ledger_application::save_plan_failure::SavePlanFailure;
 use nene_ledger_application::save_planning::save_plan;
+use nene_ledger_application::save_problem::SaveProblem;
 use nene_ledger_core::cell_edits::CellEdits;
 use nene_ledger_core::text_format::TextFormat;
 use nene_ledger_scan::block_size::BlockSize;
@@ -17,11 +18,13 @@ use nene_ledger_scan::scan_failure::ScanFailure;
 use nene_ledger_scan::source::Source;
 use nene_ledger_scan::sparse_index::SparseIndex;
 use nene_ledger_store::save_failure::SaveFailure;
+use nene_ledger_store::save_job::SaveJob;
 use nene_ledger_store::saving::{discard, save};
 use nene_ledger_store::stamping::stamp_of;
 
 use crate::open_failure::OpenFailure;
 use crate::opening::guess_format;
+use crate::reader::Reader;
 use crate::scan_bytes::ScanBytes;
 use crate::scan_lookup::ScanLookup;
 
@@ -59,7 +62,7 @@ pub(crate) fn save_edited(path: &Path, edits: &CellEdits) -> Result<(), SavingFa
     let mut lookup = ScanLookup::new(&source, &index, format);
     let plan = save_plan(edits, &mut lookup, source.len(), format.dialect())
         .map_err(SavingFailure::Plan)?;
-    let mut bytes = ScanBytes::new(&source);
+    let mut bytes = ScanBytes::new(source.try_clone().map_err(OpenFailure::from)?);
     let saved = save_with_os(path, (&plan, format, opened), &mut bytes);
     if let Err(SaveFailure::Replace { failure, temporary }) = &saved
         && *failure != ReplaceFailure::Interrupted
@@ -67,6 +70,71 @@ pub(crate) fn save_edited(path: &Path, edits: &CellEdits) -> Result<(), SavingFa
         discard(temporary);
     }
     saved.map_err(SavingFailure::Save)
+}
+
+/// 窓の保存（Ctrl+S・ADR 0026 の決定 6）を始める。計画はここ（画面のスレッド）で作り、書いて置き換えるのは裏の仕事。
+/// 比べる印は、読み手が開く前に取ったもの（開いた後の外からの変更を見つける・FILE-01）。
+pub(crate) fn start_saving(edits: &CellEdits, reader: &Reader) -> Result<SaveJob, SavingFailure> {
+    let opened = reader
+        .opened()
+        .ok_or(SavingFailure::Save(SaveFailure::Target(
+            std::io::ErrorKind::NotFound,
+        )))?;
+    // 計画は原本の今の中身を読むので、外から変わっていれば計画より先に止める（行が無いと言うより正しい理由）。
+    // 書く前と置き換えの直前にも store が確かめる（ADR 0025）。
+    if stamp_of(reader.path()).ok() != Some(opened) {
+        return Err(SavingFailure::Save(SaveFailure::ChangedOutside));
+    }
+    let format = reader.format();
+    let plan = {
+        let mut lookup = reader.lookup();
+        save_plan(edits, &mut lookup, reader.source_length(), format.dialect())
+            .map_err(SavingFailure::Plan)?
+    };
+    let bytes = ScanBytes::new(reader.source_copy().map_err(OpenFailure::from)?);
+    #[cfg(windows)]
+    let replacing = nene_ledger_adapters_windows::file_replacing::FileReplacing;
+    #[cfg(not(windows))]
+    let replacing = nene_ledger_store::rename_replacing::RenameReplacing;
+    SaveJob::spawn(
+        reader.path().to_path_buf(),
+        (plan, format.encoding(), opened),
+        (bytes, replacing),
+        reader.wakeup(),
+    )
+    .map_err(SavingFailure::Save)
+}
+
+/// 保存できなかった理由のうち、状態の行で示すもの。
+pub(crate) fn problem_of(failure: &SavingFailure) -> SaveProblem {
+    match failure {
+        SavingFailure::Open(_) | SavingFailure::Plan(_) => SaveProblem::Unplannable,
+        SavingFailure::Save(SaveFailure::ChangedOutside | SaveFailure::SourceShrank) => {
+            SaveProblem::ChangedOutside
+        }
+        SavingFailure::Save(
+            SaveFailure::Blocked(ReplaceFailure::Interrupted)
+            | SaveFailure::Replace {
+                failure: ReplaceFailure::Interrupted,
+                ..
+            },
+        ) => SaveProblem::Interrupted,
+        SavingFailure::Save(SaveFailure::Blocked(_) | SaveFailure::Replace { .. }) => {
+            SaveProblem::Locked
+        }
+        SavingFailure::Save(SaveFailure::Unrepresentable(text)) => text
+            .chars()
+            .next()
+            .map_or(SaveProblem::Other, SaveProblem::Unrepresentable),
+        SavingFailure::Save(SaveFailure::HardLinked(_)) => SaveProblem::HardLinked,
+        SavingFailure::Save(
+            SaveFailure::Target(_)
+            | SaveFailure::Write(_)
+            | SaveFailure::Read(_)
+            | SaveFailure::Spawn(_)
+            | SaveFailure::Panicked,
+        ) => SaveProblem::Other,
+    }
 }
 
 /// 保存できなかった理由の文（端末とメッセージの窓に出す）。
@@ -118,7 +186,7 @@ fn save_with_os(
         TextFormat,
         FileStamp,
     ),
-    bytes: &mut ScanBytes<'_>,
+    bytes: &mut ScanBytes,
 ) -> Result<(), SaveFailure> {
     #[cfg(windows)]
     let replacing = nene_ledger_adapters_windows::file_replacing::FileReplacing;

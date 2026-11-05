@@ -44,6 +44,7 @@ use crate::pointer_shape::PointerShape;
 use crate::press_kind::PressKind;
 use crate::ranges::Ranges;
 use crate::row_band::RowBand;
+use crate::save_problem::SaveProblem;
 use crate::scroll::Scroll;
 use crate::scroll_bar::ScrollBar;
 use crate::scroll_orientation::ScrollOrientation;
@@ -114,6 +115,8 @@ pub struct Document {
     edits: CellEdits,
     /// 編集中のセル（ADR 0026）。
     editor: Option<CellEditor>,
+    /// 裏で保存している間（直すことと保存を受けない）。
+    saving: bool,
 }
 
 /// 状態の行の右端に出すパレットの案内。
@@ -191,6 +194,7 @@ impl Document {
             grip: false,
             edits: CellEdits::empty(),
             editor: None,
+            saving: false,
         }
     }
 
@@ -204,6 +208,46 @@ impl Document {
     #[must_use]
     pub const fn editor(&self) -> Option<&CellEditor> {
         self.editor.as_ref()
+    }
+
+    /// 裏で保存しているか。
+    #[must_use]
+    pub const fn is_saving(&self) -> bool {
+        self.saving
+    }
+
+    /// 裏の保存を始めた（`DocumentEffect::Save` を受けて合成ルートが呼ぶ）。
+    pub fn begin_saving(&mut self) {
+        self.saving = true;
+    }
+
+    /// 保存して、置き換えた後のファイルを同じ読み方で開き直した。書き換えを空にし、索引は作り直しを待つ。
+    /// カーソルと表示の位置は保ち、今の位置から読み直させる。
+    pub fn saved(&mut self) -> DocumentEffect {
+        self.saving = false;
+        self.edits = CellEdits::empty();
+        self.editor = None;
+        self.index = JobState::Waiting;
+        self.notice = Some(Notice::Saved);
+        DocumentEffect::Read {
+            first_body: self.view.first_body(),
+        }
+    }
+
+    /// 保存できなかった。書き換えは残す。
+    pub fn save_failed(&mut self, problem: SaveProblem) {
+        self.saving = false;
+        self.notice = Some(Notice::SaveFailed(problem));
+    }
+
+    /// Ctrl+S。編集中なら確定してから、書き換えがあれば保存させる。
+    fn save_request(&mut self) -> DocumentEffect {
+        self.commit_edit();
+        if self.edits.is_empty() {
+            self.notice = Some(Notice::NothingToSave);
+            return DocumentEffect::Stay;
+        }
+        DocumentEffect::Save
     }
 
     /// 題名（タイトルバーに書く）。
@@ -304,6 +348,18 @@ impl Document {
     /// コピーなら選択の行を読ませる（大きすぎれば知らせるだけ）。前の知らせは消す。
     pub fn apply(&mut self, intent: Intent, window: WindowView) -> DocumentEffect {
         self.notice = None;
+        if self.saving
+            && matches!(
+                intent,
+                Intent::Type(_) | Intent::Edit | Intent::Delete | Intent::BreakLine | Intent::Save
+            )
+        {
+            self.notice = Some(Notice::StillSaving);
+            return DocumentEffect::Stay;
+        }
+        if intent == Intent::Save {
+            return self.save_request();
+        }
         match self.edit_intent(intent) {
             Some(intent) => self.apply_to_table(intent, window),
             None => DocumentEffect::Stay,
@@ -346,7 +402,8 @@ impl Document {
             | Intent::Edit
             | Intent::Delete
             | Intent::BreakLine
-            | Intent::Advance(_) => current,
+            | Intent::Advance(_)
+            | Intent::Save => current,
             Intent::SelectAll
             | Intent::SelectRows
             | Intent::SelectColumns
@@ -362,12 +419,7 @@ impl Document {
             // 開閉はすでに済ませた。ペインの分だけ表が狭まるので、カーソルが見えるように縦の表示を動かす。
             Intent::ToggleDetail => reveal_row(current, self.selection.cursor().body(), page),
             Intent::Scroll(scroll) => self.wheel(scroll, current, window),
-            Intent::Move { step, mode } => {
-                let to = step_cursor(self.selection.cursor(), step, page, self.extent());
-                self.select(to, mode);
-                self.first_column = self.reveal_column(to.column(), window);
-                reveal_row(current, to.body(), page)
-            }
+            Intent::Move { step, mode } => self.move_cursor((step, mode), page, window),
             Intent::Point { at, mode } => {
                 self.press_cell(at, mode, window);
                 current
@@ -413,8 +465,9 @@ impl Document {
                     mode: SelectionMode::Collapse,
                 });
             }
-            // 別のセル・別の行への移動と、表の並びを変える操作は、確定してから。
-            Intent::Point { .. }
+            // 別のセル・別の行への移動と、表の並びを変える操作は、確定してから（保存は `apply` が先に受ける）。
+            Intent::Save
+            | Intent::Point { .. }
             | Intent::GoTo(_)
             | Intent::OpenGoTo
             | Intent::OpenPalette
@@ -492,7 +545,8 @@ impl Document {
             | Intent::Zoom(_)
             | Intent::OpenPalette
             | Intent::Erase
-            | Intent::Cancel => Some(intent),
+            | Intent::Cancel
+            | Intent::Save => Some(intent),
         }
     }
 
@@ -564,6 +618,20 @@ impl Document {
         ))
     }
 
+    /// カーソルを `step` で動かし（`mode` で畳む・広げる）、見えるように横を動かして、縦の表示の先頭を返す（1 画面 `page` 行）。
+    fn move_cursor(
+        &mut self,
+        (step, mode): (CursorStep, SelectionMode),
+        page: u64,
+        window: WindowView,
+    ) -> u64 {
+        let current = self.view.first_body();
+        let to = step_cursor(self.selection.cursor(), step, page, self.extent());
+        self.select(to, mode);
+        self.first_column = self.reveal_column(to.column(), window);
+        reveal_row(current, to.body(), page)
+    }
+
     /// ホイール。横はその場で動かし、縦は動いた先の本体の先頭を返す。ドラッグ中なら、動いた後の指の下まで選択を広げる。
     fn wheel(&mut self, scroll: Scroll, current: u64, window: WindowView) -> u64 {
         let target = self.scroll(scroll, current);
@@ -606,7 +674,8 @@ impl Document {
             | Intent::Edit
             | Intent::Delete
             | Intent::BreakLine
-            | Intent::Advance(_) => {}
+            | Intent::Advance(_)
+            | Intent::Save => {}
         }
     }
 
@@ -804,7 +873,8 @@ impl Document {
             | Intent::Edit
             | Intent::Delete
             | Intent::BreakLine
-            | Intent::Advance(_) => None,
+            | Intent::Advance(_)
+            | Intent::Save => None,
         }
     }
 
@@ -1332,9 +1402,10 @@ impl Document {
         let effect = self.go_to(target, page);
         let first = match effect {
             DocumentEffect::Read { first_body } => first_body,
-            DocumentEffect::Stay | DocumentEffect::Copy { .. } | DocumentEffect::StopTotals => {
-                current
-            }
+            DocumentEffect::Stay
+            | DocumentEffect::Copy { .. }
+            | DocumentEffect::StopTotals
+            | DocumentEffect::Save => current,
         };
         self.extend_to(at, first, window);
         effect
@@ -2283,6 +2354,9 @@ impl Document {
         }
         if let Some(notice) = self.notice {
             return notice_status(notice);
+        }
+        if self.saving {
+            return String::from("保存しています…");
         }
         if let Some(editor) = &self.editor {
             return String::from(match editor.mode() {
@@ -4552,5 +4626,71 @@ mod tests {
                 .editing_cell()
                 .is_some_and(|cell| cell.caret() == 1)
         );
+    }
+
+    #[test]
+    fn saving_commits_the_open_edit_and_asks_the_composition_root_to_save() {
+        let mut document = editable();
+        assert_eq!(document.apply(Intent::Save, normal()), DocumentEffect::Stay);
+        let frame = document.frame(normal(), palette());
+        text_at(&frame, "変えたセルが無いので保存しませんでした");
+        typed(&mut document, "x");
+        assert_eq!(document.apply(Intent::Save, normal()), DocumentEffect::Save);
+        assert_eq!(document.editor(), None);
+        assert_eq!(
+            edited(&document, 0, 0),
+            Some(&CellValue::Text(String::from("x")))
+        );
+    }
+
+    #[test]
+    fn while_saving_edits_are_refused_and_the_status_says_so() {
+        let mut document = editable();
+        typed(&mut document, "x");
+        document.apply(Intent::Save, normal());
+        document.begin_saving();
+        assert!(document.is_saving());
+        text_at(&document.frame(normal(), palette()), "保存しています…");
+        typed(&mut document, "y");
+        assert_eq!(document.editor(), None);
+        text_at(
+            &document.frame(normal(), palette()),
+            "保存しています。終わるまで直せません",
+        );
+        // 動くことはできる。
+        document.apply(moving(CursorStep::Down), normal());
+        assert_eq!(document.selection().cursor(), CellPosition::new(1, 0));
+    }
+
+    #[test]
+    fn a_finished_save_clears_the_edits_and_rereads_the_same_place() {
+        let mut document = editable();
+        typed(&mut document, "x");
+        document.apply(Intent::Save, normal());
+        document.begin_saving();
+        assert_eq!(document.saved(), DocumentEffect::Read { first_body: 0 });
+        assert!(!document.is_saving());
+        assert!(document.edits().is_empty());
+        assert_eq!(document.index(), JobState::Waiting);
+        let frame = document.frame(normal(), palette());
+        text_at(&frame, "保存しました");
+        text_at(&frame, "e.csv — NeNe Ledger");
+    }
+
+    #[test]
+    fn a_failed_save_keeps_the_edits_and_says_why() {
+        let mut document = editable();
+        typed(&mut document, "x");
+        document.apply(Intent::Save, normal());
+        document.begin_saving();
+        document.save_failed(SaveProblem::Unrepresentable('😀'));
+        assert!(!document.is_saving());
+        assert!(!document.edits().is_empty());
+        let frame = document.frame(normal(), palette());
+        text_at(
+            &frame,
+            "「😀」はファイルの文字コードで表せないので保存できませんでした（直した値は残っています）",
+        );
+        text_at(&frame, "● e.csv — NeNe Ledger");
     }
 }

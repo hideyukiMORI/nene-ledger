@@ -10,6 +10,9 @@ pub enum DocumentEffect {
         /// 本体の何番目から。
         first_body: u64,
     },
+    /// 書き換え（`Document::edits`）を保存する（Ctrl+S）。始めたら `Document::begin_saving`、終わったら
+    /// `Document::saved` か `Document::save_failed` を呼ぶ。
+    Save,
     /// 裏の集計を止める（Esc）。
     StopTotals,
     /// レコード `first_record` から `count` 個を読んで `Document::copy_text` に渡す（コピー）。

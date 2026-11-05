@@ -9,6 +9,7 @@ pub mod encoding;
 mod lock_probe;
 pub mod rename_replacing;
 pub mod save_failure;
+pub mod save_job;
 pub mod saving;
 pub mod stamping;
 mod temporary_file;

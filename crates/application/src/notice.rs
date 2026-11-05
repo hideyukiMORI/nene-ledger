@@ -1,5 +1,6 @@
 //! 状態の行に一度だけ出す知らせ。
 
+use crate::save_problem::SaveProblem;
 use crate::zoom_level::ZoomLevel;
 
 /// 状態の行に一度だけ出す知らせ。次の操作で消える。
@@ -40,6 +41,18 @@ pub enum Notice {
         /// 固定した列の数。
         columns: usize,
     },
+    /// 保存した。
+    Saved,
+    /// 書き換えが無いので保存しなかった。
+    NothingToSave,
+    /// 保存の途中なので、直すことと保存を受けない。
+    StillSaving,
+    /// 保存できなかった（書き換えは残っている）。
+    SaveFailed(SaveProblem),
+    /// 保存したが、置き換えた後のファイルを開き直せなかった（表示は保存の前のまま）。
+    ReopenFailed,
+    /// 書き換えがある間は、読み方を変えられない（先に保存する）。
+    ReadingNeedsSave,
     /// 1 MiB で切り詰めたレコードのセルは直せない（保存の計画と同じ・ADR 0026 の決定 1）。
     EditCut,
     /// この行には、この列のセルが無い（列の数が足りない行・KEEP-05）。セルを足すのは列の操作（EDIT-03）。

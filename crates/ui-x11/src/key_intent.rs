@@ -27,6 +27,7 @@ const XK_END: u32 = 0xff57;
 const XK_SPACE: u32 = 0x20;
 const XK_A: u32 = 0x61;
 const XK_C: u32 = 0x63;
+const XK_S: u32 = 0x73;
 const XK_G: u32 = 0x67;
 const XK_U: u32 = 0x75;
 const XK_T: u32 = 0x74;
@@ -72,6 +73,9 @@ pub(crate) fn key_intent(keysym: u32, typed: Option<char>, state: KeyButMask) ->
     }
     if control && keysym == XK_C {
         return Some(Intent::Copy);
+    }
+    if control && !state.contains(KeyButMask::SHIFT) && keysym == XK_S {
+        return Some(Intent::Save);
     }
     if control && !state.contains(KeyButMask::SHIFT) && keysym == XK_A {
         return Some(Intent::SelectAll);

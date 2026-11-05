@@ -582,6 +582,21 @@ Shift_JIS・縦棒区切りの見本（`crates/app/fixtures/shift-jis-pipe.csv`�
 
 🔴 **正直に:** 画面からの保存（Ctrl+S）はまだ無いので、直した値はファイルに残らない（次の Issue）。Windows の実機・IME の確定前の見え・ダブルクリックでの編集はまだ。選んだ集計（VIEW-14）は原本の値で数える（書き換えを重ねていない）。
 
+## 58. 画面から保存する（GitHub Issue #71・ADR 0026 の決定 6）— 仮想の X サーバでの確認（QLT-013）
+
+`id,name,city` の 3 行（CRLF・2 行目の `name` は引用の `"Sato, Hanako"`）を、debug の窓で開き、xdotool でキーを送った（2026-11-05）。
+
+| 操作 | 結果 |
+| --- | --- |
+| → F2 ` Jr.` Enter → `Kyoto` Ctrl+S | 状態の行が `保存しました`、題名の `●` が消え、カーソルは 3 行目の `city` のまま。ファイルは `0012,"Sato, Hanako Jr.",Tokyo\r\n` と `0013,Suzuki,Kyoto\r\n` の 2 行だけが変わり、見出しの行・引用・CRLF は元のバイト列のまま（`od -c`・`diff`）。一時ファイルは残っていない |
+| ↓ `9` Enter → 外から `printf ... > t.csv` で中身を替える → Ctrl+S | 状態の行が `開いた後にほかのアプリがファイルを変えたので、上書きしませんでした（直した値は残っています）`。題名の `●` は残る。外で書いた中身はそのまま |
+
+保存の後に `--resave` の経路（`ScanBytes` が原本の口を持つように変えた）で、Pollock と実データの置き場の写し 2,740 ファイルを保存し直し、失敗 0・元と違うファイル 0・残った一時ファイル 0（benchmarks 第 4 節と同じ手順・2026-11-05）。
+
+保存の流れ（書き換えが無いときの知らせ・保存中は直せない・成功で差分を空にして同じ位置から読み直す・失敗で差分を残す）は application のテスト、裏の仕事は store の `a_save_job_writes_in_the_background_and_wakes_the_window`・`a_failed_save_job_reports_the_failure_once`。
+
+🔴 **正直に:** Windows の実機（`ReplaceFileW`・Excel が開いているときの止まり方）は未確認。保存の進み具合と中止（SAVE-02）・別名で保存・閉じるときに尋ねる画面はまだ。保存の後は Undo の履歴が無い（UNDO-01 がまだ）。
+
 ## 7. active の規則と、その証明
 
 CNF-009 は active の規則ごとに `| ID |` で始まる行がここにあることを要求する。

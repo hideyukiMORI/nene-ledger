@@ -10,6 +10,7 @@ use nene_ledger_core::text_encoding::TextEncoding;
 use crate::format_summary::FormatSummary;
 use crate::job_state::JobState;
 use crate::notice::Notice;
+use crate::save_problem::SaveProblem;
 use crate::selection_stats::SelectionStats;
 use crate::selection_totals::SelectionTotals;
 use nene_ledger_core::decimal::Decimal;
@@ -126,6 +127,16 @@ pub fn notice_status(notice: Notice) -> String {
         Notice::Frozen { columns } => {
             format!("左の {columns} 列を固定しました（横に動いても残ります）")
         }
+        Notice::Saved => String::from("保存しました"),
+        Notice::NothingToSave => String::from("変えたセルが無いので保存しませんでした"),
+        Notice::StillSaving => String::from("保存しています。終わるまで直せません"),
+        Notice::SaveFailed(problem) => save_problem_status(problem),
+        Notice::ReopenFailed => {
+            String::from("保存しました。開き直せなかったので、表示は保存の前のままです")
+        }
+        Notice::ReadingNeedsSave => {
+            String::from("直したセルがある間は読み方を変えられません（先に Ctrl+S で保存）")
+        }
         Notice::EditCut => String::from(
             "1 MiB で切り詰めた行のセルは直せません（行の全体を読めないので、保存で元に戻せない）",
         ),
@@ -136,6 +147,30 @@ pub fn notice_status(notice: Notice) -> String {
             second / 10
         ),
     }
+}
+
+/// 保存できなかった理由の文言。書き換えは残っていることを添える。
+fn save_problem_status(problem: SaveProblem) -> String {
+    let reason = match problem {
+        SaveProblem::ChangedOutside => {
+            String::from("開いた後にほかのアプリがファイルを変えたので、上書きしませんでした")
+        }
+        SaveProblem::Locked => {
+            String::from("ほかのアプリがファイルを開いているので保存できませんでした")
+        }
+        SaveProblem::Unrepresentable(character) => {
+            format!("「{character}」はファイルの文字コードで表せないので保存できませんでした")
+        }
+        SaveProblem::HardLinked => {
+            String::from("ハードリンクのあるファイルなので保存しませんでした")
+        }
+        SaveProblem::Interrupted => String::from(
+            "置き換えが途中で止まりました。新しい内容は同じフォルダの .nene-ledger-*.tmp に残しました",
+        ),
+        SaveProblem::Unplannable => String::from("書き換えた行を読めないので保存できませんでした"),
+        SaveProblem::Other => String::from("保存できませんでした"),
+    };
+    format!("{reason}（直した値は残っています）")
 }
 
 /// 選んだ範囲の集計の文言。出さないなら `None`。数として読めないセルの数は必ず出す。
