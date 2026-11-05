@@ -273,27 +273,34 @@ pub fn segmentation(sample: &[u8], dialect: Dialect, complete: bool) -> Vec<Vec<
 
 /// 見出しの前の前書きの行の数（OPEN-11・Issue #25）。
 ///
-/// 先頭から次の両方を満たす行を前書きとし、満たさない行で止める。
-/// - 中身のある（空白だけでない）セルが、列の数（`modal_columns`）の半分に満たない
-/// - セルの数がちょうど列の数（空のセルで埋めた行・`PREAMBLE,,,,`）か、1 つ以下（区切りの無い表題・空行）
+/// 先頭から次の 3 つを満たす行を前書きとし、満たさない行で止める。
+/// - 中身のある（空白だけでない）セルが、使われている列の幅（`used_width`）の半分に満たない
+/// - 表題らしい: 中身のあるセルが 1 つ以下か、左端から始まり `PREAMBLE_FILLED_CELLS`（3）個以下（表題と右端の単位・
+///   ページ・作成日）。🔴 段に分けた見出し（`,総数,病院,,,診療所`・`,男,,女`）は左端が空で中身が散るので、疎でも前書きにしない
+/// - セルの数がちょうど列の数（空のセルで埋めた行・`PREAMBLE,,,,`）か、1 つ以下（区切りの無い表題・空行）か、
+///   列の数より少なく、どのセルも改行と区切りの字を含まない（e-Stat の `平成27年,人口動態調査,,`）
 ///
-/// 🔴 2 つめの条件は、汚れた見出しを前書きにしないため（迷子の引用符が後ろの引用符と組み違えると、見出しは
-/// 少ない数のセルになる）。見出しを捨てる誤りは、前書きを残す誤りより重い（Issue #25 の Pollock の測定）。
-/// 列の数が `MIN_PREAMBLE_COLUMNS` 未満なら 0。前書きは `MAX_PREAMBLE_ROWS` 行までで、表の行を少なくとも 1 行残す。
+/// 🔴 3 つめの条件は、汚れた見出しを前書きにしないため（迷子の引用符が後ろの引用符と組み違えると、見出しは
+/// 少ない数のセルになり、飲み込んだ改行や区切りの字を含む）。見出しを捨てる誤りは、前書きを残す誤りより重い（Issue #25 の Pollock の測定）。
+/// 幅が `MIN_PREAMBLE_COLUMNS` 未満なら 0。前書きは `MAX_PREAMBLE_ROWS` 行までで、表の行を少なくとも 1 行残す。
 #[must_use]
 pub fn preamble_rows(sample: &[u8], records: &[Record], dialect: &Dialect) -> usize {
     let columns = modal_columns(records);
-    if columns < MIN_PREAMBLE_COLUMNS {
+    let width = used_width(sample, records, *dialect).min(columns);
+    if width < MIN_PREAMBLE_COLUMNS {
         return 0;
     }
     let sparse = |record: &Record| {
-        let filled = record
-            .fields()
-            .iter()
-            .filter(|&&field| !judged(sample, field, *dialect).trim_ascii().is_empty())
-            .count();
+        let filled: Vec<usize> = filled_positions(sample, record, dialect).collect();
         let cells = record.fields().len();
-        filled.saturating_mul(2) < columns && (cells == columns || cells <= 1)
+        let titled = match filled.as_slice() {
+            [] | [_] => true,
+            [first, ..] => *first == 0 && filled.len() <= PREAMBLE_FILLED_CELLS,
+        };
+        let shaped = cells == columns
+            || cells <= 1
+            || (cells < columns && !merges_cells(sample, record, *dialect));
+        filled.len().saturating_mul(2) < width && titled && shaped
     };
     let limit = MAX_PREAMBLE_ROWS.min(records.len().saturating_sub(1));
     records
@@ -301,6 +308,45 @@ pub fn preamble_rows(sample: &[u8], records: &[Record], dialect: &Dialect) -> us
         .take(limit)
         .take_while(|record| sparse(record))
         .count()
+}
+
+/// 左端から始まる前書きの行の、中身のあるセルの数の上限（表題・単位・作成日）。
+const PREAMBLE_FILLED_CELLS: usize = 3;
+
+/// `record` の中身のある（空白だけでない・全角の空白も空白とみなす）セルの位置。
+fn filled_positions<'a>(
+    sample: &'a [u8],
+    record: &'a Record,
+    dialect: &'a Dialect,
+) -> impl Iterator<Item = usize> + 'a {
+    record
+        .fields()
+        .iter()
+        .enumerate()
+        .filter(|&(_, &field)| !dialect.units().is_blank(&value(sample, field, dialect)))
+        .map(|(position, _)| position)
+}
+
+/// 使われている列の幅。どこかの行で中身のある、いちばん右のセルの位置 ＋ 1。
+/// 🔴 右に空の列が続く表（10 列のうち 3 列だけ使う）で、見出しを「疎な行」とみなさないため。
+fn used_width(sample: &[u8], records: &[Record], dialect: Dialect) -> usize {
+    records
+        .iter()
+        .filter_map(|record| filled_positions(sample, record, &dialect).last())
+        .max()
+        .map_or(0, |position| position.saturating_add(1))
+}
+
+/// `record` のどれかのセルの値が、改行か区切りの字を含むか（引用符の組み違いで、行や隣のセルを飲み込んだ跡）。
+/// 🔴 Pollock の `row_extra_quote0_col0`: 見出しの先頭の迷子の引用符が 7 つのセルを 1 つに飲み込み、1 行のまま
+/// 3 つのセルになる。区切りの字を含むセルで見分けないと、短い表題の行とみなして見出しを捨てる。
+fn merges_cells(sample: &[u8], record: &Record, dialect: Dialect) -> bool {
+    let delimiter = dialect.delimiter().byte();
+    record.fields().iter().any(|&field| {
+        judged(sample, field, dialect)
+            .iter()
+            .any(|&byte| byte == b'\n' || byte == b'\r' || byte == delimiter)
+    })
 }
 
 /// 見出しの有無を推し量る。数や日付の列の先頭が文字列なら見出しあり、先頭も同じ形なら見出しなし。

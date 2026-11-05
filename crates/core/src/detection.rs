@@ -408,6 +408,41 @@ mod tests {
         assert_eq!(preamble(input), 0);
     }
 
+    /// e-Stat の人口動態の形: 2 つのセルの表題・1 つのセルの表題・注の行の後ろに、段に分けた見出し（GitHub Issue #15）。
+    /// 表題と注だけを前書きとし、段の見出し（左端が空で中身が散る）は表に残す。
+    #[test]
+    fn short_title_rows_are_a_preamble_but_a_grouped_header_is_not() {
+        let body = ",総数,病院,,,診療所,,\n,,総数,医師,助産師,総数,医師,助産師\n滋賀,10,4,3,1,6,5,1\n大津,20,8,6,2,12,10,2\n草津,30,9,8,1,21,20,1\n";
+        let input =
+            alloc::format!("平成27年,人口動態調査,,\n保管統計表　第１表\n注：数値は確定値\n{body}");
+        assert_eq!(preamble(&input), 3);
+        // 表題の右端の単位（`(単位 : %)`）があっても表題。
+        let units = "国債金利情報,,,,,(単位 : %)\n基準日,1年,2年,3年,4年,5年\nR8.11.2,1.6,1.8,1.9,2.1,2.2\nR8.11.4,1.6,1.8,1.9,2.1,2.2\n";
+        assert_eq!(preamble(units), 1);
+    }
+
+    /// 右に使われていない列が続く表で、見出しとデータを前書きとみなさない（GitHub Issue #15・東京都の表で 32 行を飛ばした）。
+    /// 全角の空白だけのセルは空とみなす。
+    #[test]
+    fn unused_right_columns_and_ideographic_spaces_do_not_widen_the_table() {
+        use core::fmt::Write as _;
+        let mut input = String::from("地域,国,人口,,,,,,,\n");
+        for row in 0..40_u32 {
+            writeln!(input, "アジア,国{row},{row}00,,,,,,,").unwrap();
+        }
+        assert_eq!(preamble(&input), 0);
+        input.push_str("第２表 国籍別人口,,,,,,,,,\u{3000}\u{3000}\n");
+        assert_eq!(preamble(&input), 0);
+    }
+
+    /// 見出しの先頭の迷子の引用符が、1 行のまま隣のセルを飲み込んで短い行になっても、前書きにしない（Pollock の
+    /// `row_extra_quote0_col0` の形）。
+    #[test]
+    fn a_header_that_swallowed_its_cells_on_one_line_is_not_a_preamble() {
+        let input = "\"id,name,city,\"price\",unit,note\n1,a,x,10,kg,-\n2,b,y,20,kg,-\n3,c,z,30,kg,-\n4,d,w,40,kg,-\n";
+        assert_eq!(preamble(input), 0);
+    }
+
     #[test]
     fn narrow_or_wholly_sparse_tables_have_no_preamble() {
         assert_eq!(preamble("title\na,1\nb,2\nc,3\n"), 0);

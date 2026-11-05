@@ -113,6 +113,25 @@ impl TextUnits {
         }
     }
 
+    /// 値 `value` が空白だけか（空も含む）。ASCII の空白と、全角の空白（U+3000）を空白とみなす。
+    ///
+    /// 日本の表は、空に見えるセルに全角の空白を置くことが多い（e-Stat の注の行・東京都の表の右端）。🔴 1 バイトの単位では
+    /// UTF-8 の `E3 80 80` と EUC-JP の `A1 A1` の両方を全角の空白とみなす（Windows-1252 の `¡¡` だけのセルも空白になるが、
+    /// 判別の目安にしか使わない）。
+    #[must_use]
+    pub fn is_blank(self, value: &[u8]) -> bool {
+        match self {
+            Self::SingleByte => blank_by(value, &[b"\xE3\x80\x80", b"\xA1\xA1"]),
+            Self::ShiftJis => blank_by(value, &[b"\x81\x40"]),
+            Self::Utf16Le | Self::Utf16Be => characters(value, self).all(|character| {
+                self.unit_at(character, 0).is_some_and(|unit| {
+                    unit == IDEOGRAPHIC_SPACE
+                        || u8::try_from(unit).is_ok_and(|byte| byte.is_ascii_whitespace())
+                })
+            }),
+        }
+    }
+
     /// ASCII の `byte` を、この単位で `out` に書く（エスケープを外した `\t` などを値に足すとき）。
     pub fn push_ascii(self, out: &mut alloc::vec::Vec<u8>, byte: u8) {
         match self {
@@ -121,6 +140,24 @@ impl TextUnits {
             Self::Utf16Be => out.extend_from_slice(&[0, byte]),
         }
     }
+}
+
+/// 全角の空白（U+3000）。
+const IDEOGRAPHIC_SPACE: u16 = 0x3000;
+
+/// `value` が ASCII の空白と、`spaces` のどれかのバイト列だけでできているか。
+fn blank_by(value: &[u8], spaces: &[&[u8]]) -> bool {
+    let mut rest = value;
+    while let Some((&first, tail)) = rest.split_first() {
+        if first.is_ascii_whitespace() {
+            rest = tail;
+        } else if let Some(space) = spaces.iter().find(|space| rest.starts_with(space)) {
+            rest = rest.get(space.len()..).unwrap_or_default();
+        } else {
+            return false;
+        }
+    }
+    true
 }
 
 /// `input` を文字ごとに切った列（どの文字も 1 か 2 バイト）。
@@ -154,6 +191,27 @@ mod tests {
     use super::*;
     use alloc::vec;
     use alloc::vec::Vec;
+
+    #[test]
+    fn ascii_and_ideographic_spaces_are_blank_in_single_bytes() {
+        let single = TextUnits::SingleByte;
+        assert!(single.is_blank(b""));
+        assert!(single.is_blank(b" \t "));
+        assert!(single.is_blank("\u{3000}\u{3000}  ".as_bytes()));
+        assert!(single.is_blank(b"\xA1\xA1 "));
+        assert!(!single.is_blank("\u{3000}a".as_bytes()));
+        assert!(!single.is_blank(b"\xE3\x80"));
+    }
+
+    #[test]
+    fn ideographic_spaces_are_blank_in_shift_jis_and_utf16() {
+        let sjis = TextUnits::ShiftJis;
+        assert!(sjis.is_blank(b"\x81\x40 \x81\x40"));
+        assert!(!sjis.is_blank(b"\x81\x41"));
+        assert!(TextUnits::Utf16Le.is_blank(b"\x00\x30 \x00"));
+        assert!(TextUnits::Utf16Be.is_blank(b"\x30\x00\x00 "));
+        assert!(!TextUnits::Utf16Le.is_blank(b"a\x00"));
+    }
 
     #[test]
     fn single_bytes_are_one_wide() {
