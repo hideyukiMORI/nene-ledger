@@ -47,7 +47,6 @@ const XK_F2: u32 = 0xffbf;
 /// 拡大のキー（US 配列の `=`（Shift で `+`）・JIS 配列の `;`（Shift で `+`）・`-`・`0`・テンキー）。
 const XK_EQUAL: u32 = 0x3d;
 const XK_PLUS: u32 = 0x2b;
-const XK_SEMICOLON: u32 = 0x3b;
 const XK_MINUS: u32 = 0x2d;
 const XK_0: u32 = 0x30;
 const XK_KP_ADD: u32 = 0xffab;
@@ -88,8 +87,8 @@ pub(crate) fn key_intent(keysym: u32, typed: Option<char>, state: KeyButMask) ->
     if control && !state.contains(KeyButMask::SHIFT) && keysym == XK_G {
         return Some(Intent::OpenGoTo);
     }
-    if control && let Some(step) = zoom_step(keysym) {
-        return Some(Intent::Zoom(step));
+    if control && let Some(intent) = sign_intent(keysym) {
+        return Some(intent);
     }
     let control_shift = control && state.contains(KeyButMask::SHIFT);
     if control_shift && keysym == XK_P {
@@ -201,12 +200,13 @@ fn undo_intent(keysym: u32, shift: bool) -> Option<Intent> {
     }
 }
 
-/// Ctrl と組んで文字の大きさを変えるキー。
-fn zoom_step(keysym: u32) -> Option<ZoomStep> {
+/// Ctrl と組んで行と列を足し消しするキー（Ctrl++ と Ctrl+-・Excel と同じ・ADR 0027）と、文字の大きさを戻す Ctrl+0。文字の大きさは Ctrl+ホイールと
+/// Ctrl+0（ADR 0020 の施主の判断・2026-11-06）。JIS の Ctrl++ は Shift+; で、keysym は `plus` になる。
+fn sign_intent(keysym: u32) -> Option<Intent> {
     match keysym {
-        XK_EQUAL | XK_PLUS | XK_SEMICOLON | XK_KP_ADD => Some(ZoomStep::In),
-        XK_MINUS | XK_KP_SUBTRACT => Some(ZoomStep::Out),
-        XK_0 | XK_KP_0 => Some(ZoomStep::Reset),
+        XK_EQUAL | XK_PLUS | XK_KP_ADD => Some(Intent::InsertHere),
+        XK_MINUS | XK_KP_SUBTRACT => Some(Intent::RemoveHere),
+        XK_0 | XK_KP_0 => Some(Intent::Zoom(ZoomStep::Reset)),
         _ => None,
     }
 }
@@ -490,17 +490,11 @@ mod tests {
             button_intent(5, control, 0, 0),
             Some(Intent::Zoom(ZoomStep::Out))
         );
-        for keysym in [XK_EQUAL, XK_PLUS, XK_SEMICOLON, XK_KP_ADD] {
-            assert_eq!(
-                key_intent(keysym, None, control),
-                Some(Intent::Zoom(ZoomStep::In))
-            );
+        for keysym in [XK_EQUAL, XK_PLUS, XK_KP_ADD] {
+            assert_eq!(key_intent(keysym, None, control), Some(Intent::InsertHere));
         }
         for keysym in [XK_MINUS, XK_KP_SUBTRACT] {
-            assert_eq!(
-                key_intent(keysym, None, control),
-                Some(Intent::Zoom(ZoomStep::Out))
-            );
+            assert_eq!(key_intent(keysym, None, control), Some(Intent::RemoveHere));
         }
         for keysym in [XK_0, XK_KP_0] {
             assert_eq!(

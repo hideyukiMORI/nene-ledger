@@ -46,7 +46,6 @@ const VK_SUBTRACT: u16 = 0x6D;
 const VK_F1: u16 = 0x70;
 /// `;` と `+` のキー（日本語の配列）・`=` と `+` のキー（英語の配列）。
 const VK_OEM_PLUS: u16 = 0xBB;
-const VK_OEM_1: u16 = 0xBA;
 const VK_OEM_MINUS: u16 = 0xBD;
 
 /// 押されている修飾キー。
@@ -135,8 +134,10 @@ fn control_intent(key: u16, shift: bool, alt: bool) -> Option<Intent> {
         } else {
             ThemeStep::Next
         })),
-        (VK_OEM_PLUS | VK_OEM_1 | VK_ADD, _) => Some(Intent::Zoom(ZoomStep::In)),
-        (VK_OEM_MINUS | VK_SUBTRACT, _) => Some(Intent::Zoom(ZoomStep::Out)),
+        // Ctrl++（US は Shift+=、JIS は Shift+;、テンキーの +）と Ctrl+- は行と列の足し消し（Excel と同じ・ADR 0027）。
+        // 文字の大きさは Ctrl+ホイールと Ctrl+0（ADR 0020 の施主の判断・2026-11-06）。
+        (VK_OEM_PLUS | VK_ADD, _) => Some(Intent::InsertHere),
+        (VK_OEM_MINUS | VK_SUBTRACT, _) => Some(Intent::RemoveHere),
         (VK_0 | VK_NUMPAD0, _) => Some(Intent::Zoom(ZoomStep::Reset)),
         _ => None,
     }
@@ -365,10 +366,12 @@ mod tests {
 
     #[test]
     fn control_keys_zoom_and_plain_keys_edit() {
-        assert_eq!(
-            key_intent(VK_OEM_1, control()),
-            Some(Intent::Zoom(ZoomStep::In))
-        );
+        for key in [VK_OEM_PLUS, VK_ADD] {
+            assert_eq!(key_intent(key, control()), Some(Intent::InsertHere));
+        }
+        for key in [VK_OEM_MINUS, VK_SUBTRACT] {
+            assert_eq!(key_intent(key, control()), Some(Intent::RemoveHere));
+        }
         assert_eq!(
             key_intent(VK_NUMPAD0, control()),
             Some(Intent::Zoom(ZoomStep::Reset))

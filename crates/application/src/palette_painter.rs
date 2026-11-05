@@ -471,7 +471,7 @@ mod tests {
         assert!(shown.contains(&"操作の名前を英字かローマ字で（例: theme, haishoku）"));
         assert!(shown.contains(&"34 / 34"));
         assert!(shown.contains(&"詳細ペインを閉じる") && shown.contains(&"Ctrl+Shift+U"));
-        assert!(shown.contains(&"文字を大きくする") && shown.contains(&"Ctrl+Plus"));
+        assert!(shown.contains(&"文字を大きくする") && shown.contains(&"Ctrl+0"));
         // 選んでいる最初の行は選択の色で塗り、左に強調の色の 3px の帯。
         let first_row = PaletteLayout::new(view(), &palette).row(0);
         assert_eq!(fills(&commands, colors().selection()), vec![first_row]);

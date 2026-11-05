@@ -65,7 +65,7 @@ pub enum Intent {
     ToggleDetail,
     /// 配色を表の中で替える（試しに・Ctrl+Shift+T と Ctrl+Shift+Alt+T）。
     Theme(ThemeStep),
-    /// 表と詳細ペインの文字の大きさを変える（Ctrl+ホイール・Ctrl++ / Ctrl+- / Ctrl+0）。
+    /// 表と詳細ペインの文字の大きさを変える（Ctrl+ホイール・Ctrl+0・パレット。Ctrl++ / Ctrl+- は行と列の足し消し・ADR 0027）。
     Zoom(ZoomStep),
     /// コマンドパレットを開く（Ctrl+Shift+P・F1）。
     OpenPalette,
@@ -99,4 +99,8 @@ pub enum Intent {
     InsertColumns(ColumnPlace),
     /// 選んだ範囲にかかる列を消す（尋ねずに消し、Ctrl+Z で戻す）。
     RemoveColumns,
+    /// Ctrl++（ADR 0027 の決定 2）。列全体を選んでいれば左に列を、そうでなければ上に行を足す。
+    InsertHere,
+    /// Ctrl+-。列全体を選んでいれば列を、そうでなければ選んだ範囲にかかる行を消す。
+    RemoveHere,
 }

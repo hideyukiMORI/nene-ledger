@@ -268,12 +268,13 @@ impl CommandId {
             Self::SelectRows => Some("Shift+Space"),
             Self::SelectColumns => Some("Ctrl+Space"),
             Self::ToggleDetail => Some("Ctrl+Shift+U"),
-            Self::ZoomIn => Some("Ctrl+Plus"),
-            Self::ZoomOut => Some("Ctrl+Minus"),
             Self::ZoomReset => Some("Ctrl+0"),
             Self::MoveColumnsLeft => Some("Ctrl+Shift+PageUp"),
             Self::MoveColumnsRight => Some("Ctrl+Shift+PageDown"),
-            Self::ChooseTheme
+            // 文字の大きさのキーは Ctrl+ホイール（キーの一覧の WheelZoom）と Ctrl+0（ADR 0020 の施主の判断）。
+            Self::ZoomIn
+            | Self::ZoomOut
+            | Self::ChooseTheme
             | Self::ChooseDialect
             | Self::ChooseEncoding
             | Self::ChooseDelimiter
@@ -284,14 +285,12 @@ impl CommandId {
             | Self::FreezeColumns
             | Self::UnfreezeColumns
             | Self::ShowKeys
-            // 🔴 ADR 0027 の Ctrl++ と Ctrl+- は文字の大きさ（ADR 0020）とぶつかるので、キーは施主に諮ってから。
-            | Self::InsertRowsAbove
             | Self::InsertRowsBelow
             | Self::AppendRow
-            | Self::RemoveRows
-            | Self::InsertColumnsLeft
-            | Self::InsertColumnsRight
-            | Self::RemoveColumns => None,
+            | Self::InsertColumnsRight => None,
+            // Ctrl++ と Ctrl+- は、列全体を選んでいれば列に、そうでなければ行に効く（ADR 0027 の決定 2）。
+            Self::InsertRowsAbove | Self::InsertColumnsLeft => Some("Ctrl+Plus"),
+            Self::RemoveRows | Self::RemoveColumns => Some("Ctrl+Minus"),
             Self::Copy => Some("Ctrl+C"),
             Self::Save => Some("Ctrl+S"),
             Self::Undo => Some("Ctrl+Z"),
