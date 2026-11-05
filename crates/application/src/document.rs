@@ -1428,9 +1428,19 @@ impl Document {
     }
 
     /// 選択の行をレコードの範囲にして読ませる。`MAX_COPY_ROWS` を超えればコピーせず知らせる。
+    /// ファイルの終わりまでの選択は、索引を作り終えて行の数が決まるまでコピーしない（GitHub Issue #39。分かった行だけを
+    /// コピーして黙って欠けていた）。
     fn copy_request(&mut self) -> DocumentEffect {
         if self.ranges().copy_shape().is_none() {
             self.notice = Some(Notice::RangesNotAligned);
+            return DocumentEffect::Stay;
+        }
+        let to_end = self
+            .ranges()
+            .all()
+            .any(|range| range.bottom_right().body() == TO_END);
+        if to_end && self.records().is_none() {
+            self.notice = Some(Notice::CopyAwaitsIndex);
             return DocumentEffect::Stay;
         }
         let (top, bottom) = self.row_span();
@@ -1448,6 +1458,7 @@ impl Document {
 
     /// レコード `first_record` から読んだ行 `rows`（復号したセルの値）から、見出しのレコードを除いて選択の列だけを
     /// タブ区切りにする。`MAX_COPY_BYTES` を超えればコピーせず知らせる。コピーしたら行と列の数を知らせる。
+    /// コピーする行が無ければ、クリップボードを替えずに知らせる（GitHub Issue #39）。
     pub fn copy_text(&mut self, first_record: u64, rows: &[Vec<String>]) -> Option<ClipboardText> {
         let shape = self.ranges().copy_shape()?;
         let (top, _) = self.ranges().row_span();
@@ -1458,6 +1469,10 @@ impl Document {
             .filter(|&(_, body)| shape.has_row(body))
             .map(|(cells, _)| cells)
             .collect();
+        if body.is_empty() {
+            self.notice = Some(Notice::NothingToCopy);
+            return None;
+        }
         let text = tsv(&body, &self.source_columns(shape.columns()));
         if text.len() > MAX_COPY_BYTES {
             self.notice = Some(Notice::TooLargeToCopy);
@@ -3690,10 +3705,45 @@ mod tests {
         );
         document.apply(Intent::Release, window);
         assert_eq!(document.selection().cursor(), CellPosition::new(0, 2));
+        // 列全体はファイルの終わりまでなので、索引を作り終えてからコピーする（GitHub Issue #39）。
+        document.report(JobReport::Finished(IndexSummary::new(3, None)));
         assert_eq!(
             copy_from(&mut document, &rows).map(|text| String::from(text.as_str())),
             Some(String::from("太郎\r\n花子\r\n"))
         );
+    }
+
+    /// ファイルの終わりまでの選択は、索引を作り終えるまでコピーせず知らせる。作り終えたら全部の行を読ませる
+    /// （GitHub Issue #39。直す前は読んだ 3 行だけをコピーした）。
+    #[test]
+    fn copying_to_the_end_waits_for_the_index() {
+        let rows = table(&[&["n"], &["1"], &["2"], &["3"]]);
+        let mut document = closed(Document::open(String::from("t"), summary(), Some(0), &rows));
+        document.apply(Intent::SelectColumns, normal());
+        assert_eq!(document.apply(Intent::Copy, normal()), DocumentEffect::Stay);
+        assert_eq!(document.notice, Some(Notice::CopyAwaitsIndex));
+        document.report(JobReport::Finished(IndexSummary::new(5_001, None)));
+        assert_eq!(
+            document.apply(Intent::Copy, normal()),
+            DocumentEffect::Copy {
+                first_record: 1,
+                count: 5_000
+            }
+        );
+    }
+
+    /// コピーする行が無ければクリップボードを替えない（見出しだけのファイル・GitHub Issue #39）。
+    #[test]
+    fn nothing_is_copied_from_a_header_only_file() {
+        let rows = table(&[&["id", "name"]]);
+        let mut document = closed(Document::open(String::from("t"), summary(), Some(0), &rows));
+        document.report(JobReport::Finished(IndexSummary::new(1, None)));
+        document.apply(Intent::SelectAll, normal());
+        let effect = document.apply(Intent::Copy, normal());
+        if let DocumentEffect::Copy { first_record, .. } = effect {
+            assert_eq!(document.copy_text(first_record, &[]), None);
+        }
+        assert_eq!(document.notice, Some(Notice::NothingToCopy));
     }
 
     #[test]
