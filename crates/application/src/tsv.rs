@@ -231,7 +231,7 @@ mod tests {
         };
         for _ in 0..2_000_u32 {
             let columns = 1 + next(4);
-            let rows: Vec<Vec<String>> = (0..1 + next(4))
+            let rows: Vec<Vec<String>> = (0..=next(4))
                 .map(|_| {
                     (0..columns)
                         .map(|_| (0..next(4)).map(|_| PIECES[next(PIECES.len())]).collect())
