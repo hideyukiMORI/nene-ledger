@@ -77,7 +77,7 @@ use crate::table_view::TableView;
 use crate::thumb_state::ThumbState;
 use crate::totals_request::TotalsRequest;
 use crate::track_side::TrackSide;
-use crate::tsv::tsv;
+use crate::tsv::{parse_tsv, tsv};
 use crate::view_row::ViewRow;
 use crate::window_view::WindowView;
 use nene_ledger_core::cell_change::CellChange;
@@ -376,6 +376,7 @@ impl Document {
             | Intent::Save
             | Intent::SaveAs
             | Intent::NewTable
+            | Intent::Paste
             | Intent::Undo
             | Intent::Redo
             | Intent::InsertRows(_)
@@ -678,6 +679,7 @@ impl Document {
                     | Intent::Save
                     | Intent::SaveAs
                     | Intent::NewTable
+                    | Intent::Paste
                     | Intent::Undo
                     | Intent::Redo
                     | Intent::InsertRows(_)
@@ -737,6 +739,7 @@ impl Document {
             | Intent::Save
             | Intent::SaveAs
             | Intent::NewTable
+            | Intent::Paste
             | Intent::Undo
             | Intent::Redo
             | Intent::InsertRows(_)
@@ -781,13 +784,9 @@ impl Document {
         {
             return Some(DocumentEffect::StopTotals);
         }
-        if let Intent::InsertRows(place) = intent {
-            return Some(self.insert_rows(place, window));
-        }
-        if let Intent::InsertColumns(place) = intent {
-            return Some(self.insert_columns(place, window));
-        }
         match intent {
+            Intent::InsertRows(place) => Some(self.insert_rows(place, window)),
+            Intent::InsertColumns(place) => Some(self.insert_columns(place, window)),
             Intent::RemoveColumns => Some(self.remove_columns(window)),
             Intent::RemoveHere if self.columns_chosen() => Some(self.remove_columns(window)),
             Intent::RemoveRows | Intent::RemoveHere => Some(self.remove_rows(window)),
@@ -826,10 +825,9 @@ impl Document {
             | Intent::Save
             | Intent::SaveAs
             | Intent::NewTable
+            | Intent::Paste
             | Intent::Undo
-            | Intent::Redo
-            | Intent::InsertRows(_)
-            | Intent::InsertColumns(_) => self.pointer_intent(intent, window),
+            | Intent::Redo => self.pointer_intent(intent, window),
         }
     }
 
@@ -862,6 +860,7 @@ impl Document {
             Intent::Save
             | Intent::SaveAs
             | Intent::NewTable
+            | Intent::Paste
             | Intent::Undo
             | Intent::Redo
             | Intent::InsertRows(_)
@@ -966,6 +965,7 @@ impl Document {
             | Intent::Save
             | Intent::SaveAs
             | Intent::NewTable
+            | Intent::Paste
             | Intent::Undo
             | Intent::Redo
             | Intent::InsertRows(_)
@@ -1025,6 +1025,50 @@ impl Document {
         }
         if let Some(editor) = self.editor.as_mut() {
             editor.compose(preedit);
+        }
+    }
+
+    /// クリップボードの文字列 `text` を貼る（CLIP-01）。タブ区切り（Excel の形）として読み、1 つのセルなら：
+    /// 編集中は欄のカーソルに挿し、そうでなければカーソルのセルの値をそれにする（1 手として履歴に積む）。
+    /// 編集中に複数のセルを貼れば、字のまま挿す（最後の改行は除く）。編集していなければ、複数のセルはまだ貼らずに知らせる。
+    /// 値は変えない（型を推し量らない・KEEP-01）。
+    pub fn paste(&mut self, text: &str) {
+        if self.closing != CloseState::Open || text.is_empty() {
+            return;
+        }
+        if self.saving {
+            self.notice = Some(Notice::StillSaving);
+            return;
+        }
+        self.notice = None;
+        let cells = parse_tsv(text);
+        let single = match cells.as_slice() {
+            [row] => match row.as_slice() {
+                [value] => Some(value.clone()),
+                _ => None,
+            },
+            _ => None,
+        };
+        if let Some(editor) = self.editor.as_mut() {
+            let raw = text
+                .strip_suffix("\r\n")
+                .or_else(|| text.strip_suffix('\n'))
+                .unwrap_or(text);
+            editor.insert(single.as_deref().unwrap_or(raw));
+            return;
+        }
+        let Some(value) = single else {
+            self.notice = Some(Notice::PasteManyCells {
+                rows: cells.len(),
+                columns: cells.iter().map(Vec::len).max().unwrap_or(0),
+            });
+            return;
+        };
+        if self.begin_edit(EditMode::Entering) {
+            if let Some(editor) = self.editor.as_mut() {
+                editor.insert(&value);
+            }
+            self.commit_edit();
         }
     }
 
@@ -1497,6 +1541,7 @@ impl Document {
             | Intent::Save
             | Intent::SaveAs
             | Intent::NewTable
+            | Intent::Paste
             | Intent::Undo
             | Intent::Redo
             | Intent::InsertRows(_)
@@ -1706,6 +1751,7 @@ impl Document {
             | Intent::Save
             | Intent::SaveAs
             | Intent::NewTable
+            | Intent::Paste
             | Intent::Undo
             | Intent::Redo
             | Intent::InsertRows(_)
@@ -6327,6 +6373,57 @@ mod tests {
         assert_eq!(
             opened.apply(Intent::SaveAs, normal()),
             DocumentEffect::SaveAs
+        );
+    }
+
+    /// 1 つのセルの貼り付けは、カーソルのセルの値になり（1 手として戻せる）、編集中は欄に挿す。値は変えない（CLIP-01）。
+    #[test]
+    fn pasting_one_cell_sets_the_cursor_cell_or_goes_into_the_field() {
+        let mut document = editable();
+        document.paste("0099\r\n");
+        assert_eq!(
+            edited(&document, 0, 0),
+            Some(&CellValue::Text(String::from("0099")))
+        );
+        assert_eq!(document.editor(), None);
+        document.apply(Intent::Undo, normal());
+        assert_eq!(edited(&document, 0, 0), None);
+        // 引用した 1 つのセル（中に改行）も 1 つの値。
+        document.paste("\"a\nb\"\r\n");
+        assert_eq!(
+            edited(&document, 0, 0),
+            Some(&CellValue::Text(String::from("a\nb")))
+        );
+        // 編集中は欄のカーソルに挿す。
+        let mut editing = editable();
+        editing.apply(Intent::Edit, normal());
+        editing.paste("-1\r\n");
+        assert!(
+            editing
+                .editor()
+                .is_some_and(|editor| editor.field().text() == "0012-1")
+        );
+    }
+
+    /// 複数のセルは、編集していなければまだ貼らずに知らせ、編集中なら字のまま挿す。空は何もしない。
+    #[test]
+    fn pasting_many_cells_is_refused_outside_the_field() {
+        let mut document = editable();
+        document.paste("a\tb\r\nc\td\r\n");
+        assert!(document.edits().is_empty());
+        text_at(
+            &document.frame(normal(), palette()),
+            "2 行 × 2 列の貼り付けはまだできません（1 つのセルか、編集中の欄には貼れます）",
+        );
+        document.paste("");
+        assert!(document.edits().is_empty());
+        let mut editing = editable();
+        editing.apply(Intent::Edit, normal());
+        editing.paste("a\tb\r\n");
+        assert!(
+            editing
+                .editor()
+                .is_some_and(|editor| editor.field().text() == "0012a\tb")
         );
     }
 }

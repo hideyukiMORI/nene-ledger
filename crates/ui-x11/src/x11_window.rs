@@ -326,6 +326,43 @@ impl X11Window {
             if clear.owner == self.window && clear.selection == self.atoms.clipboard())
     }
 
+    /// `CLIPBOARD` の中身を `UTF8_STRING` で、自分の窓の属性に書いてもらうよう求める（貼り付け・CLIP-01）。
+    /// 答えは `SelectionNotify` で届く（[`Self::pasted_text`]）。`time` は Ctrl+V のキーの時刻。
+    pub(crate) fn request_clipboard(&self, time: u32) -> Result<(), UiFailure> {
+        self.connection.convert_selection(
+            self.window,
+            self.atoms.clipboard(),
+            self.atoms.utf8_string(),
+            self.atoms.paste(),
+            time,
+        )?;
+        self.connection.flush()?;
+        Ok(())
+    }
+
+    /// 求めた貼り付けの答えなら、受け取った文字列（断られた・分けて渡す大きな中身は空の文字列。貼る側は空を貼らない）。
+    /// 答えでなければ `None`。読んだ属性は消す。UTF-8 でないバイトは置き換える。
+    pub(crate) fn pasted_text(&self, event: &Event) -> Result<Option<String>, UiFailure> {
+        let Event::SelectionNotify(notify) = event else {
+            return Ok(None);
+        };
+        if notify.requestor != self.window || notify.selection != self.atoms.clipboard() {
+            return Ok(None);
+        }
+        if notify.property == x11rb::NONE {
+            return Ok(Some(String::new()));
+        }
+        let length = u32::try_from(self.connection.maximum_request_bytes() / 4).unwrap_or(u32::MAX);
+        let reply = self
+            .connection
+            .get_property(true, self.window, notify.property, AtomEnum::ANY, 0, length)?
+            .reply()?;
+        if reply.type_ == self.atoms.incr() {
+            return Ok(Some(String::new()));
+        }
+        Ok(Some(String::from_utf8_lossy(&reply.value).into_owned()))
+    }
+
     /// 別のアプリからの `CLIPBOARD` の求めに応える。`TARGETS` には渡せる形の一覧を、`UTF8_STRING` と
     /// `text/plain;charset=utf-8` には `text` を、求めた窓の属性に書く。持っていない・1 つの要求に収まらない・
     /// 知らない形なら断る（属性を `NONE` にして知らせる）。

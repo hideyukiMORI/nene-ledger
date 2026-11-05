@@ -751,6 +751,19 @@ PR の枝の debug の exe で `rows.csv` を Xvfb に出し、Ctrl+N を送っ�
 
 🔴 **正直に:** Windows の実機（`CreateProcessW`・新しい窓が前に出るか）はまだ。
 
+## 70. Ctrl+V で貼る（GitHub Issue #115・CLIP-01 の 1）— 仮想の X サーバでの確認（QLT-013）
+
+PR の枝の debug の exe で `rows.csv`（`id,name` ＋ 2 行・CRLF）を Xvfb に出し、`xclip` でほかのアプリのクリップボードを置いて `xdotool` のキーを送った（2026-11-06）。
+
+| # | 操作 | 見え・結果 |
+| --- | --- | --- |
+| 1 | `xclip` に `0099\r\n` → ↓ → Ctrl+V | 3 行目の `id` が `0099` になる（`SelectionNotify` を待って受け取った・先頭の 0 を保つ）・題名に `●` |
+| 2 | `xclip` に 2 行 × 2 列 → Ctrl+V | 表は変わらない。状態の行に `2 行 × 2 列の貼り付けはまだできません（1 つのセルか、編集中の欄には貼れます）` |
+| 3 | `Sato` のセルで Ctrl+C → ↓ → Ctrl+V | 自分が持ち主のクリップボードから `Sato` を貼る |
+| 4 | Ctrl+S → `od -c` | `id,name\r\n1,Sato\r\n0099,Sato\r\n` |
+
+🔴 **正直に:** Windows の `CF_UNICODETEXT` の読み取りと、Excel からの貼り付けは実機でまだ。直した値の列の幅は広がらない（`0099` は `0…` と出る。手で打った値と同じ・前からの振る舞い）。
+
 ## 7. active の規則と、その証明
 
 CNF-009 は active の規則ごとに `| ID |` で始まる行がここにあることを要求する。

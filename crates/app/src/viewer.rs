@@ -690,6 +690,18 @@ impl Session for Viewer {
         }
     }
 
+    fn paste(&mut self, text: &str, view: WindowView) {
+        if self.palette.is_none() {
+            self.document.paste(text);
+            self.refresh_totals();
+            return;
+        }
+        // パレットの欄には 1 行の字として打つ（改行とタブは打たない）。
+        for character in text.chars().filter(|character| !character.is_control()) {
+            let _clipboard = self.intent(Intent::Type(character), view);
+        }
+    }
+
     fn composition_area(&self, view: WindowView) -> Option<PixelRect> {
         self.palette
             .is_none()
