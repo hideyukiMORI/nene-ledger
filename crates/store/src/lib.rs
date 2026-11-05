@@ -5,7 +5,10 @@
 //! ファイルとプロセスの番号を読める区画の 1 つ（ARC-007・CNF-012）。
 
 pub mod encoding;
+#[cfg(windows)]
+mod lock_probe;
 pub mod rename_replacing;
 pub mod save_failure;
 pub mod saving;
+pub mod stamping;
 mod temporary_file;

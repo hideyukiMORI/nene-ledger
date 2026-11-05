@@ -29,6 +29,7 @@ pub mod detail_pane;
 mod detail_place;
 pub mod document;
 pub mod document_effect;
+pub mod file_stamp;
 pub mod fixed_parts;
 pub mod format_summary;
 mod frame_painter;

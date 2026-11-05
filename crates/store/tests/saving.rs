@@ -14,6 +14,7 @@ mod saving {
     use nene_ledger_store::rename_replacing::RenameReplacing;
     use nene_ledger_store::save_failure::SaveFailure;
     use nene_ledger_store::saving::{discard, retry_replace, save};
+    use nene_ledger_store::stamping::stamp_of;
 
     /// テストごとに別のフォルダ（テストは並列に走る）。
     fn folder(name: &str) -> PathBuf {
@@ -76,7 +77,11 @@ mod saving {
         plan.text(text);
         save(
             target,
-            (&plan, encoding),
+            (
+                &plan,
+                encoding,
+                stamp_of(target).map_err(SaveFailure::Target)?,
+            ),
             &mut Bytes(Vec::new()),
             &RenameReplacing,
         )
@@ -92,7 +97,7 @@ mod saving {
         let plan = whole(original.len());
         save(
             &target,
-            (&plan, TextEncoding::Utf8WithBom),
+            (&plan, TextEncoding::Utf8WithBom, stamp_of(&target).unwrap()),
             &mut source,
             &RenameReplacing,
         )
@@ -115,7 +120,7 @@ mod saving {
         plan.copy(1_500_001, 1_499_999);
         save(
             &target,
-            (&plan, TextEncoding::Utf8),
+            (&plan, TextEncoding::Utf8, stamp_of(&target).unwrap()),
             &mut Bytes(original.clone()),
             &RenameReplacing,
         )
@@ -138,7 +143,7 @@ mod saving {
         let mut source = Bytes(original);
         save(
             &target,
-            (&plan, TextEncoding::ShiftJis),
+            (&plan, TextEncoding::ShiftJis, stamp_of(&target).unwrap()),
             &mut source,
             &RenameReplacing,
         )
@@ -171,7 +176,7 @@ mod saving {
         let mut source = Bytes(b"abc".to_vec());
         let failure = save(
             &target,
-            (&whole(6), TextEncoding::Utf8),
+            (&whole(6), TextEncoding::Utf8, stamp_of(&target).unwrap()),
             &mut source,
             &RenameReplacing,
         );
@@ -190,7 +195,7 @@ mod saving {
         let refusing = Refusing(ReplaceFailure::Locked);
         let failure = save(
             &target,
-            (&plan, TextEncoding::Utf8),
+            (&plan, TextEncoding::Utf8, stamp_of(&target).unwrap()),
             &mut Bytes(Vec::new()),
             &refusing,
         );
@@ -244,12 +249,69 @@ mod saving {
         let mut source = Bytes(b"a\n".to_vec());
         save(
             &target,
-            (&whole(2), TextEncoding::Utf8),
+            (&whole(2), TextEncoding::Utf8, stamp_of(&target).unwrap()),
             &mut source,
             &RenameReplacing,
         )
         .unwrap();
         let mode = std::fs::metadata(&target).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o640);
+    }
+
+    #[test]
+    fn a_file_changed_after_opening_is_not_overwritten() {
+        let dir = folder("changed");
+        let target = dir.join("t.csv");
+        std::fs::write(&target, b"a,b\n").unwrap();
+        let opened = stamp_of(&target).unwrap();
+        std::fs::write(&target, b"a,b,c\n").unwrap();
+        let mut plan = SavePlan::empty();
+        plan.text("x\n");
+        let failure = save(
+            &target,
+            (&plan, TextEncoding::Utf8, opened),
+            &mut Bytes(Vec::new()),
+            &RenameReplacing,
+        );
+        assert_eq!(failure, Err(SaveFailure::ChangedOutside));
+        assert_eq!(std::fs::read(&target).unwrap(), b"a,b,c\n");
+        assert!(leftovers(&dir).is_empty());
+    }
+
+    /// 書いている間に外から変えられたら、置き換えない（原本を読むポートの中で原本を書き換えて再現する）。
+    struct Meddling {
+        target: PathBuf,
+        bytes: Vec<u8>,
+    }
+
+    impl SourceBytes for Meddling {
+        type Failure = ErrorKind;
+
+        fn read_at(&mut self, offset: u64, buffer: &mut [u8]) -> Result<usize, ErrorKind> {
+            std::fs::write(&self.target, b"changed while saving\n")
+                .map_err(|error| error.kind())?;
+            Bytes(self.bytes.clone()).read_at(offset, buffer)
+        }
+    }
+
+    #[test]
+    fn a_change_while_writing_stops_before_the_replacement() {
+        let dir = folder("meddled");
+        let target = dir.join("t.csv");
+        std::fs::write(&target, b"a\n").unwrap();
+        let opened = stamp_of(&target).unwrap();
+        let mut source = Meddling {
+            target: target.clone(),
+            bytes: b"a\n".to_vec(),
+        };
+        let failure = save(
+            &target,
+            (&whole(2), TextEncoding::Utf8, opened),
+            &mut source,
+            &RenameReplacing,
+        );
+        assert_eq!(failure, Err(SaveFailure::ChangedOutside));
+        assert_eq!(std::fs::read(&target).unwrap(), b"changed while saving\n");
+        assert!(leftovers(&dir).is_empty());
     }
 }

@@ -4,6 +4,7 @@ use std::fs::File;
 use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 
+use nene_ledger_application::file_stamp::FileStamp;
 use nene_ledger_application::replace_failure::ReplaceFailure;
 use nene_ledger_application::replacing::Replacing;
 use nene_ledger_application::source_bytes::SourceBytes;
@@ -13,6 +14,7 @@ use nene_ledger_core::text_encoding::TextEncoding;
 
 use crate::encoding::encoded;
 use crate::save_failure::SaveFailure;
+use crate::stamping::stamp_of;
 use crate::temporary_file::create_beside;
 
 /// 原本を写すときに一度に読む量。
@@ -20,6 +22,8 @@ const COPY_CHUNK: usize = 1 << 20;
 
 /// 保存の計画 `plan`（書き換えた文字列は原本の文字コード `encoding` で書く）を、`target` と同じフォルダの一時ファイルに書き、同期してから `replacing` で置き換える。
 ///
+/// - 原本の印が、開く前に取った `opened`（[`stamp_of`]）と違えば、書かない。書き終えて置き換える直前にも確かめる
+/// - Windows では、書く前に置き換えられるか（ほかのアプリのロック）を確かめる
 /// - `target` がシンボリックリンクなら、行き先のファイルを保存する（リンクを実体で置き換えない）
 /// - 書き換えた文字列は、書き始める前に全部を `encoding` で符号化する。表せない字があれば何も書かない
 /// - 書いている途中で失敗したら一時ファイルを消す。🔴 原本には、置き換えの瞬間まで触れない（ADR 0005）
@@ -30,7 +34,7 @@ const COPY_CHUNK: usize = 1 << 20;
 /// [`SaveFailure`] のとおり。
 pub fn save<S, R>(
     target: &Path,
-    (plan, encoding): (&SavePlan, TextEncoding),
+    (plan, encoding, opened): (&SavePlan, TextEncoding, FileStamp),
     source: &mut S,
     replacing: &R,
 ) -> Result<(), SaveFailure>
@@ -41,10 +45,16 @@ where
     let target =
         std::fs::canonicalize(target).map_err(|error| SaveFailure::Target(error.kind()))?;
     let metadata = std::fs::metadata(&target).map_err(|error| SaveFailure::Target(error.kind()))?;
+    unchanged_since(&target, opened)?;
     refuse_hard_links(&metadata)?;
+    // Unix では、開いているほかのプロセスがあっても `rename` で置き換えられる（確かめることは無い）。
+    #[cfg(windows)]
+    crate::lock_probe::probe(&target).map_err(SaveFailure::Blocked)?;
     let texts = encoded_texts(plan, encoding)?;
     let (file, temporary) = create_beside(&target).map_err(SaveFailure::Write)?;
-    if let Err(failure) = write_plan(file, plan, &texts, source) {
+    if let Err(failure) =
+        write_plan(file, plan, &texts, source).and_then(|()| unchanged_since(&target, opened))
+    {
         discard(&temporary);
         return Err(failure);
     }
@@ -78,6 +88,16 @@ fn replace_with<R: Replacing<Location = Path>>(
     replacing
         .replace(&temporary, target)
         .map_err(|failure: ReplaceFailure| SaveFailure::Replace { failure, temporary })
+}
+
+/// 原本が、開く前に取った印 `opened` のままか（書く前と置き換えの直前に確かめる・FILE-01）。
+fn unchanged_since(target: &Path, opened: FileStamp) -> Result<(), SaveFailure> {
+    let now = stamp_of(target).map_err(SaveFailure::Target)?;
+    if now == opened {
+        Ok(())
+    } else {
+        Err(SaveFailure::ChangedOutside)
+    }
 }
 
 /// ハードリンクのあるファイル（リンクの数が 2 以上）を拒む（施主の判断 2）。
