@@ -126,6 +126,10 @@ pub fn notice_status(notice: Notice) -> String {
         Notice::Frozen { columns } => {
             format!("左の {columns} 列を固定しました（横に動いても残ります）")
         }
+        Notice::EditCut => String::from(
+            "1 MiB で切り詰めた行のセルは直せません（行の全体を読めないので、保存で元に戻せない）",
+        ),
+        Notice::EditMissingCell => String::from("この行には、この列のセルがありません"),
         Notice::DialectUnsure { top, second } => format!(
             "判別に確信なし（1 位 {}%・2 位 {}%）· 候補は Ctrl+Shift+P → candidates",
             top / 10,

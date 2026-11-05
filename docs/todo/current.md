@@ -42,7 +42,7 @@ M1 の 56 項目は `確認済み` 21・`実装済み` 10・`未着手` 25（Git
 
 0. 品質の調査の残り: #22（窓の記憶・数万列の BIG-08 とあわせて）・#42（低: 折り返しの結合文字・合計の桁あふれの順）
 1. M2 の ADR 2 本（GitHub Issue #53・2026-11-05 に施主が推しのとおり受理）: 差分の持ち方（[ADR 0024](../adr/0024-edit-layer-over-the-source.md)）・保存の置き換えと Windows のロック（[ADR 0025](../adr/0025-save-by-replacement-and-windows-locks.md)）
-2. M2 の最初の縦切り: 1 セルの書き換え → 保存 → 往復のバイト一致（EDIT-01・SAVE-01・KEEP-02・03）。保存の計画（GitHub Issue #56）と store・`--resave`（#58・Pollock と実データの 2,740 ファイルで往復が一致）は済み。書く前の確かめのうち外からの変更と Windows のロックは #60。空きの事前の確認は、依存を入れずに進め、`rustix` を足すかは M2 の終わりに決める（施主 2026-11-05・ADR 0025 の判断 6）。残りは、画面での編集と Ctrl+S（入り方と IME の方式は [ADR 0026](../adr/0026-cell-editing-entry-and-japanese-input.md) （2026-11-05 に施主が推しのとおり受理・GitHub Issue #62））・Undo
+2. M2 の最初の縦切り: 1 セルの書き換え → 保存 → 往復のバイト一致（EDIT-01・SAVE-01・KEEP-02・03）。保存の計画（GitHub Issue #56）と store・`--resave`（#58・Pollock と実データの 2,740 ファイルで往復が一致）は済み。書く前の確かめのうち外からの変更と Windows のロックは #60。空きの事前の確認は、依存を入れずに進め、`rustix` を足すかは M2 の終わりに決める（施主 2026-11-05・ADR 0025 の判断 6）。画面での編集は、欄の規則（core の `text_edit`・#65）・編集中のセルの状態（application の `CellEditor`・#67）・表の上で直して重ねること（#69）まで済み（方式は [ADR 0026](../adr/0026-cell-editing-entry-and-japanese-input.md)・2026-11-05 に施主が推しのとおり受理・#62）。残りは、Ctrl+S と保存の後の開き直し・閉じるときに尋ねる画面・Windows の IMM32 と貼り付け・ダブルクリック・Undo
 3. 検索（FIND-01・05）→ Undo / Redo（UNDO-01）→ 置換（FIND-02）→ 正規表現と同一視（FIND-03・06）
 4. 壊れた行の隔離と手直し（OPEN-15・EDIT-14・VALD-01）
 5. 並行して M1 の残り（OPEN-11・OPEN-08・IME・D&D・Windows の実機での #3 / #4 と Issue #62〜#68 の確認）

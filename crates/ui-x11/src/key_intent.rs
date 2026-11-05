@@ -36,6 +36,11 @@ const XK_ESCAPE: u32 = 0xff1b;
 const XK_RETURN: u32 = 0xff0d;
 const XK_KP_ENTER: u32 = 0xff8d;
 const XK_BACKSPACE: u32 = 0xff08;
+const XK_DELETE: u32 = 0xffff;
+const XK_TAB: u32 = 0xff09;
+/// Shift+Tab（多くの配列で Tab に Shift を足すとこの keysym になる）。
+const XK_ISO_LEFT_TAB: u32 = 0xfe20;
+const XK_F2: u32 = 0xffbf;
 /// 拡大のキー（US 配列の `=`（Shift で `+`）・JIS 配列の `;`（Shift で `+`）・`-`・`0`・テンキー）。
 const XK_EQUAL: u32 = 0x3d;
 const XK_PLUS: u32 = 0x2b;
@@ -62,7 +67,7 @@ pub(crate) fn key_intent(keysym: u32, typed: Option<char>, state: KeyButMask) ->
     if let Some(intent) = line_intent(keysym, control, state.contains(KeyButMask::SHIFT)) {
         return Some(intent);
     }
-    if let Some(intent) = editing_intent(keysym, typed, control) {
+    if let Some(intent) = editing_intent(keysym, typed, state) {
         return Some(intent);
     }
     if control && keysym == XK_C {
@@ -145,14 +150,25 @@ pub(crate) fn button_intent(button: u8, state: KeyButMask, x: i16, y: i16) -> Op
     Some(Intent::Scroll(scroll))
 }
 
-/// パレットを開く・決める・やめる・消す・字を打つ。Ctrl と組んだ字は字として打たない（Ctrl+C など）。
-fn editing_intent(keysym: u32, typed: Option<char>, control: bool) -> Option<Intent> {
+/// パレットを開く・決める・やめる・消す・字を打つ・セルを直す（ADR 0026 の決定 1・2）。
+/// Ctrl と組んだ字は字として打たない（Ctrl+C など）。Alt+Enter はセルの中の改行、Shift+Enter・Tab・Shift+Tab は確定して動く。
+fn editing_intent(keysym: u32, typed: Option<char>, state: KeyButMask) -> Option<Intent> {
+    let shift = state.contains(KeyButMask::SHIFT);
     match keysym {
         XK_F1 => Some(Intent::OpenPalette),
+        XK_F2 => Some(Intent::Edit),
         XK_ESCAPE => Some(Intent::Cancel),
+        XK_RETURN | XK_KP_ENTER if state.contains(KeyButMask::MOD1) => Some(Intent::BreakLine),
+        XK_RETURN | XK_KP_ENTER if shift => Some(Intent::Advance(CursorStep::Up)),
         XK_RETURN | XK_KP_ENTER => Some(Intent::Confirm),
+        XK_TAB if shift => Some(Intent::Advance(CursorStep::Left)),
+        XK_ISO_LEFT_TAB => Some(Intent::Advance(CursorStep::Left)),
+        XK_TAB => Some(Intent::Advance(CursorStep::Right)),
         XK_BACKSPACE => Some(Intent::Erase),
-        _ => typed.filter(|_| !control).map(Intent::Type),
+        XK_DELETE => Some(Intent::Delete),
+        _ => typed
+            .filter(|_| !state.contains(KeyButMask::CONTROL))
+            .map(Intent::Type),
     }
 }
 
@@ -318,6 +334,39 @@ mod tests {
         );
     }
 
+    /// 編集のキーの一覧の行（ADR 0026）が、書いたとおりに割り当てられている。
+    fn editing_bound(guide: nene_ledger_application::key_guide::KeyGuide) -> bool {
+        use nene_ledger_application::key_guide::KeyGuide;
+        match guide {
+            KeyGuide::EditCell => key_intent(XK_F2, None, plain()) == Some(Intent::Edit),
+            KeyGuide::ClearCell => key_intent(XK_DELETE, None, plain()) == Some(Intent::Delete),
+            KeyGuide::BreakLine => {
+                key_intent(XK_RETURN, None, KeyButMask::MOD1) == Some(Intent::BreakLine)
+            }
+            KeyGuide::Advance => {
+                key_intent(XK_TAB, None, plain()) == Some(Intent::Advance(CursorStep::Right))
+                    && key_intent(XK_ISO_LEFT_TAB, None, KeyButMask::SHIFT)
+                        == Some(Intent::Advance(CursorStep::Left))
+                    && key_intent(XK_TAB, None, KeyButMask::SHIFT)
+                        == Some(Intent::Advance(CursorStep::Left))
+                    && key_intent(XK_RETURN, None, KeyButMask::SHIFT)
+                        == Some(Intent::Advance(CursorStep::Up))
+            }
+            KeyGuide::MoveCursor
+            | KeyGuide::ExtendSelection
+            | KeyGuide::Page
+            | KeyGuide::RowEnds
+            | KeyGuide::ExtendClick
+            | KeyGuide::AddRange
+            | KeyGuide::Sideways
+            | KeyGuide::WheelZoom
+            | KeyGuide::NextTheme
+            | KeyGuide::PreviousTheme
+            | KeyGuide::Palette
+            | KeyGuide::Cancel => false,
+        }
+    }
+
     /// キーの一覧（Issue #63）の各行が、書いたとおりに割り当てられている。行を足せばここの `match` が落ちる。
     #[test]
     fn every_key_in_the_list_is_bound_as_written() {
@@ -374,6 +423,10 @@ mod tests {
                         && key_intent(XK_F1, None, plain()) == Some(Intent::OpenPalette)
                 }
                 KeyGuide::Cancel => key_intent(XK_ESCAPE, None, plain()) == Some(Intent::Cancel),
+                KeyGuide::EditCell
+                | KeyGuide::ClearCell
+                | KeyGuide::BreakLine
+                | KeyGuide::Advance => editing_bound(guide),
             };
             assert!(bound, "{guide:?}");
         }

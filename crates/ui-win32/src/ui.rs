@@ -33,7 +33,7 @@ use windows::Win32::UI::HiDpi::{
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetKeyState, ReleaseCapture, SetCapture, TME_LEAVE, TME_NONCLIENT, TRACKMOUSEEVENT,
-    TrackMouseEvent, VK_CONTROL, VK_MENU, VK_SHIFT,
+    TrackMouseEvent, VK_CONTROL, VK_MENU, VK_RETURN, VK_SHIFT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DispatchMessageW, GWLP_USERDATA, GetClientRect,
@@ -44,8 +44,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     TranslateMessage, WINDOW_EX_STYLE, WM_CAPTURECHANGED, WM_CHAR, WM_DESTROY, WM_DPICHANGED,
     WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE,
     WM_MOUSEWHEEL, WM_NCCALCSIZE, WM_NCHITTEST, WM_NCLBUTTONDBLCLK, WM_NCLBUTTONDOWN,
-    WM_NCLBUTTONUP, WM_NCMOUSEMOVE, WM_PAINT, WM_SETCURSOR, WM_SIZE, WM_SYSCOMMAND, WM_TIMER,
-    WNDCLASSEXW, WS_OVERLAPPEDWINDOW,
+    WM_NCLBUTTONUP, WM_NCMOUSEMOVE, WM_PAINT, WM_SETCURSOR, WM_SIZE, WM_SYSCHAR, WM_SYSCOMMAND,
+    WM_SYSKEYDOWN, WM_TIMER, WNDCLASSEXW, WS_OVERLAPPEDWINDOW,
 };
 use windows::core::{HSTRING, PCWSTR, w};
 
@@ -403,6 +403,34 @@ fn client_covers_window(window: HWND, lparam: LPARAM) -> LRESULT {
     LRESULT(0)
 }
 
+/// キーのメッセージ。`None` は既定の手続きへ渡す印。
+fn keyboard(state: &mut WindowState<'_>, message: u32, wparam: WPARAM) -> Option<LRESULT> {
+    match message {
+        WM_KEYDOWN => {
+            let key = u16::try_from(wparam.0).ok()?;
+            let intent = key_intent(key, modifiers())?;
+            state.intent(intent);
+            Some(LRESULT(0))
+        }
+        // Alt+Enter（セルの中の改行）だけを受ける。ほかの Alt のキー（Alt+F4 など）は OS に任せる。
+        WM_SYSKEYDOWN if wparam.0 == usize::from(VK_RETURN.0) => {
+            let intent = key_intent(VK_RETURN.0, modifiers())?;
+            state.intent(intent);
+            Some(LRESULT(0))
+        }
+        // 続く `WM_SYSCHAR` の `\r` を OS に渡すと、メニューが無いので警告の音が鳴る。
+        WM_SYSCHAR if wparam.0 == usize::from(b'\r') => Some(LRESULT(0)),
+        WM_CHAR => {
+            let unit = u32::try_from(wparam.0).ok()?;
+            let intent = char::from_u32(unit)
+                .and_then(|character| typed_intent(character, key_down(VK_CONTROL.0)))?;
+            state.intent(intent);
+            Some(LRESULT(0))
+        }
+        _ => None,
+    }
+}
+
 /// メッセージを状態へ。`None` は既定の手続きへ渡す印。
 fn dispatch(
     state: &mut WindowState<'_>,
@@ -441,19 +469,7 @@ fn dispatch(
         | WM_MOUSEWHEEL | WM_MOUSEHWHEEL => {
             pointer_message(state, window, (message, wparam, lparam))
         }
-        WM_KEYDOWN => {
-            let key = u16::try_from(wparam.0).ok()?;
-            let intent = key_intent(key, modifiers())?;
-            state.intent(intent);
-            Some(LRESULT(0))
-        }
-        WM_CHAR => {
-            let unit = u32::try_from(wparam.0).ok()?;
-            let intent = char::from_u32(unit)
-                .and_then(|character| typed_intent(character, key_down(VK_CONTROL.0)))?;
-            state.intent(intent);
-            Some(LRESULT(0))
-        }
+        WM_KEYDOWN | WM_SYSKEYDOWN | WM_SYSCHAR | WM_CHAR => keyboard(state, message, wparam),
         WM_DPICHANGED => rescale(state, wparam),
         WM_TIMER if wparam.0 == TICK_TIMER => {
             state.tick();

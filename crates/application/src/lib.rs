@@ -32,6 +32,7 @@ pub mod document;
 pub mod document_effect;
 pub mod edit_commit;
 pub mod edit_mode;
+mod editing_cell;
 pub mod file_stamp;
 pub mod fixed_parts;
 pub mod format_summary;

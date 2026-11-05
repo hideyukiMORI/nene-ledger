@@ -140,7 +140,11 @@ impl CommandPalette {
             | Intent::Copy
             | Intent::ToggleDetail
             | Intent::Theme(_)
-            | Intent::Zoom(_) => PaletteOutcome::Stay,
+            | Intent::Zoom(_)
+            | Intent::Edit
+            | Intent::Delete
+            | Intent::BreakLine
+            | Intent::Advance(_) => PaletteOutcome::Stay,
         }
     }
 
@@ -325,7 +329,7 @@ mod tests {
         );
         assert_eq!(
             palette.items().get(palette.selected()),
-            Some(&PaletteItem::Key(KeyGuide::Cancel))
+            Some(&PaletteItem::Key(KeyGuide::Advance))
         );
         assert_eq!(palette.handle(Intent::Confirm, 0), PaletteOutcome::Stay);
         assert_eq!(palette.handle(Intent::Cancel, 0), PaletteOutcome::Close);

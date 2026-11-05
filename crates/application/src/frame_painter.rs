@@ -3,18 +3,24 @@
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
+use nene_ledger_core::cell_edits::CellEdits;
+use nene_ledger_core::cell_value::CellValue;
 use nene_ledger_core::color::Color;
+use nene_ledger_core::column_id::ColumnId;
+use nene_ledger_core::display_width::char_columns;
 use nene_ledger_core::draw_command::DrawCommand;
 use nene_ledger_core::glyph_metrics::GlyphMetrics;
 use nene_ledger_core::palette::Palette;
 use nene_ledger_core::pixel_point::PixelPoint;
 use nene_ledger_core::pixel_rect::PixelRect;
 use nene_ledger_core::pixel_size::PixelSize;
+use nene_ledger_core::row_id::RowId;
 use nene_ledger_core::table_layout::TableLayout;
 use nene_ledger_core::text_role::TextRole;
 
-use crate::cell_display::fitted;
+use crate::cell_display::{fitted, single_line};
 use crate::cell_mark::CellMark;
+use crate::editing_cell::EditingCell;
 use crate::ranges::Ranges;
 use crate::row_style::RowStyle;
 use crate::selection::Selection;
@@ -30,6 +36,8 @@ pub(crate) struct FramePainter<'view> {
     size: PixelSize,
     selection: Option<Ranges<'view>>,
     order: &'view [usize],
+    edits: Option<&'view CellEdits>,
+    editing: Option<&'view EditingCell>,
     commands: Vec<DrawCommand>,
     overlays: Vec<DrawCommand>,
 }
@@ -40,6 +48,10 @@ const CURSOR_LINE: u32 = 2;
 const SELECTION_LINE: u32 = 1;
 /// 左に固定した列と横に動く列の境の線の太さ（画素・100% のとき・VIEW-01）。
 const FROZEN_LINE: u32 = 2;
+/// 編集の欄のカーソルの棒の太さ（論理の画素）。
+const CARET_WIDTH: u32 = 2;
+/// 確定前の文字列の下線の太さ（論理の画素）。
+const UNDERLINE: u32 = 1;
 
 impl<'view> FramePainter<'view> {
     /// 配置・字の寸法・色・窓の大きさから始める。
@@ -56,6 +68,8 @@ impl<'view> FramePainter<'view> {
             size,
             selection: None,
             order: &[],
+            edits: None,
+            editing: None,
             commands: Vec::new(),
             overlays: Vec::new(),
         }
@@ -73,6 +87,19 @@ impl<'view> FramePainter<'view> {
     }
 
     /// 選んだ範囲の並びを描く（範囲ごとの背景と外周の枠・今の範囲のカーソルの枠）。
+    /// 書き換えたセル（ADR 0024 の層 2）を、原本の値の代わりに描く。
+    pub(crate) fn with_edits(self, edits: &'view CellEdits) -> Self {
+        Self {
+            edits: Some(edits),
+            ..self
+        }
+    }
+
+    /// カーソルのセルを、編集の欄として描く（ADR 0026）。
+    pub(crate) fn with_editing(self, editing: Option<&'view EditingCell>) -> Self {
+        Self { editing, ..self }
+    }
+
     pub(crate) fn with_ranges(self, ranges: Ranges<'view>) -> Self {
         Self {
             selection: Some(ranges),
@@ -173,7 +200,7 @@ impl<'view> FramePainter<'view> {
             }
             let mark = self.mark(style, column);
             let source = self.order.get(column).copied().unwrap_or(column);
-            self.paint_cell(rect, row.cells().get(source), mark);
+            self.paint_shown_cell(rect, (row, style, source), mark);
             if let RowStyle::Body(body) = style {
                 self.edges(rect, body, column);
             }
@@ -184,6 +211,91 @@ impl<'view> FramePainter<'view> {
         if let Some(rect) = cursor {
             self.outline(rect);
         }
+    }
+
+    /// 行 `row`（`style`）の元の列 `source` のセル。編集中のカーソルのセルは欄として、書き換えたセルは書き換えた値で描く。
+    fn paint_shown_cell(
+        &mut self,
+        rect: PixelRect,
+        (row, style, source): (&ViewRow, RowStyle, usize),
+        mark: CellMark,
+    ) {
+        if let (CellMark::Cursor, Some(editing)) = (mark, self.editing) {
+            self.paint_editing(rect, editing);
+            return;
+        }
+        match self.edited(style, row.record(), source) {
+            Some(CellValue::Text(value)) => {
+                let shown = single_line(value);
+                self.paint_cell(rect, Some(&shown), mark);
+            }
+            Some(CellValue::Absent) => self.paint_cell(rect, None, mark),
+            None => self.paint_cell(rect, row.cells().get(source), mark),
+        }
+    }
+
+    /// 本体の行のセル（レコード `record` の元の列 `source`）の書き換え。見出しの行は書き換えない（EDIT-04 はまだ）。
+    fn edited(&self, style: RowStyle, record: u64, source: usize) -> Option<&'view CellValue> {
+        match style {
+            RowStyle::Body(_) => self
+                .edits?
+                .get(RowId::Source(record), ColumnId::Source(source)),
+            RowStyle::Header | RowStyle::Numbers => None,
+        }
+    }
+
+    /// 編集中のセル。地の色で塗り、欄の文字列とカーソルの棒と、確定前の文字列の下線を描く。
+    /// 欄より長い文字列は、カーソルが右端に見えるまで頭の字を飛ばして描く（`…` は付けない）。
+    fn paint_editing(&mut self, rect: PixelRect, editing: &EditingCell) {
+        self.fill(rect, self.palette.background());
+        let half = self.metrics.half_width().max(1);
+        let room = rect
+            .size()
+            .width()
+            .saturating_sub(self.layout.padding().saturating_mul(2))
+            / half;
+        let (shown, skipped) = scrolled_to_caret(editing.text(), editing.caret(), room);
+        if !shown.is_empty() {
+            self.text(rect, &shown, self.palette.text());
+        }
+        let caret = editing.caret().saturating_sub(skipped);
+        let left = rect.origin().x().saturating_add(self.layout.padding());
+        let right = rect.origin().x().saturating_add(rect.size().width());
+        let spare = rect
+            .size()
+            .height()
+            .saturating_sub(self.metrics.line_height());
+        let top = rect.origin().y().saturating_add(spare / 2);
+        let caret_width = self.metrics.px(CARET_WIDTH);
+        let at = |columns: u32| {
+            left.saturating_add(columns.saturating_mul(half))
+                .min(right.saturating_sub(caret_width))
+        };
+        if let Some((start, end)) = editing.underline() {
+            let line = self.metrics.px(UNDERLINE);
+            let (from, to) = (
+                at(start.saturating_sub(skipped)),
+                at(end.saturating_sub(skipped)),
+            );
+            self.fill(
+                PixelRect::new(
+                    PixelPoint::new(
+                        from,
+                        top.saturating_add(self.metrics.line_height())
+                            .saturating_sub(line),
+                    ),
+                    PixelSize::new(to.saturating_sub(from), line),
+                ),
+                self.palette.text(),
+            );
+        }
+        self.overlays.push(DrawCommand::Fill {
+            rect: PixelRect::new(
+                PixelPoint::new(at(caret), top),
+                PixelSize::new(caret_width, self.metrics.line_height()),
+            ),
+            color: self.palette.cursor(),
+        });
     }
 
     /// 選択が本体の `body` 番目の行を覆うか。
@@ -347,12 +459,36 @@ impl<'view> FramePainter<'view> {
     }
 }
 
+/// 欄の文字列 `text` を、カーソル（左からの字数 `caret`）が幅 `room` 字の内に見えるよう、頭の字を飛ばした残りと、
+/// 飛ばした字数。カーソルの棒の分として 1 字を空ける。
+fn scrolled_to_caret(text: &str, caret: u32, room: u32) -> (String, u32) {
+    let limit = room.saturating_sub(1);
+    let mut skipped = 0_u32;
+    let mut characters = text.chars();
+    while caret.saturating_sub(skipped) > limit {
+        let Some(character) = characters.next() else {
+            break;
+        };
+        skipped = skipped.saturating_add(char_columns(character));
+    }
+    (characters.collect(), skipped)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use alloc::vec;
     use nene_ledger_core::column_widths::ColumnWidths;
     use nene_ledger_core::table_layout::GRID_LINE;
+
+    #[test]
+    fn a_long_field_skips_its_head_so_that_the_caret_stays_visible() {
+        assert_eq!(scrolled_to_caret("abc", 3, 10), (String::from("abc"), 0));
+        assert_eq!(scrolled_to_caret("abcdef", 6, 4), (String::from("def"), 3));
+        // 全角は 2 字ぶん飛ぶ。
+        assert_eq!(scrolled_to_caret("日本語x", 7, 4), (String::from("語x"), 4));
+        assert_eq!(scrolled_to_caret("", 0, 0), (String::new(), 0));
+    }
 
     /// 試しの配色（表の先頭のライト `neutral-light` を導いたもの）。
     fn palette() -> Palette {

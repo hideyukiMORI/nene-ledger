@@ -29,11 +29,19 @@ pub enum KeyGuide {
     Palette,
     /// やめる・戻す。
     Cancel,
+    /// カーソルのセルを続きから直す（ADR 0026）。
+    EditCell,
+    /// カーソルのセルを空にする。
+    ClearCell,
+    /// セルの中の改行（EDIT-10）。
+    BreakLine,
+    /// 確定して右・左・上へ動く。
+    Advance,
 }
 
 impl KeyGuide {
     /// すべて（一覧の順）。
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 16] = [
         Self::MoveCursor,
         Self::ExtendSelection,
         Self::Page,
@@ -46,6 +54,10 @@ impl KeyGuide {
         Self::PreviousTheme,
         Self::Palette,
         Self::Cancel,
+        Self::EditCell,
+        Self::ClearCell,
+        Self::BreakLine,
+        Self::Advance,
     ];
 
     /// 表示名。🔴 表示言語の文言の表（ADR 0011）を入れるまでの仮の日本語。
@@ -64,6 +76,10 @@ impl KeyGuide {
             Self::PreviousTheme => "前の配色を試す",
             Self::Palette => "コマンドパレットを開く",
             Self::Cancel => "やめる・元に戻す",
+            Self::EditCell => "セルを続きから直す（入力と編集を替える）",
+            Self::ClearCell => "セルを空にする",
+            Self::BreakLine => "セルの中で改行する",
+            Self::Advance => "確定して右・左・上へ動く",
         }
     }
 
@@ -83,6 +99,10 @@ impl KeyGuide {
             Self::PreviousTheme => "まえのはいしょくをためす",
             Self::Palette => "こまんどぱれっとをひらく",
             Self::Cancel => "やめるもとにもどす",
+            Self::EditCell => "せるをつづきからなおす",
+            Self::ClearCell => "せるをからにする",
+            Self::BreakLine => "せるのなかでかいぎょうする",
+            Self::Advance => "かくていしてうごく",
         }
     }
 
@@ -102,6 +122,10 @@ impl KeyGuide {
             Self::PreviousTheme => "Ctrl+Shift+Alt+T",
             Self::Palette => "Ctrl+Shift+P / F1",
             Self::Cancel => "Esc",
+            Self::EditCell => "F2",
+            Self::ClearCell => "Delete",
+            Self::BreakLine => "Alt+Enter",
+            Self::Advance => "Tab / Shift+Tab / Shift+Enter",
         }
     }
 }
