@@ -99,8 +99,9 @@ mod tests {
     fn the_background_fold_counts_the_same_as_the_rows_read_at_once() {
         let (at_once, folded) = both("totals.csv", 0..=3);
         assert_eq!(folded, at_once);
-        // 品目 5・単価 5・数量 4・備考 4（空の 1 つを除く）。数は 120・80.5・-15.25・3・10・2・4・-1・0.1。
-        assert_eq!((folded.cells(), folded.numbers()), (18, 9));
+        // 品目 5・単価 5・数量 4・備考 4（空の 1 つを除く）。数は 120・80.5・1,200・-15.25・１２・3・10・2・4・-1・0.1
+        // （桁区切りと全角の数字は GitHub Issue #41 から数として読む）。
+        assert_eq!((folded.cells(), folded.numbers()), (18, 11));
         let (sample_at_once, sample_folded) = both("screenshot.csv", 0..=5);
         assert_eq!(sample_folded, sample_at_once);
     }

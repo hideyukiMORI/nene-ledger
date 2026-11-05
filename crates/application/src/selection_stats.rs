@@ -119,13 +119,16 @@ mod tests {
     #[test]
     fn numbers_are_summed_exactly_and_the_rest_are_counted() {
         let figures = stats(&[&["0.1", "x"], &["0.2", ""], &["1,234", "5"]], 0..=1);
-        // 空でないセル 5（空の 1 つは数えない）。数は 0.1・0.2・5 の 3 つ、数でないのは x と 1,234 の 2 つ。
+        // 空でないセル 5（空の 1 つは数えない）。数は 0.1・0.2・1,234（桁区切り・GitHub Issue #41）・5 の 4 つ、数でないのは x。
         assert_eq!(figures.cells(), 5);
-        assert_eq!(figures.numbers(), 3);
-        assert_eq!(figures.not_numbers(), 2);
-        assert_eq!(figures.sum(), Some(Decimal::new(53, 1)));
-        // 5.3 / 3 = 1.766667。
-        assert_eq!(figures.average(), Some(Decimal::new(1_766_667, 6)));
+        assert_eq!(figures.numbers(), 4);
+        assert_eq!(figures.not_numbers(), 1);
+        assert_eq!(figures.sum(), Some(Decimal::new(12_393, 1)));
+        // 1239.3 / 4 = 309.825。
+        assert_eq!(
+            figures.average().map(Decimal::to_plain),
+            Some(String::from("309.825"))
+        );
     }
 
     #[test]
