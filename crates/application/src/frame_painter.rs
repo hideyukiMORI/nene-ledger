@@ -36,6 +36,7 @@ pub(crate) struct FramePainter<'view> {
     size: PixelSize,
     selection: Option<Ranges<'view>>,
     order: &'view [usize],
+    column_ids: &'view [ColumnId],
     edits: Option<&'view CellEdits>,
     editing: Option<&'view EditingCell>,
     commands: Vec<DrawCommand>,
@@ -68,6 +69,7 @@ impl<'view> FramePainter<'view> {
             size,
             selection: None,
             order: &[],
+            column_ids: &[],
             edits: None,
             editing: None,
             commands: Vec::new(),
@@ -84,6 +86,11 @@ impl<'view> FramePainter<'view> {
     /// 列の表示の順 `order`（表示の位置 → 元の列）で描く（入れ替えは表示だけ・Issue #49）。
     pub(crate) fn with_order(self, order: &'view [usize]) -> Self {
         Self { order, ..self }
+    }
+
+    /// 表の列の同一性（表の列の順・列を足し消しした表・ADR 0027）。書き換えをこの同一性で引く。空なら原本の列の順。
+    pub(crate) fn with_column_ids(self, column_ids: &'view [ColumnId]) -> Self {
+        Self { column_ids, ..self }
     }
 
     /// 選んだ範囲の並びを描く（範囲ごとの背景と外周の枠・今の範囲のカーソルの枠）。
@@ -242,7 +249,14 @@ impl<'view> FramePainter<'view> {
     /// 本体の行のセル（行 `row` の元の列 `source`）の書き換え。見出しの行は書き換えない（EDIT-04 はまだ）。
     fn edited(&self, style: RowStyle, row: RowId, source: usize) -> Option<&'view CellValue> {
         match style {
-            RowStyle::Body(_) => self.edits?.get(row, ColumnId::Source(source)),
+            RowStyle::Body(_) => {
+                let column = self
+                    .column_ids
+                    .get(source)
+                    .copied()
+                    .unwrap_or(ColumnId::Source(source));
+                self.edits?.get(row, column)
+            }
             RowStyle::Header | RowStyle::Numbers => None,
         }
     }

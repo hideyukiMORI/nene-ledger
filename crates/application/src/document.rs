@@ -21,7 +21,10 @@ use crate::clipboard_text::ClipboardText;
 use crate::close_choice::CloseChoice;
 use crate::close_prompt::ClosePrompt;
 use crate::close_state::CloseState;
+use crate::column_change::ColumnChange;
+use crate::column_place::ColumnPlace;
 use crate::column_shift::ColumnShift;
+use crate::columns_notice::ColumnsNotice;
 use crate::cursor_moves::step_cursor;
 use crate::cursor_step::CursorStep;
 use crate::cut_record::CutRecord;
@@ -130,8 +133,12 @@ pub struct Document {
     grip: bool,
     /// 行の並び（ADR 0024 の層 1・ADR 0027）。
     rows: RowOrder,
-    /// 列の並び（ADR 0024 の層 1・ADR 0027）。
+    /// 列の並び（ADR 0024 の層 1・ADR 0027）。表の列は、この並びの順（`t`）で数える。
     columns: ColumnOrder,
+    /// 読んだ行の中で最も多い原本のセルの数（表の列の数は、ここから列の並びで数える）。
+    source_width: usize,
+    /// 見出しの行の、原本の順のセル（列を足し消ししたら並べ直す）。
+    header_source: Option<Vec<String>>,
     /// 書き換えたセル（ADR 0024 の層 2）。画面の表は原本 ＋ これから作る派生値。
     edits: CellEdits,
     /// 編集中のセル（ADR 0026）。
@@ -174,6 +181,9 @@ pub const MAX_TOTAL_ROWS: u64 = 100_000;
 /// 一度にコピーする文字列の上限（バイト）。X11 の 1 つの要求に収める（INCR はまだ）。
 pub const MAX_COPY_BYTES: usize = 4 * 1024 * 1024;
 
+/// 足した列の幅（半角の字数・ADR 0027）。
+const NEW_COLUMN_WIDTH: u32 = 8;
+
 impl Document {
     /// 題名（タイトルバーに書く）・読み方の要約（状態の行に書く）・見出しのレコードの番号（無ければ `None`）・
     /// 先頭から読んだ行 `rows` から始める。
@@ -191,6 +201,7 @@ impl Document {
             Some(ViewRow::new(record, cells))
         });
         let view = TableView::from_records(0, rows, header.as_ref().map(ViewRow::line));
+        let header_source = header.as_ref().map(|row| row.values().to_vec());
         let cells: Vec<&[String]> = header
             .iter()
             .chain(view.rows())
@@ -219,6 +230,8 @@ impl Document {
             grip: false,
             rows: RowOrder::whole(),
             columns: ColumnOrder::whole(),
+            source_width: rows.iter().map(Vec::len).max().unwrap_or(0),
+            header_source,
             edits: CellEdits::empty(),
             editor: None,
             saving: false,
@@ -322,7 +335,9 @@ impl Document {
             | Intent::Undo
             | Intent::Redo
             | Intent::InsertRows(_)
-            | Intent::RemoveRows => None,
+            | Intent::RemoveRows
+            | Intent::InsertColumns(_)
+            | Intent::RemoveColumns => None,
         };
         Some(choice.map_or(DocumentEffect::Stay, |choice| self.choose_close(choice)))
     }
@@ -367,6 +382,20 @@ impl Document {
             self.history.saved(&self.edits);
         }
         self.edits = CellEdits::empty();
+        // 保存したファイルは、今の行と列の並びで書かれている。見出しは新しい位置と列の順に置き直す。
+        if !self.columns.is_whole() {
+            self.header_source = self
+                .header_source
+                .as_ref()
+                .map(|cells| self.arranged(cells));
+            self.source_width = self.columns.len(self.source_width);
+        }
+        if let Some(line) = self.header_line() {
+            self.header = self
+                .header
+                .take()
+                .map(|header| ViewRow::new(line, header.values()).with_row(RowId::Source(line)));
+        }
         self.rows = RowOrder::whole();
         self.columns = ColumnOrder::whole();
         self.editor = None;
@@ -436,6 +465,44 @@ impl Document {
         self.index
     }
 
+    /// 読んだ原本の行 `rows` のセルの数を覚える（表の列の数を数える元）。
+    fn see_source(&mut self, rows: &[Vec<String>]) {
+        let widest = rows.iter().map(Vec::len).max().unwrap_or(0);
+        self.source_width = self.source_width.max(widest);
+    }
+
+    /// 表の列の同一性（表の列の順）。
+    fn table_ids(&self) -> Vec<ColumnId> {
+        self.columns.columns(self.columns.len(self.source_width))
+    }
+
+    /// 表の `column` 列目の同一性（書き換えの差分を引く鍵）。
+    fn column_id(&self, column: usize) -> ColumnId {
+        self.columns
+            .column_at(column)
+            .unwrap_or(ColumnId::Source(column))
+    }
+
+    /// 原本の順のセル `cells` を、表の列の順に並べる（列を足し消ししていなければそのまま）。足した列は空のセル。
+    /// 原本に無いセルは、後ろに書くセルが無ければ書かない（「セルが無い」のまま）。
+    fn arranged(&self, cells: &[String]) -> Vec<String> {
+        if self.columns.is_whole() {
+            return cells.to_vec();
+        }
+        let ids = self.table_ids();
+        let last = ids.iter().rposition(|id| match id {
+            ColumnId::Source(source) => *source < cells.len(),
+            ColumnId::Added(_) => true,
+        });
+        ids.iter()
+            .take(last.map_or(0, |last| last.saturating_add(1)))
+            .map(|id| match id {
+                ColumnId::Source(source) => cells.get(*source).cloned().unwrap_or_default(),
+                ColumnId::Added(_) => String::new(),
+            })
+            .collect()
+    }
+
     /// 本体の `body` 番目の行の、行の並びの位置（読み始める所・前書きと見出しも数える）。
     #[must_use]
     pub fn line_of(&self, body: u64) -> u64 {
@@ -452,14 +519,15 @@ impl Document {
     /// 位置 `first_line` から読んだ行 `rows` に差し替える（動いた先）。見出しは除き、列が増えていればその列の幅だけを足す。
     /// 足した行は空のセルで表の幅まで埋める。見出しを除いて行が残らなければ差し替えない。
     pub fn show(&mut self, first_line: u64, rows: &[Vec<String>]) {
-        let columns = self.widths.columns().len();
+        self.see_source(rows);
+        let columns = self.columns.len(self.source_width);
         let shown: Vec<ViewRow> = rows
             .iter()
             .zip(first_line..)
             .map(|(cells, line)| {
                 let row = self.rows.row_at(line).unwrap_or(RowId::Source(line));
                 match row {
-                    RowId::Source(_) => ViewRow::new(line, cells),
+                    RowId::Source(_) => ViewRow::new(line, &self.arranged(cells)),
                     RowId::Added(_) => ViewRow::new(line, &vec![String::new(); columns]),
                 }
                 .with_row(row)
@@ -537,6 +605,8 @@ impl Document {
                     | Intent::Redo
                     | Intent::InsertRows(_)
                     | Intent::RemoveRows
+                    | Intent::InsertColumns(_)
+                    | Intent::RemoveColumns
             )
         {
             self.notice = Some(Notice::StillSaving);
@@ -556,17 +626,7 @@ impl Document {
 
     /// 編集の欄が受けなかった意図を、表に取り込む。
     fn apply_to_table(&mut self, intent: Intent, window: WindowView) -> DocumentEffect {
-        if intent == Intent::Cancel
-            && let Some(effect) = self.cancel_drag(window)
-        {
-            return effect;
-        }
-        if intent == Intent::Cancel
-            && let SelectionTotals::Counting(_) = self.totals
-        {
-            return DocumentEffect::StopTotals;
-        }
-        if let Some(effect) = self.pointer_intent(intent, window) {
+        if let Some(effect) = self.early_effect(intent, window) {
             return effect;
         }
         if intent == Intent::ToggleDetail {
@@ -576,8 +636,6 @@ impl Document {
         let current = self.view.first_body();
         let target = match intent {
             Intent::Copy => return self.copy_request(),
-            Intent::InsertRows(place) => return self.insert_rows(place, window),
-            Intent::RemoveRows => return self.remove_rows(window),
             // 配色・文字の大きさ・パレット・文字の入力は合成ルートが受ける（ここに来たら何もしない。表に字を打つ編集は M2）。
             Intent::Theme(_)
             | Intent::Zoom(_)
@@ -595,7 +653,11 @@ impl Document {
             | Intent::Advance(_)
             | Intent::Save
             | Intent::Undo
-            | Intent::Redo => current,
+            | Intent::Redo
+            | Intent::InsertRows(_)
+            | Intent::RemoveRows
+            | Intent::InsertColumns(_)
+            | Intent::RemoveColumns => current,
             Intent::SelectAll
             | Intent::SelectRows
             | Intent::SelectColumns
@@ -618,6 +680,63 @@ impl Document {
             }
         };
         self.go_to(target, page)
+    }
+
+    /// 表の意図のうち、先に受けるもの（ドラッグと裏の集計をやめる Esc・スクロールバーの上の指・行と列の足し消し）。
+    fn early_effect(&mut self, intent: Intent, window: WindowView) -> Option<DocumentEffect> {
+        if intent == Intent::Cancel
+            && let Some(effect) = self.cancel_drag(window)
+        {
+            return Some(effect);
+        }
+        if intent == Intent::Cancel
+            && let SelectionTotals::Counting(_) = self.totals
+        {
+            return Some(DocumentEffect::StopTotals);
+        }
+        if let Intent::InsertRows(place) = intent {
+            return Some(self.insert_rows(place, window));
+        }
+        if let Intent::InsertColumns(place) = intent {
+            return Some(self.insert_columns(place, window));
+        }
+        match intent {
+            Intent::RemoveRows => Some(self.remove_rows(window)),
+            Intent::RemoveColumns => Some(self.remove_columns(window)),
+            Intent::Scroll(_)
+            | Intent::Move { .. }
+            | Intent::Point { .. }
+            | Intent::Drag { .. }
+            | Intent::Release
+            | Intent::GoTo(_)
+            | Intent::OpenGoTo
+            | Intent::SelectAll
+            | Intent::SelectRows
+            | Intent::SelectColumns
+            | Intent::MoveColumns(_)
+            | Intent::ResetColumns
+            | Intent::ResetWidths
+            | Intent::FreezeColumns
+            | Intent::UnfreezeColumns
+            | Intent::Copy
+            | Intent::ToggleDetail
+            | Intent::Theme(_)
+            | Intent::Zoom(_)
+            | Intent::OpenPalette
+            | Intent::Type(_)
+            | Intent::Erase
+            | Intent::Confirm
+            | Intent::Cancel
+            | Intent::Edit
+            | Intent::Delete
+            | Intent::BreakLine
+            | Intent::Advance(_)
+            | Intent::Save
+            | Intent::Undo
+            | Intent::Redo
+            | Intent::InsertRows(_)
+            | Intent::InsertColumns(_) => self.pointer_intent(intent, window),
+        }
     }
 
     /// 編集の意図（ADR 0026 の決定 1・2）。欄で受けたら `None`。表の意図として続けるなら、その意図を返す
@@ -643,26 +762,16 @@ impl Document {
                 self.commit_edit();
                 return Some(intent);
             }
-            Intent::Confirm => {
-                self.commit_edit();
-                return Some(Intent::Move {
-                    step: CursorStep::Down,
-                    mode: SelectionMode::Collapse,
-                });
-            }
-            Intent::Advance(step) => {
-                self.commit_edit();
-                return Some(Intent::Move {
-                    step,
-                    mode: SelectionMode::Collapse,
-                });
-            }
+            Intent::Confirm => return Some(self.committed_move(CursorStep::Down)),
+            Intent::Advance(step) => return Some(self.committed_move(step)),
             // 別のセル・別の行への移動と、表の並びを変える操作は、確定してから（保存と元に戻すは `apply` が先に受ける）。
             Intent::Save
             | Intent::Undo
             | Intent::Redo
             | Intent::InsertRows(_)
             | Intent::RemoveRows
+            | Intent::InsertColumns(_)
+            | Intent::RemoveColumns
             | Intent::Point { .. }
             | Intent::GoTo(_)
             | Intent::OpenGoTo
@@ -686,6 +795,15 @@ impl Document {
             | Intent::Zoom(_) => return Some(intent),
         }
         None
+    }
+
+    /// 編集を確定し、`step` の向きへ動く意図を返す（Enter・Tab・Shift+Tab・Shift+Enter）。
+    fn committed_move(&mut self, step: CursorStep) -> Intent {
+        self.commit_edit();
+        Intent::Move {
+            step,
+            mode: SelectionMode::Collapse,
+        }
     }
 
     /// 編集していないときの編集の意図。打ち始め・F2 で編集に入り、Delete でカーソルのセルを空にする。
@@ -746,7 +864,9 @@ impl Document {
             | Intent::Undo
             | Intent::Redo
             | Intent::InsertRows(_)
-            | Intent::RemoveRows => Some(intent),
+            | Intent::RemoveRows
+            | Intent::InsertColumns(_)
+            | Intent::RemoveColumns => Some(intent),
         }
     }
 
@@ -765,7 +885,7 @@ impl Document {
             self.notice = Some(Notice::EditCut);
             return false;
         }
-        let cell = (row, ColumnId::Source(column));
+        let cell = (row, self.column_id(column));
         // 原本の行に無いセル（列の数が足りない行）は空として入る。保存では間の列を空のセルで埋めて足す
         // （ADR 0024 の施主の判断 4・5）。差分で消したセル（`Absent`）は直さない。
         let shown = match (self.edits.get(cell.0, cell.1), &source) {
@@ -867,9 +987,11 @@ impl Document {
         }
         self.commit_edit();
         let step = if redo {
-            self.history.redo((&mut self.edits, &mut self.rows))
+            self.history
+                .redo((&mut self.edits, &mut self.rows, &mut self.columns))
         } else {
-            self.history.undo((&mut self.edits, &mut self.rows))
+            self.history
+                .undo((&mut self.edits, &mut self.rows, &mut self.columns))
         };
         match step {
             None => {
@@ -892,6 +1014,20 @@ impl Document {
                 });
                 effect
             }
+            Some(EditStep::Columns(change)) => {
+                // 戻すと足した列が消え、消した列が戻る。やり直しはその逆。
+                if change.adds() == redo {
+                    self.columns_inserted(change.at(), change.widths());
+                } else {
+                    let _widths = self.columns_removed(change.at(), change.count());
+                }
+                self.notice = Some(Notice::Columns(if redo {
+                    ColumnsNotice::Redone(change.count())
+                } else {
+                    ColumnsNotice::Undone(change.count())
+                }));
+                self.after_columns_changed(change.at(), window)
+            }
             Some(EditStep::Rows(change)) => {
                 let body = body_of(change.at(), self.header_line());
                 self.notice = Some(if redo {
@@ -901,6 +1037,146 @@ impl Document {
                 });
                 self.after_rows_changed(body, window)
             }
+        }
+    }
+
+    /// 足し消しする表の列（最初・最後・数）。列全体を選んでいれば選んだ列、そうでなければカーソルの列。
+    /// 表示の上で入れ替えた列が離れていれば `None`。
+    fn chosen_columns(&self) -> Option<(usize, usize, usize)> {
+        let (top, bottom) = (self.selection.top_left(), self.selection.bottom_right());
+        let whole = top.body() == 0 && bottom.body() == TO_END && self.others.is_empty();
+        let cursor = self.selection.cursor().column();
+        let (from, to) = if whole {
+            (top.column(), bottom.column())
+        } else {
+            (cursor, cursor)
+        };
+        let mapped: Vec<usize> = (from..=to)
+            .map(|column| self.source_column(column))
+            .collect();
+        let first = mapped.iter().copied().min()?;
+        let last = mapped.iter().copied().max()?;
+        (last.saturating_sub(first).saturating_add(1) == mapped.len()).then_some((
+            first,
+            last,
+            mapped.len(),
+        ))
+    }
+
+    /// 空の列を足す（ADR 0027 の決定 2）。足した最初の列へカーソルを動かす。
+    fn insert_columns(&mut self, place: ColumnPlace, window: WindowView) -> DocumentEffect {
+        let Some((first, last, count)) = self.chosen_columns() else {
+            self.notice = Some(Notice::Columns(ColumnsNotice::Reordered));
+            return DocumentEffect::Stay;
+        };
+        let at = match place {
+            ColumnPlace::Left => first,
+            ColumnPlace::Right => last.saturating_add(1),
+        };
+        let ids = self
+            .columns
+            .insert(at, count)
+            .into_iter()
+            .filter_map(|column| match column {
+                ColumnId::Added(id) => Some(id),
+                ColumnId::Source(_) => None,
+            })
+            .collect();
+        let widths = vec![NEW_COLUMN_WIDTH; count];
+        self.columns_inserted(at, &widths);
+        self.history.record_columns(ColumnChange::Inserted {
+            at,
+            runs: vec![OrderRun::Added(ids)],
+            widths,
+        });
+        self.notice = Some(Notice::Columns(ColumnsNotice::Inserted(count)));
+        self.after_columns_changed(at, window)
+    }
+
+    /// 選んだ範囲にかかる列を消す（尋ねない・ADR 0027 の決定 4）。すべての列は消さない。
+    fn remove_columns(&mut self, window: WindowView) -> DocumentEffect {
+        let Some((first, _, count)) = self.chosen_columns() else {
+            self.notice = Some(Notice::Columns(ColumnsNotice::Reordered));
+            return DocumentEffect::Stay;
+        };
+        if count >= self.widths.columns().len() {
+            self.notice = Some(Notice::Columns(ColumnsNotice::KeepOne));
+            return DocumentEffect::Stay;
+        }
+        let runs = self.columns.remove(first, count);
+        let widths = self.columns_removed(first, count);
+        self.history.record_columns(ColumnChange::Removed {
+            at: first,
+            runs,
+            widths,
+        });
+        self.notice = Some(Notice::Columns(ColumnsNotice::Removed(count)));
+        self.after_columns_changed(first, window)
+    }
+
+    /// 表の `at` 列目の前に、幅 `widths` の列が入った。幅・利用者の幅・固定した列の数をずらす。
+    fn columns_inserted(&mut self, at: usize, widths: &[u32]) {
+        let count = widths.len();
+        self.widths.insert(at, widths);
+        self.custom = core::mem::take(&mut self.custom)
+            .into_iter()
+            .map(|(column, chars)| {
+                let moved = if column >= at {
+                    column.saturating_add(count)
+                } else {
+                    column
+                };
+                (moved, chars)
+            })
+            .collect();
+        if self.frozen > at {
+            self.frozen = self.frozen.saturating_add(count);
+        }
+    }
+
+    /// 表の `at` 列目から `count` 列が抜けた。外した幅を返し、利用者の幅・固定した列の数をずらす。
+    fn columns_removed(&mut self, at: usize, count: usize) -> Vec<u32> {
+        let removed = self.widths.remove(at, count);
+        let end = at.saturating_add(count);
+        self.custom = core::mem::take(&mut self.custom)
+            .into_iter()
+            .filter(|(column, _)| !(at..end).contains(column))
+            .map(|(column, chars)| {
+                let moved = if column >= end {
+                    column.saturating_sub(count)
+                } else {
+                    column
+                };
+                (moved, chars)
+            })
+            .collect();
+        if self.frozen > at {
+            self.frozen = self
+                .frozen
+                .saturating_sub(count.min(self.frozen.saturating_sub(at)));
+        }
+        removed
+    }
+
+    /// 列を足し消しした（戻した）後。表示だけの列の入れ替えは元に戻し、見出しを並べ直し、カーソルを表の `column` 列目
+    /// （最後の列で止める）に置いて、見えている行を読み直させる。
+    fn after_columns_changed(&mut self, column: usize, window: WindowView) -> DocumentEffect {
+        self.order.clear();
+        self.counted = None;
+        self.header = self.header.take().map(|header| {
+            let cells = self
+                .header_source
+                .as_deref()
+                .map(|cells| self.arranged(cells))
+                .unwrap_or_default();
+            ViewRow::new(header.line(), &cells).with_row(header.row())
+        });
+        let column = column.min(self.widths.columns().len().saturating_sub(1));
+        let body = self.selection.cursor().body();
+        self.select(CellPosition::new(body, column), SelectionMode::Collapse);
+        self.first_column = self.reveal_column(column, window);
+        DocumentEffect::Read {
+            first_body: self.view.first_body(),
         }
     }
 
@@ -1002,7 +1278,9 @@ impl Document {
 
     /// セル（`row`・`column`）へカーソルを動かし、見えるように表示を動かす。並びに無い行・足した列なら動かない。
     fn reveal_cell(&mut self, row: RowId, column: ColumnId, window: WindowView) -> DocumentEffect {
-        let (Some(line), ColumnId::Source(source)) = (self.rows.position_of(row), column) else {
+        let (Some(line), Some(source)) =
+            (self.rows.position_of(row), self.columns.position_of(column))
+        else {
             return DocumentEffect::Stay;
         };
         let body = body_of(line, self.header_line());
@@ -1104,7 +1382,9 @@ impl Document {
             | Intent::Undo
             | Intent::Redo
             | Intent::InsertRows(_)
-            | Intent::RemoveRows => {}
+            | Intent::RemoveRows
+            | Intent::InsertColumns(_)
+            | Intent::RemoveColumns => {}
         }
     }
 
@@ -1307,7 +1587,9 @@ impl Document {
             | Intent::Undo
             | Intent::Redo
             | Intent::InsertRows(_)
-            | Intent::RemoveRows => None,
+            | Intent::RemoveRows
+            | Intent::InsertColumns(_)
+            | Intent::RemoveColumns => None,
         }
     }
 
@@ -2218,7 +2500,7 @@ impl Document {
         let (top, _) = self.ranges().row_span();
         // 書き換えたセルは、書き換えた値でコピーする（画面と同じ）。
         let overlaid;
-        let rows = if self.edits.is_empty() {
+        let rows = if self.edits.is_empty() && self.columns.is_whole() {
             rows
         } else {
             overlaid = self.overlaid(first_record, rows);
@@ -2286,7 +2568,7 @@ impl Document {
         if last.saturating_sub(first) >= MAX_TOTAL_ROWS {
             // 🔴 裏の集計は原本の連続したレコードを数える。行を足し消しした後は、位置とレコードがずれるので出さない
             // （保存すれば数えられる・ADR 0027）。
-            if !self.rows.is_whole() {
+            if !self.rows.is_whole() || !self.columns.is_whole() {
                 self.totals = SelectionTotals::Failed;
                 return TotalsRequest::Settled;
             }
@@ -2365,6 +2647,7 @@ impl Document {
             .zip(first_record..)
             .map(|(cells, line)| {
                 let row = self.rows.row_at(line).unwrap_or(RowId::Source(line));
+                let cells = self.arranged(cells);
                 (0..cells.len().max(width))
                     .map(|column| {
                         let cell = cells.get(column).map_or("", String::as_str);
@@ -2377,7 +2660,7 @@ impl Document {
 
     /// 行 `row` の列 `column` の、書き換えを重ねた値。
     fn overlaid_cell(&self, row: RowId, column: usize, cell: &str) -> String {
-        match self.edits.get(row, ColumnId::Source(column)) {
+        match self.edits.get(row, self.column_id(column)) {
             Some(CellValue::Text(value)) => value.clone(),
             Some(CellValue::Absent) => String::new(),
             None => String::from(cell),
@@ -2660,7 +2943,7 @@ impl Document {
             .find(|cut| cut.record() == row.line())
             .copied();
         let column = self.source_column(cursor.column());
-        match self.edits.get(row.row(), ColumnId::Source(column)) {
+        match self.edits.get(row.row(), self.column_id(column)) {
             Some(CellValue::Text(value)) => return DetailContent::Value(value),
             Some(CellValue::Absent) => return DetailContent::Missing,
             None => {}
@@ -2839,9 +3122,15 @@ impl Document {
     ) -> Vec<DrawCommand> {
         let layout = self.layout(self.first_column, metrics);
         let editing = self.editing_cell();
+        let ids = if self.columns.is_whole() {
+            Vec::new()
+        } else {
+            self.table_ids()
+        };
         FramePainter::new(&layout, metrics, palette, size)
             .with_ranges(self.ranges())
             .with_order(&self.order)
+            .with_column_ids(&ids)
             .with_edits(&self.edits)
             .with_editing(editing.as_ref())
             .paint(self.header(), self.column_numbers().as_ref(), &self.view)
@@ -5230,6 +5519,137 @@ mod tests {
         document.apply(Intent::Undo, normal());
         reread(&mut document, &editable_rows());
         assert_eq!(first_cells(&document), ["0012", "b1", "c1"]);
+    }
+
+    fn three_rows() -> Vec<Vec<String>> {
+        table(&[&["a", "b", "c"], &["1", "2", "3"], &["4"]])
+    }
+
+    fn header_cells(document: &Document) -> Vec<String> {
+        document
+            .header()
+            .map(|row| row.cells().to_vec())
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn columns_are_inserted_left_and_right_and_undo_takes_them_back() {
+        let mut document = three();
+        document.report(JobReport::Finished(IndexSummary::new(3, None)));
+        // カーソルは「b」の列。左に 1 列足す。
+        document.apply(moving(CursorStep::Right), normal());
+        let effect = document.apply(Intent::InsertColumns(ColumnPlace::Left), normal());
+        assert!(matches!(effect, DocumentEffect::Read { .. }));
+        reread(&mut document, &three_rows());
+        assert_eq!(header_cells(&document), ["a", "", "b", "c"]);
+        assert_eq!(document.view().rows()[0].cells(), ["1", "", "2", "3"]);
+        // 短い行は「セルが無い」のまま。足した列までは空のセル。
+        assert_eq!(document.view().rows()[1].cells(), ["4", ""]);
+        assert_eq!(document.widths.columns().len(), 4);
+        assert_eq!(document.selection().cursor().column(), 1);
+        text_at(&document.frame(normal(), palette()), "1 列を足しました");
+        // 足した列のセルに書く。差分は足した列の同一性に付く。
+        typed(&mut document, "x");
+        document.apply(Intent::Confirm, normal());
+        assert_eq!(
+            document.edits().get(RowId::Source(1), ColumnId::Added(0)),
+            Some(&CellValue::Text(String::from("x")))
+        );
+        text_at(&document.frame(normal(), palette()), "x");
+    }
+
+    #[test]
+    fn inserted_columns_are_undone_and_redone_back_to_the_opened_table() {
+        let mut document = three();
+        document.report(JobReport::Finished(IndexSummary::new(3, None)));
+        document.apply(moving(CursorStep::Right), normal());
+        document.apply(Intent::InsertColumns(ColumnPlace::Left), normal());
+        typed(&mut document, "x");
+        document.apply(Intent::Confirm, normal());
+        document.apply(moving(CursorStep::Up), normal());
+        // 右に足す。
+        document.apply(Intent::InsertColumns(ColumnPlace::Right), normal());
+        reread(&mut document, &three_rows());
+        assert_eq!(header_cells(&document), ["a", "", "", "b", "c"]);
+        document.apply(Intent::Undo, normal());
+        reread(&mut document, &three_rows());
+        assert_eq!(header_cells(&document), ["a", "", "b", "c"]);
+        text_at(
+            &document.frame(normal(), palette()),
+            "元に戻しました（1 列）",
+        );
+        // 書いたセルと最初に足した列を戻すと、開いた直後の形。
+        document.apply(Intent::Undo, normal());
+        document.apply(Intent::Undo, normal());
+        reread(&mut document, &three_rows());
+        assert!(document.columns.is_whole());
+        assert_eq!(header_cells(&document), ["a", "b", "c"]);
+        assert_eq!(document.widths.columns().len(), 3);
+    }
+
+    #[test]
+    fn columns_are_removed_with_their_widths_and_one_column_is_kept() {
+        let mut document = three();
+        document.report(JobReport::Finished(IndexSummary::new(3, None)));
+        document.apply(Intent::RemoveColumns, normal());
+        reread(&mut document, &three_rows());
+        assert_eq!(header_cells(&document), ["b", "c"]);
+        assert_eq!(document.view().rows()[0].cells(), ["2", "3"]);
+        // 「4」だけの行は、最初の列を消すとセルが無い。
+        assert!(document.view().rows()[1].cells().is_empty());
+        text_at(
+            &document.frame(normal(), palette()),
+            "1 列を消しました（Ctrl+Z で戻す）",
+        );
+        // コピーも並べ直した値。
+        document.apply(Intent::SelectAll, normal());
+        let rows = three_rows();
+        let copied = document
+            .copy_text(0, &rows, &[])
+            .map(|text| String::from(text.as_str()));
+        assert_eq!(copied, Some(String::from("2\t3\r\n\t\r\n")));
+        // すべての列は消せない（すべてを選ぶと列全体の選択）。
+        document.apply(Intent::SelectAll, normal());
+        document.apply(Intent::RemoveColumns, normal());
+        text_at(
+            &document.frame(normal(), palette()),
+            "すべての列は消せません",
+        );
+        document.apply(Intent::Undo, normal());
+        reread(&mut document, &three_rows());
+        assert_eq!(header_cells(&document), ["a", "b", "c"]);
+        assert_eq!(document.widths.columns().len(), 3);
+    }
+
+    #[test]
+    fn saving_after_column_changes_hands_over_the_order_and_drops_the_history() {
+        let mut document = three();
+        document.report(JobReport::Finished(IndexSummary::new(3, None)));
+        document.apply(Intent::InsertColumns(ColumnPlace::Right), normal());
+        let changes = document.changes();
+        assert_eq!(changes.shape().columns(), 4);
+        assert_eq!(
+            changes.columns().columns(4),
+            [
+                ColumnId::Source(0),
+                ColumnId::Added(0),
+                ColumnId::Source(1),
+                ColumnId::Source(2)
+            ]
+        );
+        document.begin_saving();
+        document.saved();
+        assert!(document.columns.is_whole());
+        // 保存したファイルの見出しは、今の列の順。
+        assert_eq!(
+            document.header_source,
+            Some(table(&[&["a", "", "b", "c"]]).remove(0))
+        );
+        document.apply(Intent::Undo, normal());
+        text_at(
+            &document.frame(normal(), palette()),
+            "元に戻すものがありません",
+        );
     }
 
     #[test]

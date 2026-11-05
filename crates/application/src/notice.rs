@@ -1,5 +1,6 @@
 //! 状態の行に一度だけ出す知らせ。
 
+use crate::columns_notice::ColumnsNotice;
 use crate::rows_notice::RowsNotice;
 use crate::save_problem::SaveProblem;
 use crate::zoom_level::ZoomLevel;
@@ -66,6 +67,8 @@ pub enum Notice {
     EditCut,
     /// 行の足し消し（ADR 0027）。
     Rows(RowsNotice),
+    /// 列の足し消し（ADR 0027）。
+    Columns(ColumnsNotice),
     /// このセルは差分で消した（`Absent`・KEEP-05）ので直せない。列の数が足りない行のセルは足して直せる（GitHub Issue #83）。
     EditMissingCell,
     /// 方言の判別に確信が無い（FR-023・Issue #3）。黙って 1 位で開いたことを知らせ、候補から選ぶ入口を示す。

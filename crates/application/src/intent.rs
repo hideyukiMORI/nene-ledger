@@ -3,6 +3,7 @@
 use nene_ledger_core::pixel_point::PixelPoint;
 use nene_ledger_core::pointer_point::PointerPoint;
 
+use crate::column_place::ColumnPlace;
 use crate::column_shift::ColumnShift;
 use crate::cursor_step::CursorStep;
 use crate::go_to_target::GoToTarget;
@@ -94,4 +95,8 @@ pub enum Intent {
     InsertRows(RowPlace),
     /// 選んだ範囲にかかる行を消す（尋ねずに消し、Ctrl+Z で戻す・ADR 0027 の決定 4）。
     RemoveRows,
+    /// 空の列を足す（ADR 0027 の決定 2）。編集中なら確定してから。
+    InsertColumns(ColumnPlace),
+    /// 選んだ範囲にかかる列を消す（尋ねずに消し、Ctrl+Z で戻す）。
+    RemoveColumns,
 }

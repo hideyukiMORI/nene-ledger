@@ -7,6 +7,7 @@ use nene_ledger_core::line_ending_counts::LineEndingCounts;
 use nene_ledger_core::quoting::Quoting;
 use nene_ledger_core::text_encoding::TextEncoding;
 
+use crate::columns_notice::ColumnsNotice;
 use crate::format_summary::FormatSummary;
 use crate::job_state::JobState;
 use crate::notice::Notice;
@@ -146,6 +147,7 @@ pub fn notice_status(notice: Notice) -> String {
             "1 MiB で切り詰めた行のセルは直せません（行の全体を読めないので、保存で元に戻せない）",
         ),
         Notice::Rows(rows) => rows_status(rows),
+        Notice::Columns(columns) => columns_status(columns),
         Notice::EditMissingCell => String::from("この行には、この列のセルがありません"),
         Notice::DialectUnsure { top, second } => format!(
             "判別に確信なし（1 位 {}%・2 位 {}%）· 候補は Ctrl+Shift+P → candidates",
@@ -167,6 +169,20 @@ fn rows_status(notice: RowsNotice) -> String {
         RowsNotice::AwaitIndex => {
             String::from("表の末尾は、行の数が分かってから扱えます（索引を作っています）")
         }
+    }
+}
+
+/// 列の足し消しの知らせの文言。
+fn columns_status(notice: ColumnsNotice) -> String {
+    match notice {
+        ColumnsNotice::Inserted(columns) => format!("{columns} 列を足しました"),
+        ColumnsNotice::Removed(columns) => format!("{columns} 列を消しました（Ctrl+Z で戻す）"),
+        ColumnsNotice::Undone(columns) => format!("元に戻しました（{columns} 列）"),
+        ColumnsNotice::Redone(columns) => format!("やり直しました（{columns} 列）"),
+        ColumnsNotice::Reordered => String::from(
+            "入れ替えた列が離れているので足し消しできません（先に「列の並びを元に戻す」）",
+        ),
+        ColumnsNotice::KeepOne => String::from("すべての列は消せません"),
     }
 }
 
