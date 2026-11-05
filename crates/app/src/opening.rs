@@ -2,6 +2,7 @@
 
 use std::path::Path;
 
+use nene_ledger_application::cut_record::CutRecord;
 use nene_ledger_application::format_summary::FormatSummary;
 use nene_ledger_core::binary_sniff::looks_binary;
 use nene_ledger_core::detecting::READ_LIMIT;
@@ -18,7 +19,7 @@ use nene_ledger_scan::sparse_index::SparseIndex;
 use crate::dialect_doubt::DialectDoubt;
 use crate::guessed::Guessed;
 use crate::open_failure::OpenFailure;
-use crate::rows::{WINDOW_RECORDS, read_rows};
+use crate::rows::{Rows, WINDOW_RECORDS, read_rows};
 
 /// 判別に読む量（core の標本の 64 KiB ＋ BOM ＋ 1。続きがあることを判別に伝える・GitHub Issue #10）。
 const SAMPLE_BYTES: usize = READ_LIMIT;
@@ -26,7 +27,7 @@ const SAMPLE_BYTES: usize = READ_LIMIT;
 /// 開いた先頭の行と、窓の題名と、推し量った読み方（の要約）と、見出しのレコードの番号と、判別に確信が無いときの点数。
 #[derive(Debug)]
 pub(crate) struct Opened {
-    rows: Vec<Vec<String>>,
+    rows: Rows,
     title: String,
     summary: FormatSummary,
     header: Option<u64>,
@@ -42,7 +43,12 @@ impl Opened {
 
     /// 先頭から読んだ行（復号したセルの値）。
     pub(crate) fn rows(&self) -> &[Vec<String>] {
-        &self.rows
+        self.rows.cells()
+    }
+
+    /// 先頭から読んだ行のうち、上限で切り詰めたレコード（GitHub Issue #36）。
+    pub(crate) fn cuts(&self) -> &[CutRecord] {
+        self.rows.cuts()
     }
 
     /// 文字のファイルでないようか（Issue #57）。

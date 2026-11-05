@@ -555,6 +555,17 @@ Shift_JIS・縦棒区切りの見本（`crates/app/fixtures/shift-jis-pipe.csv`�
 
 省略は描く文字列だけで、値は変えない（コピーと詳細ペインは全文）。試験は application の `values_that_do_not_fit_end_with_an_ellipsis`・`a_huge_value_is_cut_to_the_cell`（1 MiB の値で頭の 39 字 ＋ `…`）・`values_wider_than_the_column_end_with_an_ellipsis`。固定した列・入れ替えた列も同じ描画の経路（`FramePainter::text`）だが、撮っていない。Windows の実機での確認はまだ。
 
+## 56. 切り詰めた行を示す（GitHub Issue #36・ADR 0018 の決定 2）— 仮想の X サーバと `--dump`（QLT-013）
+
+`id,amount,memo` の 10 行で、3 行目の `memo` だけが 2 MiB の引用のセルのファイルを、release で確かめた（2026-11-05）。
+
+| 操作 | 結果 |
+| --- | --- |
+| 窓で開き ↓ ↓ → → | カーソルが 4 行目の `memo`。表のセルは `zzzz…`（三点リーダー・Issue #7）。詳細ペインの見出しの行が `memo　4 行目　3 列目　1 MiB で切り詰め（行の全体 2.0 MiB）`（文字数とバイト数の代わり）。本文は読んだ先頭の部分を折り返し、`〈あと 8,453 行〉`。11 行が全部見える（Issue #32） |
+| `nene-ledger --dump` | 標準エラーに `nene-ledger: 1 MiB を超えるレコード 1 件は先頭の 1 MiB だけを書いた（最初は 4 行目）`。終了 0（出力は従来どおり）。切り詰めの無い 100 MB の CSV では何も出ない |
+
+コピーは、切り詰めた値の行を含めば `… をコピーしました（うち N 行は 1 MiB で切り詰めた値）`（application の `a_cut_row_says_so_in_the_detail_pane_and_in_the_copy_notice`）。窓では撮っていない。索引を作り終える前は全体の大きさが分からず `1 MiB で切り詰め（行は 1 MiB を超える）`（app の `records_cut_at_the_limit_are_listed_with_their_whole_size`）。Windows の実機での確認はまだ。
+
 ## 7. active の規則と、その証明
 
 CNF-009 は active の規則ごとに `| ID |` で始まる行がここにあることを要求する。

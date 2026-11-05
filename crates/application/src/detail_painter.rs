@@ -152,36 +152,7 @@ impl DetailPainter {
         let columns = text_width / self.metrics.half_width().max(1);
         let room = ClientBands::body_lines(self.pane.size().height(), self.metrics);
         let limit = usize::try_from(room).unwrap_or(usize::MAX);
-        let (lines, note) = match content {
-            DetailContent::OutOfView => (
-                Vec::new(),
-                Some(String::from("〈カーソルの行は見えている範囲の外〉")),
-            ),
-            DetailContent::Missing => (
-                Vec::new(),
-                Some(String::from("〈この行にはこの列のセルが無い〉")),
-            ),
-            DetailContent::Value("") => (Vec::new(), Some(String::from("〈空のセル〉"))),
-            DetailContent::Value(value) => {
-                let wrapped = wrap(value, columns, limit);
-                if wrapped.hidden() == 0 {
-                    (wrapped.lines().to_vec(), None)
-                } else {
-                    let shown = wrapped
-                        .lines()
-                        .get(..limit.saturating_sub(1))
-                        .unwrap_or_default();
-                    let rest = wrapped.hidden().saturating_add(1);
-                    (
-                        shown.to_vec(),
-                        Some(format!(
-                            "〈あと {} 行〉",
-                            group_digits(u64::try_from(rest).unwrap_or(u64::MAX))
-                        )),
-                    )
-                }
-            }
-        };
+        let (lines, note) = body_lines(content, columns, limit);
         let left = self
             .pane
             .origin()
@@ -236,6 +207,45 @@ impl DetailPainter {
     }
 }
 
+/// 本文の行（幅 `columns` で折り返し、`limit` 行まで）と、最後に添える断り書き（値が無い・あと N 行）。
+fn body_lines(
+    content: DetailContent<'_>,
+    columns: u32,
+    limit: usize,
+) -> (Vec<String>, Option<String>) {
+    match content {
+        DetailContent::OutOfView => (
+            Vec::new(),
+            Some(String::from("〈カーソルの行は見えている範囲の外〉")),
+        ),
+        DetailContent::Missing => (
+            Vec::new(),
+            Some(String::from("〈この行にはこの列のセルが無い〉")),
+        ),
+        DetailContent::Value("") | DetailContent::Cut { value: "", .. } => {
+            (Vec::new(), Some(String::from("〈空のセル〉")))
+        }
+        DetailContent::Value(value) | DetailContent::Cut { value, .. } => {
+            let wrapped = wrap(value, columns, limit);
+            if wrapped.hidden() == 0 {
+                return (wrapped.lines().to_vec(), None);
+            }
+            let shown = wrapped
+                .lines()
+                .get(..limit.saturating_sub(1))
+                .unwrap_or_default();
+            let rest = wrapped.hidden().saturating_add(1);
+            (
+                shown.to_vec(),
+                Some(format!(
+                    "〈あと {} 行〉",
+                    group_digits(u64::try_from(rest).unwrap_or(u64::MAX))
+                )),
+            )
+        }
+    }
+}
+
 /// 見出しの行の補助の情報。行（と見出しがあれば列）の番号、値があれば文字数とファイルの文字コード `encoding` での
 /// バイト数（Issue #59）。全角の空きで区切る。
 fn aux_text(
@@ -259,6 +269,8 @@ fn aux_text(
                 group_digits(encoding.encoded_length(value))
             )
         }
+        // 切り詰めた行の値は先頭の部分だけなので、文字数とバイト数の代わりに切り詰めたことと全体の大きさを出す（GitHub Issue #36）。
+        DetailContent::Cut { cut, .. } => format!("{position}　{}", cut.describe()),
         DetailContent::OutOfView | DetailContent::Missing => position,
     }
 }

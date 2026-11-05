@@ -93,9 +93,17 @@ pub fn cursor_status(record: u64, column: usize) -> String {
 #[must_use]
 pub fn notice_status(notice: Notice) -> String {
     match notice {
-        Notice::Copied { rows, columns } => {
-            format!("{} 行 × {} 列をコピーしました", group_digits(rows), columns)
-        }
+        Notice::Copied {
+            rows,
+            columns,
+            cut: 0,
+        } => format!("{} 行 × {} 列をコピーしました", group_digits(rows), columns),
+        Notice::Copied { rows, columns, cut } => format!(
+            "{} 行 × {} 列をコピーしました（うち {} 行は 1 MiB で切り詰めた値）",
+            group_digits(rows),
+            columns,
+            group_digits(cut)
+        ),
         Notice::TooLargeToCopy => String::from("選択が大きすぎるのでコピーしませんでした"),
         Notice::LooksBinary => String::from("文字のファイルではないようです（NUL のバイトがある）"),
         Notice::RangesNotAligned => {
@@ -455,9 +463,18 @@ mod tests {
         assert_eq!(
             notice_status(Notice::Copied {
                 rows: 12_345,
-                columns: 3
+                columns: 3,
+                cut: 0
             }),
             "12,345 行 × 3 列をコピーしました"
+        );
+        assert_eq!(
+            notice_status(Notice::Copied {
+                rows: 10,
+                columns: 2,
+                cut: 1
+            }),
+            "10 行 × 2 列をコピーしました（うち 1 行は 1 MiB で切り詰めた値）"
         );
         assert_eq!(
             notice_status(Notice::Theme {

@@ -121,7 +121,9 @@ impl Viewer {
             DocumentEffect::Read { first_body } => {
                 let first = self.document.record_of(first_body);
                 if let Ok(rows) = self.reader.read(first) {
-                    self.document.show(first, &rows);
+                    let (cells, cuts) = rows.into_parts();
+                    self.document.show(first, &cells);
+                    self.document.mark_cut(cuts);
                 }
                 None
             }
@@ -131,7 +133,8 @@ impl Viewer {
             } => {
                 let count = usize::try_from(count).ok()?;
                 let rows = self.reader.read_count(first_record, count).ok()?;
-                self.document.copy_text(first_record, &rows)
+                let (rows, cuts) = rows.into_parts();
+                self.document.copy_text(first_record, &rows, &cuts)
             }
             DocumentEffect::StopTotals => {
                 if let Some(job) = &self.totals {
@@ -174,7 +177,7 @@ impl Viewer {
                 Err(_failure) => self.document.totals_report(SelectionTotals::Failed),
             }
         } else if let Ok(rows) = self.reader.read_count(first_record, count) {
-            self.document.count_totals(first_record, &rows);
+            self.document.count_totals(first_record, rows.cells());
         }
     }
 
@@ -323,7 +326,8 @@ impl Viewer {
             return false;
         };
         let summary = FormatSummary::new(format, base.format_summary().line_endings());
-        let mut trial = Document::open(base.title().to_owned(), summary, header, &rows);
+        let mut trial = Document::open(base.title().to_owned(), summary, header, rows.cells());
+        trial.mark_cut(rows.cuts().to_vec());
         trial.set_detail(base.detail());
         let original = core::mem::replace(&mut self.document, trial);
         if self.trial.is_none() {
