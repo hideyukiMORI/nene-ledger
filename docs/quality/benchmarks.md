@@ -107,7 +107,7 @@ Pollock のリポジトリには他の道具の読み込みの出力が入って
 | 政府の統計（e-Stat を直接） | 4 | CP932 |
 | ほか（正解の表に入れず、個別に見た） | — | 日本郵便の郵便番号（KEN_ALL の CP932 12.4 MB・UTF-8 18.4 MB・ローマ字・事業所）・内閣府の祝日・財務省の国債金利・気象庁・日本銀行・csv-spectrum・KEN_ALL から作った UTF-16 / EUC-JP / TSV |
 
-正解の表に入れた 392 ファイルのうち 2 つは、表に書いた文字コードの名前を Python が知らず、比べられなかった（下の数から除く）。
+出どころの URL と正解の表は [`corpus/sources.tsv`](corpus/sources.tsv)（GitHub Issue #47・道具の置き方は [ADR 0023](../adr/0023-real-world-corpus-measurement.md) の提案）。正解の表に入れた 392 ファイルのうち 2 つは、表に書いた文字コードの名前を Python が知らず、比べられなかった（下の数から除く）。
 
 ### 結果
 
