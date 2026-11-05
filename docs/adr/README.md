@@ -43,6 +43,7 @@ ADR は「なぜそう決めたか」「何を却下したか」を書く。
 | [0025](0025-save-by-replacement-and-windows-locks.md) | 保存は store クレートが一時ファイルに書いて置き換える。原本は application のポート越しに読み、Windows の置き換えは adapters-windows に置く | 受理 |
 | [0026](0026-cell-editing-entry-and-japanese-input.md) | セルの編集は Excel と同じ入り方にする。欄の規則は core、日本語は Windows を IMM32 で先に、X11 は当面の貼り付けから | 受理 |
 | [0027](0027-row-and-column-insert-delete.md) | 行と列の挿入と削除は Excel と同じ見え方と操作にする。行の番号は上から通し番号、消すときは尋ねずに Undo で戻す | 受理 |
+| [0028](0028-new-file-and-save-as.md) | 新規作成は新しい窓で 1 行 × 3 列から始め、名前を付けて保存は Windows は OS の画面、X11 はパレットの欄で道筋を打つ | 提案 |
 
 ## これから書くもの（Issue が立ったら）
 
