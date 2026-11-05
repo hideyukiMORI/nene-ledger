@@ -2,6 +2,8 @@
 
 use alloc::string::String;
 
+use nene_ledger_core::display_width::char_columns;
+
 /// 改行の印。🔴 `↵`（U+21B5）は日本語の字体（Noto Sans CJK JP）に無く、Issue #20 の画面で字の無い印になった。
 /// JIS X 0208 にもある `¶` を使う。
 const LINE_BREAK: char = '¶';
@@ -43,9 +45,64 @@ pub fn single_line(value: &str) -> String {
     out
 }
 
+/// 省略の印（U+2026）。
+const ELLIPSIS: char = '…';
+
+/// 表示の文字列 `text` を幅 `columns`（半角 1・全角 2）に収める。収まらなければ、収まる頭の部分の後ろに `…` を付ける
+/// （GitHub Issue #7・VIEW-17）。値そのものは変えない（コピーと詳細ペインは全文）。
+///
+/// 🔴 数えるのは頭の部分だけで、値の長さに依らない（1 MiB の値でもセルの幅に比例する手間）。幅は近似（半角 1・全角 2）
+/// なので、描く側の矩形での切り取りは残す。幅が `…` より狭ければ `…` だけにする。
+#[must_use]
+pub fn fitted(text: &str, columns: u32) -> String {
+    let room = columns.saturating_sub(char_columns(ELLIPSIS));
+    let mut head = String::new();
+    let mut used = 0_u32;
+    let mut cut = false;
+    let mut characters = text.chars();
+    for character in characters.by_ref() {
+        let next = used.saturating_add(char_columns(character));
+        if next > columns {
+            cut = true;
+            break;
+        }
+        if next <= room {
+            head.push(character);
+        }
+        used = next;
+    }
+    if !cut {
+        return String::from(text);
+    }
+    // 頭の部分は `…` の分を空けて収まる所まで（上の輪で `room` を超えた字からは足していない）。
+    head.push(ELLIPSIS);
+    head
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 収まる値はそのまま、収まらない値は頭の部分 ＋ `…`（`…` は幅 2）。半角・全角・混在（GitHub Issue #7）。
+    #[test]
+    fn values_that_do_not_fit_end_with_an_ellipsis() {
+        assert_eq!(fitted("abcdef", 6), "abcdef");
+        assert_eq!(fitted("abcdefg", 6), "abcd…");
+        assert_eq!(fitted("東京都千代田区", 14), "東京都千代田区");
+        assert_eq!(fitted("東京都千代田区", 13), "東京都千代…");
+        assert_eq!(fitted("ab東京", 5), "ab…");
+        assert_eq!(fitted("", 0), "");
+        assert_eq!(fitted("abc", 1), "…");
+    }
+
+    /// 長い値でも頭の部分だけを見る（1 MiB の値で、結果はセルの幅の分だけ）。
+    #[test]
+    fn a_huge_value_is_cut_to_the_cell() {
+        let huge = "x".repeat(1 << 20_u32);
+        let shown = fitted(&huge, 40);
+        assert_eq!(shown.chars().count(), 39);
+        assert!(shown.ends_with('…'));
+    }
 
     #[test]
     fn line_breaks_tabs_and_controls_become_marks() {

@@ -2709,6 +2709,23 @@ mod tests {
             .collect()
     }
 
+    /// 列の幅（最大 40 字）に収まらない値は `…` で省略して描き、ちょうど収まる値はそのまま描く（GitHub Issue #7）。
+    #[test]
+    fn values_wider_than_the_column_end_with_an_ellipsis() {
+        let long = "x".repeat(60);
+        let exact = "y".repeat(40);
+        let rows = table(&[&["id", "note"], &["1", &long], &["2", &exact]]);
+        let document = closed(opened_with(&rows));
+        let frame = document.frame(normal(), palette());
+        let texts = all_texts(&frame);
+        assert!(
+            texts.contains(&format!("{}…", "x".repeat(38)).as_str()),
+            "{texts:?}"
+        );
+        assert!(texts.contains(&exact.as_str()));
+        assert!(!texts.contains(&long.as_str()));
+    }
+
     fn opened_with(rows: &[Vec<String>]) -> Document {
         Document::open(String::from("t"), summary(), Some(0), rows)
     }

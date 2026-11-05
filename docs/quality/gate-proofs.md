@@ -544,6 +544,17 @@ Shift_JIS・縦棒区切りの見本（`crates/app/fixtures/shift-jis-pipe.csv`�
 
 試験は core の `a_sample_read_up_to_the_read_limit_keeps_a_character_split_at_the_sample_limit` と app の `a_character_across_the_sample_boundary_keeps_the_encoding`。実データの突き合わせは benchmarks 第 2 節、経緯は [research/2026-11-05-quality-sweep](../research/2026-11-05-quality-sweep.md)。Windows の実機での確認はまだ（読む経路は OS に依らない）。
 
+## 55. 三点リーダーの省略（GitHub Issue #7）— 仮想の X サーバでの確認（QLT-013）
+
+`id,memo,short` の 3 行（`memo` は日本語の住所の長い値・英文の長い値・`ちょうど`）を、release の窓（1024×640）で開いて撮った（2026-11-05）。
+
+| 操作 | 画面 |
+| --- | --- |
+| 開く | `memo` の列は 40 字の幅。`東京都千代田区丸の内一丁目一番一号 丸…`・`This is a fairly long English sentence…`。`ちょうど` と `short` の列の `ok` には `…` が付かない。英文は字体の実際の幅が近似（半角 1）より狭いので、`…` の右に余白が残る（Issue のとおり、幅は近似で数え、矩形での切り取りを残す） |
+| `memo` の右の境を x = 420 から 980 へドラッグ | `…` が消え、2 つの長い値が全文で描かれる |
+
+省略は描く文字列だけで、値は変えない（コピーと詳細ペインは全文）。試験は application の `values_that_do_not_fit_end_with_an_ellipsis`・`a_huge_value_is_cut_to_the_cell`（1 MiB の値で頭の 39 字 ＋ `…`）・`values_wider_than_the_column_end_with_an_ellipsis`。固定した列・入れ替えた列も同じ描画の経路（`FramePainter::text`）だが、撮っていない。Windows の実機での確認はまだ。
+
 ## 7. active の規則と、その証明
 
 CNF-009 は active の規則ごとに `| ID |` で始まる行がここにあることを要求する。
