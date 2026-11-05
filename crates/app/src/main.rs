@@ -34,7 +34,15 @@ fn main() -> ExitCode {
         #[cfg(windows)]
         nene_ledger_ui_win32::desktop::attach_console();
         return match dumping::dump(&PathBuf::from(file)) {
-            Ok(()) => ExitCode::SUCCESS,
+            Ok(cuts) => {
+                if let Some((count, first)) = cuts.summary() {
+                    warn(&format!(
+                        "1 MiB を超えるレコード {count} 件は先頭の 1 MiB だけを書いた（最初は {} 行目）",
+                        first.saturating_add(1)
+                    ));
+                }
+                ExitCode::SUCCESS
+            }
             Err(failure) => {
                 report(&describe(&failure));
                 ExitCode::FAILURE
@@ -135,6 +143,7 @@ fn first_document(opened: &opening::Opened) -> nene_ledger_application::document
         opened.header(),
         opened.rows(),
     );
+    document.mark_cut(opened.cuts().to_vec());
     if let Some(doubt) = opened.doubt() {
         document.notify(Notice::DialectUnsure {
             top: doubt.top(),
@@ -183,6 +192,15 @@ fn chosen_file() -> Option<PathBuf> {
         );
         None
     }
+}
+
+/// `--dump` の注意を標準エラーに書く（どの OS でも端末に・Windows は `--dump` でコンソールに結んである）。
+#[expect(
+    clippy::print_stderr,
+    reason = "RS-014: 合成ルートは --dump の注意を端末に出してよい（測定で値の欠けを知らせる・GitHub Issue #36）"
+)]
+fn warn(message: &str) {
+    eprintln!("nene-ledger: {message}");
 }
 
 /// 利用者への失敗の知らせ。X11 は端末に、Windows はメッセージの窓に（コンソールが無い）。

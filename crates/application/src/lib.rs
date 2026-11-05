@@ -22,6 +22,7 @@ pub mod command_palette;
 pub mod copy_shape;
 pub mod cursor_moves;
 pub mod cursor_step;
+pub mod cut_record;
 pub mod detail_content;
 mod detail_painter;
 pub mod detail_pane;

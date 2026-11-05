@@ -11,6 +11,8 @@ pub enum Notice {
         rows: u64,
         /// 列の数。
         columns: usize,
+        /// そのうち、上限で切り詰めた値の行の数（GitHub Issue #36）。
+        cut: u64,
     },
     /// 開いたファイルが文字のファイルでないようだ（NUL のバイトがある・Issue #57）。
     LooksBinary,

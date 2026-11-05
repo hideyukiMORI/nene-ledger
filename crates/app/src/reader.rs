@@ -17,7 +17,7 @@ use nene_ledger_scan::source::Source;
 use nene_ledger_scan::sparse_index::SparseIndex;
 
 use crate::opening::detect;
-use crate::rows::{WINDOW_RECORDS, read_rows};
+use crate::rows::{Rows, WINDOW_RECORDS, read_rows};
 
 /// 動いた先の範囲を読む材料。画面のスレッドが持つ原本と読み方と、作り終えた索引（まだなら作り始める前の索引）と、
 /// 裏の仕事が画面のスレッドを起こす口。
@@ -56,7 +56,7 @@ impl Reader {
     }
 
     /// 読み方 `format` で、先頭からの窓の分の行を読む（開き直す前に試す・Issue #52）。索引は使わない。
-    pub(crate) fn read_trial(&self, format: TextFormat) -> Result<Vec<Vec<String>>, ScanFailure> {
+    pub(crate) fn read_trial(&self, format: TextFormat) -> Result<Rows, ScanFailure> {
         read_rows(
             &self.source,
             &SparseIndex::empty(),
@@ -91,16 +91,12 @@ impl Reader {
     }
 
     /// `first` からの窓の分の行を読み、表示の値にする。
-    pub(crate) fn read(&self, first: u64) -> Result<Vec<Vec<String>>, ScanFailure> {
+    pub(crate) fn read(&self, first: u64) -> Result<Rows, ScanFailure> {
         self.read_count(first, WINDOW_RECORDS)
     }
 
     /// `first` からの `count` 個の行を読み、復号した値にする（コピー）。
-    pub(crate) fn read_count(
-        &self,
-        first: u64,
-        count: usize,
-    ) -> Result<Vec<Vec<String>>, ScanFailure> {
+    pub(crate) fn read_count(&self, first: u64, count: usize) -> Result<Rows, ScanFailure> {
         read_rows(
             &self.source,
             &self.index,

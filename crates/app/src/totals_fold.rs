@@ -80,7 +80,7 @@ mod tests {
         let format = guess_format(&source).unwrap().format();
         let range = RecordRange::new(0, 100);
         let rows = read_rows(&source, &SparseIndex::empty(), format, range).unwrap();
-        let body: Vec<&[String]> = rows.iter().skip(1).map(Vec::as_slice).collect();
+        let body: Vec<&[String]> = rows.cells().iter().skip(1).map(Vec::as_slice).collect();
         let at_once = SelectionStats::of(&body, &columns);
         let from = IndexedSource::new(source, SparseIndex::empty(), format);
         let mut fold = TotalsFold::new(

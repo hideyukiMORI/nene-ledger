@@ -12,6 +12,8 @@ use nene_ledger_scan::record_range::RecordRange;
 use nene_ledger_scan::source::Source;
 use nene_ledger_scan::sparse_index::SparseIndex;
 
+use nene_ledger_application::cut_record::CutRecord;
+
 use crate::open_failure::OpenFailure;
 use crate::opening::guess_format;
 use crate::rows::read_rows;
@@ -23,23 +25,62 @@ const DUMP_RECORDS: usize = 1024;
 ///
 /// 🔴 Pollock などの測定のための出力で、保存ではない（原本のバイト列を写さず、値を書き直す）。
 /// 読む側が先に閉じた（`| head`）ら、そこで黙って終える（GitHub Issue #20。`print!` は閉じた管で panic した）。
-pub(crate) fn dump(path: &Path) -> Result<(), OpenFailure> {
+///
+/// 上限（1 MiB）を超えて先頭の部分だけを書いたレコードがあれば、その数と最初の行を返す（呼び出し側が標準エラーで
+/// 知らせる・GitHub Issue #36。測定で値の欠けが分からなかった）。
+pub(crate) fn dump(path: &Path) -> Result<DumpCuts, OpenFailure> {
     let stdout = std::io::stdout();
     let mut out = BufWriter::new(stdout.lock());
-    let written = dump_to(path, &mut out).and_then(|()| out.flush().map_err(OpenFailure::Write));
+    let written = dump_to(path, &mut out)
+        .and_then(|cuts| out.flush().map(|()| cuts).map_err(OpenFailure::Write));
     quiet_when_the_reader_left(written)
 }
 
+/// `--dump` で切り詰めたレコード。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct DumpCuts {
+    count: u64,
+    first: Option<u64>,
+}
+
+impl DumpCuts {
+    /// 切り詰めたレコードが無い。
+    const fn none() -> Self {
+        Self {
+            count: 0,
+            first: None,
+        }
+    }
+
+    /// 切り詰めたレコードの数と、最初のレコードの番号（0 始まり）。無ければ `None`。
+    pub(crate) fn summary(self) -> Option<(u64, u64)> {
+        self.first.map(|first| (self.count, first))
+    }
+
+    fn add(&mut self, cuts: &[CutRecord]) {
+        self.count = self
+            .count
+            .saturating_add(u64::try_from(cuts.len()).unwrap_or(u64::MAX));
+        if self.first.is_none() {
+            self.first = cuts.first().map(|cut| cut.record());
+        }
+    }
+}
+
 /// 読む側が閉じた（`BrokenPipe`）だけなら成功とみなす。
-fn quiet_when_the_reader_left(result: Result<(), OpenFailure>) -> Result<(), OpenFailure> {
+fn quiet_when_the_reader_left(
+    result: Result<DumpCuts, OpenFailure>,
+) -> Result<DumpCuts, OpenFailure> {
     match result {
-        Err(OpenFailure::Write(error)) if error.kind() == ErrorKind::BrokenPipe => Ok(()),
-        Ok(()) | Err(OpenFailure::Scan(_) | OpenFailure::Write(_)) => result,
+        Err(OpenFailure::Write(error)) if error.kind() == ErrorKind::BrokenPipe => {
+            Ok(DumpCuts::none())
+        }
+        Ok(_) | Err(OpenFailure::Scan(_) | OpenFailure::Write(_)) => result,
     }
 }
 
 /// `path` の全部のレコードを、RFC 4180 の UTF-8 で `out` に書く。
-fn dump_to(path: &Path, out: &mut impl Write) -> Result<(), OpenFailure> {
+fn dump_to(path: &Path, out: &mut impl Write) -> Result<DumpCuts, OpenFailure> {
     let source = Source::open(path)?;
     let guessed = guess_format(&source)?;
     let format = guessed.format();
@@ -53,6 +94,7 @@ fn dump_to(path: &Path, out: &mut impl Write) -> Result<(), OpenFailure> {
     };
     // 前書きは表に含めない（表として読み込む・Pollock の正しい版と同じ）。
     let mut first = guessed.preamble_rows();
+    let mut cuts = DumpCuts::none();
     loop {
         let rows = read_rows(
             &source,
@@ -60,10 +102,12 @@ fn dump_to(path: &Path, out: &mut impl Write) -> Result<(), OpenFailure> {
             format,
             RecordRange::new(first, DUMP_RECORDS),
         )?;
+        cuts.add(rows.cuts());
+        let rows = rows.cells();
         if rows.is_empty() {
-            return Ok(());
+            return Ok(cuts);
         }
-        for row in &rows {
+        for row in rows {
             out.write_all(rfc4180_record(row).as_bytes())
                 .map_err(OpenFailure::Write)?;
         }
@@ -92,7 +136,7 @@ mod tests {
             RecordRange::new(0, 100),
         )
         .unwrap();
-        rows.iter().map(|row| rfc4180_record(row)).collect()
+        rows.cells().iter().map(|row| rfc4180_record(row)).collect()
     }
 
     /// 書き込みを `failure` で断る書き手。
@@ -131,6 +175,27 @@ mod tests {
         let mut out = Vec::new();
         dump_to(&fixture("screenshot.csv"), &mut out).unwrap();
         assert_eq!(String::from_utf8(out).unwrap(), dumped("screenshot.csv"));
+    }
+
+    /// 上限を超えて先頭だけを書いたレコードを数え、最初の番号を返す（GitHub Issue #36）。
+    #[test]
+    fn the_dump_counts_records_cut_at_the_limit() {
+        let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/tmp");
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("dumping-cut.csv");
+        let mut contents = b"id,memo\n1,\"".to_vec();
+        contents.extend(core::iter::repeat_n(b'z', 2 * 1_048_576));
+        contents.extend_from_slice(b"\"\n2,b\n");
+        std::fs::write(&path, contents).unwrap();
+        let mut out = Vec::new();
+        assert_eq!(dump_to(&path, &mut out).unwrap().summary(), Some((1, 1)));
+        let mut plain = Vec::new();
+        assert_eq!(
+            dump_to(&fixture("screenshot.csv"), &mut plain)
+                .unwrap()
+                .summary(),
+            None
+        );
     }
 
     #[test]

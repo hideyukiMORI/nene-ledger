@@ -17,6 +17,7 @@ use crate::client_bands::ClientBands;
 use crate::clipboard_text::ClipboardText;
 use crate::column_shift::ColumnShift;
 use crate::cursor_moves::step_cursor;
+use crate::cut_record::CutRecord;
 use crate::detail_content::DetailContent;
 use crate::detail_painter::DetailPainter;
 use crate::detail_pane::DetailPane;
@@ -86,6 +87,8 @@ pub struct Document {
     selection: Selection,
     detail: DetailPane,
     notice: Option<Notice>,
+    /// 見えている行のうち、上限で切り詰めたレコード（GitHub Issue #36）。
+    cuts: Vec<CutRecord>,
     totals: SelectionTotals,
     others: Vec<Selection>,
     order: Vec<usize>,
@@ -156,6 +159,7 @@ impl Document {
             selection: Selection::at(CellPosition::new(0, 0)),
             detail: DetailPane::Open,
             notice: None,
+            cuts: Vec::new(),
             totals: SelectionTotals::Hidden,
             others: Vec::new(),
             order: Vec::new(),
@@ -220,6 +224,7 @@ impl Document {
         let cells: Vec<&[String]> = view.rows().iter().map(ViewRow::cells).collect();
         self.widths.widen(&cells);
         self.view = view;
+        self.cuts.clear();
     }
 
     /// 窓 `view` の本体に全部入る行の数（タイトルバー・縁・見出しの行・詳細ペイン・下の状態の行を除く・少なくとも 1）。1 画面の移動の量。
@@ -1458,17 +1463,30 @@ impl Document {
 
     /// レコード `first_record` から読んだ行 `rows`（復号したセルの値）から、見出しのレコードを除いて選択の列だけを
     /// タブ区切りにする。`MAX_COPY_BYTES` を超えればコピーせず知らせる。コピーしたら行と列の数を知らせる。
-    /// コピーする行が無ければ、クリップボードを替えずに知らせる（GitHub Issue #39）。
-    pub fn copy_text(&mut self, first_record: u64, rows: &[Vec<String>]) -> Option<ClipboardText> {
+    /// コピーする行が無ければ、クリップボードを替えずに知らせる（GitHub Issue #39）。`cuts` は読んだ行のうち上限で
+    /// 切り詰めたレコードで、コピーした行に入っていれば知らせに数える（GitHub Issue #36）。
+    pub fn copy_text(
+        &mut self,
+        first_record: u64,
+        rows: &[Vec<String>],
+        cuts: &[CutRecord],
+    ) -> Option<ClipboardText> {
         let shape = self.ranges().copy_shape()?;
         let (top, _) = self.ranges().row_span();
-        let body: Vec<&[String]> = self
+        let kept: Vec<(&[String], u64)> = self
             .body_cells(first_record, rows)
             .into_iter()
             .zip(top..)
             .filter(|&(_, body)| shape.has_row(body))
-            .map(|(cells, _)| cells)
             .collect();
+        let cut = kept
+            .iter()
+            .filter(|&&(_, body)| {
+                let record = self.record_of(body);
+                cuts.iter().any(|cut| cut.record() == record)
+            })
+            .count();
+        let body: Vec<&[String]> = kept.into_iter().map(|(cells, _)| cells).collect();
         if body.is_empty() {
             self.notice = Some(Notice::NothingToCopy);
             return None;
@@ -1481,6 +1499,7 @@ impl Document {
         self.notice = Some(Notice::Copied {
             rows: u64::try_from(body.len()).unwrap_or(u64::MAX),
             columns: shape.column_count(),
+            cut: u64::try_from(cut).unwrap_or(u64::MAX),
         });
         Some(ClipboardText::new(text))
     }
@@ -1830,9 +1849,23 @@ impl Document {
         let Some(row) = row else {
             return DetailContent::OutOfView;
         };
+        let cut = self
+            .cuts
+            .iter()
+            .find(|cut| cut.record() == row.record())
+            .copied();
         row.values()
             .get(self.source_column(cursor.column()))
-            .map_or(DetailContent::Missing, |value| DetailContent::Value(value))
+            .map_or(DetailContent::Missing, |value| match cut {
+                Some(cut) => DetailContent::Cut { value, cut },
+                None => DetailContent::Value(value),
+            })
+    }
+
+    /// 見えている行のうち、上限で切り詰めて先頭の部分だけを読んだレコード（読むたびに app が渡す・GitHub Issue #36）。
+    /// `show` で行を差し替えると空に戻る。
+    pub fn mark_cut(&mut self, cuts: Vec<CutRecord>) {
+        self.cuts = cuts;
     }
 
     /// 詳細ペイン（矩形 `pane`）の命令。
@@ -2614,7 +2647,7 @@ mod tests {
         };
         let end = usize::try_from(first_record + count).ok()?;
         let start = usize::try_from(first_record).ok()?;
-        document.copy_text(first_record, rows.get(start..end)?)
+        document.copy_text(first_record, rows.get(start..end)?, &[])
     }
 
     #[test]
@@ -2690,7 +2723,7 @@ mod tests {
         // 文字列が大きすぎるときも同じ。
         let big = vec![vec!["x".repeat(MAX_COPY_BYTES)]];
         let mut small = Document::open(String::from("t"), summary(), None, &big);
-        assert_eq!(small.copy_text(0, &big), None);
+        assert_eq!(small.copy_text(0, &big, &[]), None);
         assert_eq!(
             small.right_status(),
             "選択が大きすぎるのでコピーしませんでした"
@@ -2724,6 +2757,44 @@ mod tests {
         );
         assert!(texts.contains(&exact.as_str()));
         assert!(!texts.contains(&long.as_str()));
+    }
+
+    /// 上限で切り詰めた行は、詳細ペインの見出しの行に切り詰めたことと全体の大きさを出す。行を差し替えると外れる
+    /// （GitHub Issue #36）。コピーの知らせも切り詰めた値の行を数える。
+    #[test]
+    fn a_cut_row_says_so_in_the_detail_pane_and_in_the_copy_notice() {
+        let rows = table(&[&["id", "memo"], &["1", "short"], &["2", "zzzz"]]);
+        let mut document = opened_with(&rows);
+        document.set_detail(DetailPane::Open);
+        document.report(JobReport::Finished(IndexSummary::new(3, None)));
+        document.mark_cut(vec![CutRecord::new(2, Some(2 * 1_048_576))]);
+        document.apply(moving(CursorStep::Down), normal());
+        let texts = |shown: &Document| -> Vec<String> {
+            all_texts(&shown.frame(normal(), palette()))
+                .into_iter()
+                .map(String::from)
+                .collect()
+        };
+        let cut_line = "2.0 MiB";
+        assert!(
+            texts(&document).iter().any(|text| text.contains(cut_line)),
+            "{:?}",
+            texts(&document)
+        );
+        document.apply(Intent::SelectAll, normal());
+        let copied = document.copy_text(1, &rows[1..], &[CutRecord::new(2, None)]);
+        assert!(copied.is_some());
+        assert_eq!(
+            document.notice,
+            Some(Notice::Copied {
+                rows: 2,
+                columns: 2,
+                cut: 1
+            })
+        );
+        // 行を差し替えると、切り詰めの印は外れる（読み直した行の分を app が渡し直す）。
+        document.show(1, &rows[1..]);
+        assert!(!texts(&document).iter().any(|text| text.contains(cut_line)));
     }
 
     fn opened_with(rows: &[Vec<String>]) -> Document {
@@ -3758,7 +3829,7 @@ mod tests {
         document.apply(Intent::SelectAll, normal());
         let effect = document.apply(Intent::Copy, normal());
         if let DocumentEffect::Copy { first_record, .. } = effect {
-            assert_eq!(document.copy_text(first_record, &[]), None);
+            assert_eq!(document.copy_text(first_record, &[], &[]), None);
         }
         assert_eq!(document.notice, Some(Notice::NothingToCopy));
     }
