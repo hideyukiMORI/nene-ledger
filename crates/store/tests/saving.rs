@@ -601,4 +601,52 @@ mod saving {
         assert_eq!(std::fs::read(&target).unwrap(), b"keep");
         assert!(leftovers(&dir).is_empty());
     }
+
+    /// 起こさない口（テスト）。
+    struct Quiet;
+
+    impl nene_ledger_application::wakeup::Wakeup for Quiet {
+        fn wake(&self) {}
+    }
+
+    /// 書いている途中で保存をやめると、何も置き換えず一時ファイルを残さない（SAVE-02・ADR 0025 の施主の判断 4）。
+    #[test]
+    fn a_cancelled_save_job_leaves_the_file_alone() {
+        use nene_ledger_store::save_job::SaveJob;
+        use std::sync::Arc;
+        let dir = folder("cancelled");
+        let target = dir.join("t.csv");
+        std::fs::write(&target, b"keep").unwrap();
+        let (started, wait) = std::sync::mpsc::channel::<()>();
+        let job = SaveJob::spawn_streamed(
+            target.clone(),
+            (
+                TextEncoding::Utf8,
+                SaveTarget::Existing(stamp_of(&target).unwrap()),
+            ),
+            (
+                Bytes(Vec::new()),
+                RenameReplacing,
+                move |sink: &mut dyn PlanSink| {
+                    started.send(()).unwrap();
+                    // 止められるまで書き続ける（止められなければ 10 秒で終える）。
+                    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+                    while !sink.stopped() && std::time::Instant::now() < deadline {
+                        sink.text("row,row,row\n");
+                    }
+                    Ok(())
+                },
+            ),
+            Arc::new(Quiet),
+        )
+        .unwrap();
+        wait.recv().unwrap();
+        while job.written() == 0 {
+            std::thread::yield_now();
+        }
+        job.cancel();
+        assert_eq!(job.wait(), Err(SaveFailure::Cancelled));
+        assert_eq!(std::fs::read(&target).unwrap(), b"keep");
+        assert!(leftovers(&dir).is_empty());
+    }
 }

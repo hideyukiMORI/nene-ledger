@@ -254,6 +254,7 @@ pub(crate) fn problem_of(failure: &SavingFailure) -> SaveProblem {
             .next()
             .map_or(SaveProblem::Other, SaveProblem::Unrepresentable),
         SavingFailure::Save(SaveFailure::HardLinked(_)) => SaveProblem::HardLinked,
+        SavingFailure::Save(SaveFailure::Cancelled) => SaveProblem::Cancelled,
         SavingFailure::Save(
             SaveFailure::Target(_)
             | SaveFailure::Write(_)
@@ -293,6 +294,9 @@ pub(crate) fn describe(failure: &SavingFailure) -> String {
         SavingFailure::Save(SaveFailure::Blocked(_)) => String::from(
             "ほかのアプリがファイルを開いているので、保存を始めなかった（原本は元のまま）",
         ),
+        SavingFailure::Save(SaveFailure::Cancelled) => {
+            String::from("保存をやめた（一時ファイルは消した・原本は元のまま）")
+        }
         SavingFailure::Save(save) => format!("保存できなかった: {save:?}"),
     }
 }

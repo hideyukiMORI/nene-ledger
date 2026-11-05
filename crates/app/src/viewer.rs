@@ -323,6 +323,12 @@ impl Viewer {
                 self.choose_save_target();
                 None
             }
+            DocumentEffect::StopSaving => {
+                if let Some(job) = &self.saving {
+                    job.cancel();
+                }
+                None
+            }
         }
     }
 
@@ -614,6 +620,11 @@ impl Session for Viewer {
     }
 
     fn refresh(&mut self, view: WindowView) {
+        // 裏の保存の進み具合（見込みは原本の大きさ・列を足せば少し越えるので、割合は 99% で止める・SAVE-02）。
+        if let Some(job) = &self.saving {
+            self.document
+                .save_progress(job.written(), self.reader.source_length());
+        }
         self.finish_saving();
         let report = self.report();
         // 読み方を試している間の索引の知らせは、元の読み方の画面のもの。
