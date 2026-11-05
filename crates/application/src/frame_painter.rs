@@ -184,6 +184,11 @@ impl<'view> FramePainter<'view> {
                 (self.palette.gutter(), self.palette.gutter_text())
             }
         };
+        // 足した行の番号は強調の色にする（ADR 0027 の決定 1）。
+        let gutter_ink = match row.row() {
+            RowId::Added(_) => self.palette.cursor(),
+            RowId::Source(_) => gutter_ink,
+        };
         self.fill(gutter, gutter_fill);
         // 行番号はファイルの中のレコードの番号で、1 始まりで見せる（レコードの番号は 0 始まり）。
         if style != RowStyle::Numbers {

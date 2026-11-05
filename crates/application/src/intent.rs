@@ -6,6 +6,7 @@ use nene_ledger_core::pointer_point::PointerPoint;
 use crate::column_shift::ColumnShift;
 use crate::cursor_step::CursorStep;
 use crate::go_to_target::GoToTarget;
+use crate::row_place::RowPlace;
 use crate::scroll::Scroll;
 use crate::selection_mode::SelectionMode;
 use crate::theme_step::ThemeStep;
@@ -89,4 +90,8 @@ pub enum Intent {
     Undo,
     /// 戻した 1 手をやり直す（Ctrl+Y・Ctrl+Shift+Z）。
     Redo,
+    /// 空の行を足す（ADR 0027 の決定 2・EDIT-03）。編集中なら確定してから。
+    InsertRows(RowPlace),
+    /// 選んだ範囲にかかる行を消す（尋ねずに消し、Ctrl+Z で戻す・ADR 0027 の決定 4）。
+    RemoveRows,
 }

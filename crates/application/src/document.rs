@@ -33,11 +33,13 @@ use crate::document_effect::DocumentEffect;
 use crate::edit_commit::EditCommit;
 use crate::edit_history::EditHistory;
 use crate::edit_mode::EditMode;
+use crate::edit_step::EditStep;
 use crate::editing_cell::EditingCell;
 use crate::fixed_parts::FixedParts;
 use crate::format_summary::FormatSummary;
 use crate::frame_painter::FramePainter;
 use crate::go_to_target::GoToTarget;
+use crate::index_summary::IndexSummary;
 use crate::intent::Intent;
 use crate::job_progress::JobProgress;
 use crate::job_report::JobReport;
@@ -49,6 +51,9 @@ use crate::pointer_shape::PointerShape;
 use crate::press_kind::PressKind;
 use crate::ranges::Ranges;
 use crate::row_band::RowBand;
+use crate::row_change::RowChange;
+use crate::row_place::RowPlace;
+use crate::rows_notice::RowsNotice;
 use crate::save_problem::SaveProblem;
 use crate::scroll::Scroll;
 use crate::scroll_bar::ScrollBar;
@@ -311,7 +316,9 @@ impl Document {
             | Intent::Advance(_)
             | Intent::Save
             | Intent::Undo
-            | Intent::Redo => None,
+            | Intent::Redo
+            | Intent::InsertRows(_)
+            | Intent::RemoveRows => None,
         };
         Some(choice.map_or(DocumentEffect::Stay, |choice| self.choose_close(choice)))
     }
@@ -349,7 +356,12 @@ impl Document {
     pub fn saved(&mut self) -> DocumentEffect {
         self.saving = false;
         // 履歴は残し、触ったセルのファイルの値を保存した値に進める（保存の後も元に戻せる）。
-        self.history.saved(&self.edits);
+        // 行を足し消しした手があれば、保存の後は原本のレコードの番号が変わるので、履歴を残せない（ADR 0027）。
+        if self.history.has_row_steps() || !self.rows.is_whole() {
+            self.history = EditHistory::empty();
+        } else {
+            self.history.saved(&self.edits);
+        }
         self.edits = CellEdits::empty();
         self.rows = RowOrder::whole();
         self.editor = None;
@@ -449,7 +461,11 @@ impl Document {
             })
             .collect();
         let view = TableView::from_rows(first_line, shown, self.header_line());
-        if view.rows().is_empty() {
+        // 行を全部消した表は、空のまま見せる（前の行を残さない）。
+        let emptied = self
+            .records()
+            .is_some_and(|records| self.body_lines(records) == 0);
+        if view.rows().is_empty() && !emptied {
             return;
         }
         let cells: Vec<&[String]> = view.rows().iter().map(ViewRow::cells).collect();
@@ -514,6 +530,8 @@ impl Document {
                     | Intent::Save
                     | Intent::Undo
                     | Intent::Redo
+                    | Intent::InsertRows(_)
+                    | Intent::RemoveRows
             )
         {
             self.notice = Some(Notice::StillSaving);
@@ -553,6 +571,8 @@ impl Document {
         let current = self.view.first_body();
         let target = match intent {
             Intent::Copy => return self.copy_request(),
+            Intent::InsertRows(place) => return self.insert_rows(place, window),
+            Intent::RemoveRows => return self.remove_rows(window),
             // 配色・文字の大きさ・パレット・文字の入力は合成ルートが受ける（ここに来たら何もしない。表に字を打つ編集は M2）。
             Intent::Theme(_)
             | Intent::Zoom(_)
@@ -636,6 +656,8 @@ impl Document {
             Intent::Save
             | Intent::Undo
             | Intent::Redo
+            | Intent::InsertRows(_)
+            | Intent::RemoveRows
             | Intent::Point { .. }
             | Intent::GoTo(_)
             | Intent::OpenGoTo
@@ -717,7 +739,9 @@ impl Document {
             | Intent::Cancel
             | Intent::Save
             | Intent::Undo
-            | Intent::Redo => Some(intent),
+            | Intent::Redo
+            | Intent::InsertRows(_)
+            | Intent::RemoveRows => Some(intent),
         }
     }
 
@@ -837,27 +861,138 @@ impl Document {
             return DocumentEffect::Stay;
         }
         self.commit_edit();
-        let changes = if redo {
-            self.history.redo(&mut self.edits)
+        let step = if redo {
+            self.history.redo((&mut self.edits, &mut self.rows))
         } else {
-            self.history.undo(&mut self.edits)
+            self.history.undo((&mut self.edits, &mut self.rows))
         };
-        let Some(first) = changes.as_ref().and_then(|changes| changes.first()) else {
-            self.notice = Some(if redo {
-                Notice::NothingToRedo
-            } else {
-                Notice::NothingToUndo
-            });
-            return DocumentEffect::Stay;
-        };
-        let effect = self.reveal_cell(first.row(), first.column(), window);
-        let cells = changes.as_ref().map_or(0, Vec::len);
-        self.notice = Some(if redo {
-            Notice::Redone(cells)
+        match step {
+            None => {
+                self.notice = Some(if redo {
+                    Notice::NothingToRedo
+                } else {
+                    Notice::NothingToUndo
+                });
+                DocumentEffect::Stay
+            }
+            Some(EditStep::Cells(changes)) => {
+                let Some(first) = changes.first() else {
+                    return DocumentEffect::Stay;
+                };
+                let effect = self.reveal_cell(first.row(), first.column(), window);
+                self.notice = Some(if redo {
+                    Notice::Redone(changes.len())
+                } else {
+                    Notice::Undone(changes.len())
+                });
+                effect
+            }
+            Some(EditStep::Rows(change)) => {
+                let body = body_of(change.at(), self.header_line());
+                self.notice = Some(if redo {
+                    Notice::Rows(RowsNotice::Redone(change.count()))
+                } else {
+                    Notice::Rows(RowsNotice::Undone(change.count()))
+                });
+                self.after_rows_changed(body, window)
+            }
+        }
+    }
+
+    /// 選んだ行の数（行全体を選んでいれば選んだ行の数、そうでなければ 1）と、範囲の最初と最後の行（本体の番目）。
+    fn chosen_rows(&self) -> (u64, u64, u64) {
+        let (top, bottom) = self.row_span();
+        let last_column = self.widths.columns().len().saturating_sub(1);
+        let whole = self.selection.top_left().column() == 0
+            && self.selection.bottom_right().column() == last_column
+            && self.others.is_empty();
+        let count = if whole {
+            bottom.saturating_sub(top).saturating_add(1)
         } else {
-            Notice::Undone(cells)
+            1
+        };
+        (top, bottom, count)
+    }
+
+    /// 空の行を足す（ADR 0027 の決定 2）。足した最初の行へカーソルを動かす。
+    fn insert_rows(&mut self, place: RowPlace, window: WindowView) -> DocumentEffect {
+        let (top, bottom, count) = self.chosen_rows();
+        let (body, count) = match place {
+            RowPlace::Above => (top, count),
+            RowPlace::Below => (bottom.saturating_add(1), count),
+            RowPlace::End => {
+                let Some(records) = self.records() else {
+                    self.notice = Some(Notice::Rows(RowsNotice::AwaitIndex));
+                    return DocumentEffect::Stay;
+                };
+                (self.body_lines(records), 1)
+            }
+        };
+        let at = self.line_of(body);
+        let added = self.rows.insert(at, count);
+        let ids = added
+            .iter()
+            .filter_map(|row| match row {
+                RowId::Added(id) => Some(*id),
+                RowId::Source(_) => None,
+            })
+            .collect();
+        self.history.record_rows(RowChange::Inserted {
+            at,
+            runs: vec![OrderRun::Added(ids)],
         });
-        effect
+        self.notice = Some(Notice::Rows(RowsNotice::Inserted(count)));
+        self.after_rows_changed(body, window)
+    }
+
+    /// 選んだ範囲にかかる行を消す（尋ねない・ADR 0027 の決定 4）。見出しの行は消さない（前書きと本体にまたがる
+    /// 範囲は、見出しの前と後ろを別の手として消す）。
+    fn remove_rows(&mut self, window: WindowView) -> DocumentEffect {
+        let to_end = self
+            .ranges()
+            .all()
+            .any(|range| range.bottom_right().body() == TO_END);
+        if to_end && self.records().is_none() {
+            self.notice = Some(Notice::Rows(RowsNotice::AwaitIndex));
+            return DocumentEffect::Stay;
+        }
+        let (top, bottom, _) = self.chosen_rows();
+        let (first, last) = (self.line_of(top), self.line_of(bottom));
+        let spans = match self.header_line() {
+            Some(header) if first < header && header < last => {
+                vec![
+                    (header.saturating_add(1), last),
+                    (first, header.saturating_sub(1)),
+                ]
+            }
+            Some(_) | None => vec![(first, last)],
+        };
+        let mut removed = 0_u64;
+        for (from, to) in spans {
+            let count = to.saturating_sub(from).saturating_add(1);
+            let runs = self.rows.remove(from, count);
+            let change = RowChange::Removed { at: from, runs };
+            removed = removed.saturating_add(change.count());
+            self.history.record_rows(change);
+        }
+        self.notice = Some(Notice::Rows(RowsNotice::Removed(removed)));
+        self.after_rows_changed(top, window)
+    }
+
+    /// 行を足し消しした（戻した）後。カーソルを本体の `body` 番目（最後の行で止める）に置き、見えるように読み直させる。
+    fn after_rows_changed(&mut self, body: u64, window: WindowView) -> DocumentEffect {
+        let body = body.min(self.last_body());
+        let column = self.selection.cursor().column();
+        self.select(CellPosition::new(body, column), SelectionMode::Collapse);
+        let page = self.page_rows(window);
+        let current = self.view.first_body();
+        let first = clamp_first(
+            current,
+            reveal_row(current, body, page),
+            page,
+            self.extent().rows(),
+        );
+        DocumentEffect::Read { first_body: first }
     }
 
     /// セル（`row`・`column`）へカーソルを動かし、見えるように表示を動かす。並びに無い行・足した列なら動かない。
@@ -962,7 +1097,9 @@ impl Document {
             | Intent::Advance(_)
             | Intent::Save
             | Intent::Undo
-            | Intent::Redo => {}
+            | Intent::Redo
+            | Intent::InsertRows(_)
+            | Intent::RemoveRows => {}
         }
     }
 
@@ -1163,7 +1300,9 @@ impl Document {
             | Intent::Advance(_)
             | Intent::Save
             | Intent::Undo
-            | Intent::Redo => None,
+            | Intent::Redo
+            | Intent::InsertRows(_)
+            | Intent::RemoveRows => None,
         }
     }
 
@@ -2554,12 +2693,27 @@ impl Document {
             .paint(place, self.detail_content())
     }
 
+    /// 状態の行に見せる索引の状態。作り終えていれば、行の数は足し消しの後の行の並びの数（ADR 0027 の決定 1）。
+    fn shown_index(&self) -> JobState {
+        match self.index {
+            JobState::Finished(summary) => JobState::Finished(IndexSummary::new(
+                self.rows.len(summary.records()),
+                summary.unclosed_quote(),
+            )),
+            other @ (JobState::Waiting
+            | JobState::Running(_)
+            | JobState::CancelRequested(_)
+            | JobState::Failed
+            | JobState::Cancelled) => other,
+        }
+    }
+
     /// 状態の行の左の文言。索引の状態 · 読み方 · 列の数 · カーソルの位置（VIEW-13）。
     fn status(&self) -> String {
         let cursor = self.selection.cursor();
         format!(
             "{} · {} · {} 列 · {}",
-            index_status(self.index),
+            index_status(self.shown_index()),
             format_status(self.format),
             self.widths.columns().len(),
             cursor_status(
@@ -4919,6 +5073,158 @@ mod tests {
             document.cell_at(center(area), normal()),
             Some(CellPosition::new(1, 1))
         );
+    }
+
+    /// 原本の行 `source`（レコードの順）から、合成ルートと同じく区間ごとに並べて、今の縦の位置から読み直させる。
+    fn reread(document: &mut Document, source: &[Vec<String>]) {
+        let top = document.line_of(document.view().first_body());
+        let mut rows: Vec<Vec<String>> = Vec::new();
+        for run in document.runs_from(top, 50) {
+            match run {
+                OrderRun::Source { first, count } => {
+                    let start = usize::try_from(first).unwrap();
+                    let end = (start + usize::try_from(count.unwrap()).unwrap()).min(source.len());
+                    rows.extend(source.get(start..end).unwrap_or_default().iter().cloned());
+                }
+                OrderRun::Added(added) => rows.extend(added.iter().map(|_| Vec::new())),
+            }
+        }
+        document.show(top, &rows);
+    }
+
+    fn editable_rows() -> Vec<Vec<String>> {
+        vec![
+            vec![String::from("0012"), String::from("東京")],
+            vec![String::from("b1"), String::from("b2")],
+            vec![String::from("c1")],
+        ]
+    }
+
+    fn first_cells(document: &Document) -> Vec<String> {
+        document
+            .view()
+            .rows()
+            .iter()
+            .map(|row| row.cells().first().cloned().unwrap_or_default())
+            .collect()
+    }
+
+    #[test]
+    fn rows_are_inserted_above_and_below_and_undo_takes_them_back() {
+        let mut document = editable();
+        document.report(JobReport::Finished(IndexSummary::new(3, None)));
+        document.apply(moving(CursorStep::Down), normal());
+        let effect = document.apply(Intent::InsertRows(RowPlace::Above), normal());
+        assert!(matches!(effect, DocumentEffect::Read { .. }));
+        reread(&mut document, &editable_rows());
+        assert_eq!(first_cells(&document), ["0012", "", "b1", "c1"]);
+        // カーソルは足した行（本体の 1 番目）。状態の行で知らせる。
+        assert_eq!(document.selection().cursor().body(), 1);
+        text_at(&document.frame(normal(), palette()), "1 行を足しました");
+        // 行全体を 2 行選んで下に足すと 2 行。
+        document.apply(moving(CursorStep::Down), normal());
+        document.apply(
+            Intent::Move {
+                step: CursorStep::Down,
+                mode: SelectionMode::Extend,
+            },
+            normal(),
+        );
+        document.apply(Intent::SelectRows, normal());
+        document.apply(Intent::InsertRows(RowPlace::Below), normal());
+        reread(&mut document, &editable_rows());
+        assert_eq!(first_cells(&document), ["0012", "", "b1", "c1", "", ""]);
+        document.apply(Intent::Undo, normal());
+        reread(&mut document, &editable_rows());
+        assert_eq!(first_cells(&document), ["0012", "", "b1", "c1"]);
+        text_at(
+            &document.frame(normal(), palette()),
+            "元に戻しました（2 行）",
+        );
+        document.apply(Intent::Undo, normal());
+        assert!(document.rows.is_whole());
+        document.apply(Intent::Redo, normal());
+        reread(&mut document, &editable_rows());
+        assert_eq!(first_cells(&document), ["0012", "", "b1", "c1"]);
+    }
+
+    #[test]
+    fn appending_waits_for_the_index_and_then_adds_at_the_end() {
+        let mut document = editable();
+        document.apply(Intent::InsertRows(RowPlace::End), normal());
+        assert!(document.rows.is_whole());
+        text_at(
+            &document.frame(normal(), palette()),
+            "表の末尾は、行の数が分かってから扱えます（索引を作っています）",
+        );
+        document.report(JobReport::Finished(IndexSummary::new(3, None)));
+        document.apply(Intent::InsertRows(RowPlace::End), normal());
+        reread(&mut document, &editable_rows());
+        assert_eq!(first_cells(&document), ["0012", "b1", "c1", ""]);
+        assert_eq!(document.selection().cursor().body(), 3);
+        // 状態の行の行の数も、足した後の数。
+        assert!(document.status().starts_with("4 行"));
+        // 足した行に書いて保存の計画に渡す差分は、足した行と並び。
+        typed(&mut document, "d1");
+        document.apply(Intent::Confirm, normal());
+        let changes = document.changes();
+        assert_eq!(changes.order().len(3), 4);
+        assert_eq!(changes.shape().columns(), 2);
+    }
+
+    #[test]
+    fn removing_rows_keeps_their_edits_for_undo_and_saving_drops_the_history() {
+        let mut document = editable();
+        document.report(JobReport::Finished(IndexSummary::new(3, None)));
+        document.apply(moving(CursorStep::Down), normal());
+        typed(&mut document, "B");
+        document.apply(Intent::Cancel, normal());
+        document.apply(Intent::Edit, normal());
+        typed(&mut document, "!");
+        document.apply(Intent::Advance(CursorStep::Left), normal());
+        document.apply(Intent::RemoveRows, normal());
+        reread(&mut document, &editable_rows());
+        assert_eq!(first_cells(&document), ["0012", "c1"]);
+        text_at(
+            &document.frame(normal(), palette()),
+            "1 行を消しました（Ctrl+Z で戻す）",
+        );
+        // 消した行の書き換えは残り、戻せば見える。
+        assert_eq!(
+            edited(&document, 1, 0),
+            Some(&CellValue::Text(String::from("b1!")))
+        );
+        document.apply(Intent::Undo, normal());
+        reread(&mut document, &editable_rows());
+        assert_eq!(first_cells(&document), ["0012", "b1", "c1"]);
+        text_at(&document.frame(normal(), palette()), "b1!");
+        // 行を足し消しした手があると、保存の後は履歴を残さない（原本のレコードの番号が変わる）。
+        document.apply(Intent::Redo, normal());
+        document.begin_saving();
+        document.saved();
+        assert!(document.rows.is_whole());
+        document.apply(Intent::Undo, normal());
+        text_at(
+            &document.frame(normal(), palette()),
+            "元に戻すものがありません",
+        );
+    }
+
+    #[test]
+    fn removing_every_row_leaves_an_empty_table() {
+        let mut document = editable();
+        document.report(JobReport::Finished(IndexSummary::new(3, None)));
+        document.apply(Intent::SelectAll, normal());
+        document.apply(Intent::RemoveRows, normal());
+        reread(&mut document, &editable_rows());
+        assert!(document.view().rows().is_empty());
+        text_at(
+            &document.frame(normal(), palette()),
+            "3 行を消しました（Ctrl+Z で戻す）",
+        );
+        document.apply(Intent::Undo, normal());
+        reread(&mut document, &editable_rows());
+        assert_eq!(first_cells(&document), ["0012", "b1", "c1"]);
     }
 
     #[test]

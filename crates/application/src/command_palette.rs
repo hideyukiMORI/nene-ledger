@@ -147,7 +147,9 @@ impl CommandPalette {
             | Intent::Advance(_)
             | Intent::Save
             | Intent::Undo
-            | Intent::Redo => PaletteOutcome::Stay,
+            | Intent::Redo
+            | Intent::InsertRows(_)
+            | Intent::RemoveRows => PaletteOutcome::Stay,
         }
     }
 
