@@ -1711,7 +1711,10 @@ impl Document {
     }
 
     /// 索引の作業のスレッドからの知らせを取り込む。
-    pub fn report(&mut self, report: JobReport) {
+    ///
+    /// 索引を作り終えた知らせなら、今の縦の表示の行を読み直させる（`DocumentEffect::Read`）。開いた直後の行は索引の
+    /// 無いまま読んだので、1 MiB を超えるレコードで窓が短く止まっていることがある（GitHub Issue #32）。
+    pub fn report(&mut self, report: JobReport) -> DocumentEffect {
         let finished_before = self.records().is_some();
         self.index = self.index.apply(report);
         // ファイルの終わりまでの選択は、行の数が決まったとき 1 度だけ数え直す（見積もりで切っていた）。
@@ -1723,6 +1726,13 @@ impl Document {
                 .any(|range| range.bottom_right().body() == TO_END)
         {
             self.counted = None;
+        }
+        if !finished_before && self.records().is_some() {
+            DocumentEffect::Read {
+                first_body: self.view.first_body(),
+            }
+        } else {
+            DocumentEffect::Stay
         }
     }
 
@@ -3158,6 +3168,21 @@ mod tests {
         let frame = document.frame(window, palette());
         assert!(fills(&frame, palette().scroll_thumb()).is_empty());
         assert!(document.hover(None, window));
+    }
+
+    /// 索引を作り終えた知らせで 1 度だけ、今の表示の行を読み直させる（GitHub Issue #32。開いた直後の行は索引の
+    /// 無いまま読んだので、長いレコードで短く止まっていることがある）。途中の知らせ・2 度目の終わりでは読み直さない。
+    #[test]
+    fn finishing_the_index_rereads_the_shown_rows_once() {
+        let mut document = headed();
+        let progress = document.report(JobReport::Progress(
+            JobProgress::new(1_000, 4_000, None).with_records(51),
+        ));
+        assert_eq!(progress, DocumentEffect::Stay);
+        let finished = document.report(JobReport::Finished(IndexSummary::new(204, None)));
+        assert_eq!(finished, DocumentEffect::Read { first_body: 0 });
+        let again = document.report(JobReport::Finished(IndexSummary::new(204, None)));
+        assert_eq!(again, DocumentEffect::Stay);
     }
 
     #[test]
