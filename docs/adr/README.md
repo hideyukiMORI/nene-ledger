@@ -39,6 +39,8 @@ ADR は「なぜそう決めたか」「何を却下したか」を書く。
 | [0021](0021-public-repository-on-github.md) | 公開リポジトリを GitHub に置く。Issue は GitHub の Issue、PR が統合の境界、CI は `make ci` を呼ぶだけ、`main` は ruleset で守る | 受理 |
 | [0022](0022-calculation-on-values-not-formulas.md) | 計算は値に対して行い、数式を保存も評価もしない（集計パレット STAT-09・列の演算 XFRM-17） | 受理 |
 | [0023](0023-real-world-corpus-measurement.md) | 実データの突き合わせを、出どころと正解の表をリポジトリに置いて再現できる測定にする（道具は `tools/corpus/` の Python・`make bench-corpus`） | 受理 |
+| [0024](0024-edit-layer-over-the-source.md) | 差分は「行の並び」と「セルの書き換え」の 2 つの層で、原本のレコードの番号に重ねて持つ（型と規則は core、持ち主と Undo は application） | 提案 |
+| [0025](0025-save-by-replacement-and-windows-locks.md) | 保存は store クレートが一時ファイルに書いて置き換える。原本は application のポート越しに読み、Windows の置き換えは adapters-windows に置く | 提案 |
 
 ## これから書くもの（Issue が立ったら）
 
