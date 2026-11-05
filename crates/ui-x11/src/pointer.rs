@@ -19,6 +19,7 @@ const DRAG_THRESHOLD: i32 = 4;
 pub(crate) struct Pointer {
     press: Press,
     last_caption_press: Option<u32>,
+    last_client_press: Option<PointerAt>,
     hovered: Option<ChromeButton>,
 }
 
@@ -27,6 +28,7 @@ impl Pointer {
         Self {
             press: Press::Idle,
             last_caption_press: None,
+            last_client_press: None,
             hovered: None,
         }
     }
@@ -34,6 +36,17 @@ impl Pointer {
     /// 指の乗ったボタン。
     pub(crate) fn hovered(self) -> Option<ChromeButton> {
         self.hovered
+    }
+
+    /// 中身（表）の上で左のボタンを `at` で押した。前の押しから間隔と距離の内なら 2 度目（ダブルクリック）で `true`。
+    /// 2 度目の後は数え直す（3 度目は 1 度目）。
+    pub(crate) fn client_press(&mut self, at: PointerAt) -> bool {
+        let double = self.last_client_press.is_some_and(|last| {
+            at.time().wrapping_sub(last.time()) <= DOUBLE_CLICK_MS
+                && !at.is_far_from(last, DRAG_THRESHOLD)
+        });
+        self.last_client_press = if double { None } else { Some(at) };
+        double
     }
 
     /// 左のボタンを `hit` の所で押した。
@@ -214,5 +227,17 @@ mod tests {
         pointer.motion(CLOSE, at(0, 0, 0));
         assert_eq!(pointer.leave(), ChromeAction::Redraw);
         assert_eq!(pointer.leave(), ChromeAction::Nothing);
+    }
+
+    /// 中身の上の 2 度の押しは、間隔と距離の内ならダブルクリック。3 度目は 1 度目に数え直す（ADR 0026 の決定 1）。
+    #[test]
+    fn two_quick_presses_on_the_table_are_a_double_click() {
+        let mut pointer = Pointer::new();
+        assert!(!pointer.client_press(PointerAt::new(10, 10, 1_000)));
+        assert!(pointer.client_press(PointerAt::new(12, 11, 1_300)));
+        assert!(!pointer.client_press(PointerAt::new(12, 11, 1_400)));
+        // 遅い・遠いは 1 度目。
+        assert!(!pointer.client_press(PointerAt::new(12, 11, 2_000)));
+        assert!(!pointer.client_press(PointerAt::new(40, 11, 2_100)));
     }
 }

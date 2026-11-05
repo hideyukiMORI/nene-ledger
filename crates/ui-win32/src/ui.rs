@@ -37,24 +37,25 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     TrackMouseEvent, VK_CONTROL, VK_MENU, VK_RETURN, VK_SHIFT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DispatchMessageW, GWLP_USERDATA, GetClientRect,
-    GetMessageW, GetWindowLongPtrW, IDC_ARROW, IDC_SIZEWE, IsZoomed, LoadCursorW, MSG,
-    NCCALCSIZE_PARAMS, PostMessageW, PostQuitMessage, RegisterClassExW, SM_CXFRAME,
+    CS_DBLCLKS, CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DispatchMessageW, GWLP_USERDATA,
+    GetClientRect, GetMessageW, GetWindowLongPtrW, IDC_ARROW, IDC_SIZEWE, IsZoomed, LoadCursorW,
+    MSG, NCCALCSIZE_PARAMS, PostMessageW, PostQuitMessage, RegisterClassExW, SM_CXFRAME,
     SM_CXPADDEDBORDER, SM_CYFRAME, SW_SHOW, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE,
     SWP_NOSIZE, SWP_NOZORDER, SetCursor, SetWindowLongPtrW, SetWindowPos, ShowWindow,
     TranslateMessage, WINDOW_EX_STYLE, WM_CAPTURECHANGED, WM_CHAR, WM_CLOSE, WM_DESTROY,
     WM_DPICHANGED, WM_ERASEBKGND, WM_IME_COMPOSITION, WM_IME_ENDCOMPOSITION, WM_IME_SETCONTEXT,
-    WM_IME_STARTCOMPOSITION, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEHWHEEL,
-    WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCALCSIZE, WM_NCHITTEST, WM_NCLBUTTONDBLCLK, WM_NCLBUTTONDOWN,
-    WM_NCLBUTTONUP, WM_NCMOUSEMOVE, WM_PAINT, WM_SETCURSOR, WM_SIZE, WM_SYSCHAR, WM_SYSCOMMAND,
-    WM_SYSKEYDOWN, WM_TIMER, WNDCLASSEXW, WS_OVERLAPPEDWINDOW,
+    WM_IME_STARTCOMPOSITION, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP,
+    WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCALCSIZE, WM_NCHITTEST, WM_NCLBUTTONDBLCLK,
+    WM_NCLBUTTONDOWN, WM_NCLBUTTONUP, WM_NCMOUSEMOVE, WM_PAINT, WM_SETCURSOR, WM_SIZE, WM_SYSCHAR,
+    WM_SYSCOMMAND, WM_SYSKEYDOWN, WM_TIMER, WNDCLASSEXW, WS_OVERLAPPEDWINDOW,
 };
 use windows::core::{HSTRING, PCWSTR, w};
 
 use crate::hit_code::{HTCLIENT, button_of, hit_code};
 use crate::ime;
 use crate::key_intent::{
-    Modifiers, key_intent, press_intent, sideways_wheel_intent, typed_intent, wheel_intent,
+    Modifiers, double_press_intent, key_intent, press_intent, sideways_wheel_intent, typed_intent,
+    wheel_intent,
 };
 use crate::pen::Pen;
 use crate::timer_ticker::{TICK_TIMER, TimerTicker};
@@ -207,6 +208,8 @@ fn register_class() -> Result<(), Win32Failure> {
         hInstance: instance.into(),
         lpszClassName: CLASS,
         hCursor: arrow,
+        // 中身の 2 度目の押しを WM_LBUTTONDBLCLK で受ける（ダブルクリックで編集・ADR 0026 の決定 1）。
+        style: CS_DBLCLKS,
         ..WNDCLASSEXW::default()
     };
     // SAFETY: class はこの関数の局所で、登録の間だけ読まれる。
@@ -480,8 +483,8 @@ fn dispatch(
         WM_SETCURSOR => cursor_message(state, lparam),
         WM_NCMOUSEMOVE | WM_NCMOUSELEAVE | WM_NCLBUTTONDOWN | WM_NCLBUTTONUP
         | WM_NCLBUTTONDBLCLK => chrome_message(state, window, (message, wparam)),
-        WM_LBUTTONDOWN | WM_LBUTTONUP | WM_MOUSEMOVE | WM_MOUSELEAVE | WM_CAPTURECHANGED
-        | WM_MOUSEWHEEL | WM_MOUSEHWHEEL => {
+        WM_LBUTTONDOWN | WM_LBUTTONDBLCLK | WM_LBUTTONUP | WM_MOUSEMOVE | WM_MOUSELEAVE
+        | WM_CAPTURECHANGED | WM_MOUSEWHEEL | WM_MOUSEHWHEEL => {
             pointer_message(state, window, (message, wparam, lparam))
         }
         WM_KEYDOWN | WM_SYSKEYDOWN | WM_SYSCHAR | WM_CHAR => keyboard(state, message, wparam),
@@ -597,11 +600,16 @@ fn pointer_message(
     (message, wparam, lparam): (u32, WPARAM, LPARAM),
 ) -> Option<LRESULT> {
     match message {
-        WM_LBUTTONDOWN => {
+        WM_LBUTTONDOWN | WM_LBUTTONDBLCLK => {
             capture(window);
             let (x, y) = signed_words(lparam);
             let held = Modifiers::new(wparam.0 & MK_SHIFT != 0, wparam.0 & MK_CONTROL != 0, false);
-            if let Some(intent) = press_intent(x, y, held) {
+            let intent = if message == WM_LBUTTONDBLCLK {
+                double_press_intent(x, y, held)
+            } else {
+                press_intent(x, y, held)
+            };
+            if let Some(intent) = intent {
                 state.press(intent);
             }
         }
