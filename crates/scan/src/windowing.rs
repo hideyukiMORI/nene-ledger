@@ -67,13 +67,102 @@ pub(crate) fn read_records_from(
 ) -> Result<RecordWindow, ScanFailure> {
     let dialect = format.dialect();
     let spans = record_spans(source, (index, dialect), mark, range)?;
-    let records = spans
-        .into_iter()
-        .filter_map(|span| {
-            read_one(source, cutting_dialect(index, dialect, span), span).transpose()
+    let limit = u64::try_from(RECORD_READ_LIMIT.get())?;
+    let mut records = Vec::with_capacity(spans.len());
+    for batch in batches(&spans, limit) {
+        match batch {
+            [span] if !is_short(*span, limit) => {
+                records.extend(read_one(
+                    source,
+                    cutting_dialect(index, dialect, *span),
+                    *span,
+                )?);
+            }
+            _ => records.extend(read_batch(source, dialect, batch)?),
+        }
+    }
+    Ok(RecordWindow::new(records))
+}
+
+/// 上限までの長さが分かっているレコードか（まとめて読める）。
+fn is_short(span: RecordSpan, limit: u64) -> bool {
+    match span.length() {
+        RecordLength::Exact(length) => length <= limit,
+        RecordLength::MoreThan(_) => false,
+    }
+}
+
+/// レコードの列を、まとめて 1 回で読む組に分ける。組は、上限以下の長さのレコードが続く所（合わせて上限まで）か、
+/// 上限を超えたレコード 1 つ。🔴 レコードごとに原本を読むと、短い行の `--dump` の時間の大半が `pread` になる
+/// （GitHub Issue #30）。並びは続いている（次のレコードは前の終わりから始まる・`spans`）。
+fn batches(spans: &[RecordSpan], limit: u64) -> Vec<&[RecordSpan]> {
+    let mut groups = Vec::new();
+    let mut rest = spans;
+    while let Some((group, after)) = rest.split_at_checked(batch_length(rest, limit)) {
+        if group.is_empty() {
+            break;
+        }
+        groups.push(group);
+        rest = after;
+    }
+    groups
+}
+
+/// 先頭から 1 つの組に入るレコードの数。先頭が上限を超えるなら 1。空なら 0。
+fn batch_length(spans: &[RecordSpan], limit: u64) -> usize {
+    let mut total = 0_u64;
+    let short = spans
+        .iter()
+        .take_while(|span| match span.length() {
+            RecordLength::Exact(length) if length <= limit => {
+                total = total.saturating_add(length);
+                total <= limit
+            }
+            RecordLength::Exact(_) | RecordLength::MoreThan(_) => false,
+        })
+        .count();
+    short.max(spans.len().min(1))
+}
+
+/// 上限以下の長さのレコードが続く組を、1 回で読んで 1 つずつ切る。切り方は `read_one` と同じ。
+fn read_batch(
+    source: &Source,
+    dialect: Dialect,
+    batch: &[RecordSpan],
+) -> Result<Vec<WindowRecord>, ScanFailure> {
+    let lengths = batch
+        .iter()
+        .map(|span| match span.length() {
+            RecordLength::Exact(length) | RecordLength::MoreThan(length) => usize::try_from(length),
         })
         .collect::<Result<Vec<_>, _>>()?;
-    Ok(RecordWindow::new(records))
+    let (Some(first), Some(size)) = (
+        batch.first(),
+        BlockSize::new(
+            lengths
+                .iter()
+                .fold(0_usize, |sum, &length| sum.saturating_add(length)),
+        ),
+    ) else {
+        return Ok(Vec::new());
+    };
+    let bytes = source.read_block(first.start(), size)?;
+    let mut records = Vec::with_capacity(batch.len());
+    let mut at = 0_usize;
+    for (span, length) in batch.iter().zip(lengths) {
+        let end = at.saturating_add(length);
+        let piece = bytes.get(at..end.min(bytes.len())).unwrap_or_default();
+        if let Some(record) = Records::new(piece, dialect).next() {
+            records.push(WindowRecord::new(
+                span.start(),
+                span.length(),
+                piece.to_vec(),
+                record,
+            ));
+        }
+        at = end;
+    }
+    Ok(records)
 }
 
 /// `mark` から切り進めて、`range` の各レコードの始まりと長さ。範囲がファイルの外なら空。
@@ -101,8 +190,12 @@ fn record_spans(
     let mut wanted: Vec<u64> = Vec::new();
     let mut seen = 0_u64;
     let mut end = mark.offset();
+    // 🔴 塊は 64 KiB から倍にしていく（1 MiB まで）。毎回 1 MiB を読むと、空行だけのファイルの `--dump` で
+    // 窓ごとに 1 MiB を写す（GitHub Issue #30）。
+    let mut size = BlockSize::SIXTY_FOUR_KIBIBYTES;
     loop {
-        let block = source.read_block(starts.position(), BlockSize::MEBIBYTE)?;
+        let block = source.read_block(starts.position(), size)?;
+        size = size.doubled_within(BlockSize::MEBIBYTE);
         if block.is_empty() {
             end = end.max(starts.position());
             if starts.resume_literally().is_some() {
@@ -209,5 +302,38 @@ fn cutting_dialect(index: &SparseIndex, dialect: Dialect, span: RecordSpan) -> D
             dialect.with_unclosed_quote(UnclosedQuote::ToEnd)
         }
         UnclosedQuote::Literal | UnclosedQuote::ToEnd => dialect,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn exact(start: u64, length: u64) -> RecordSpan {
+        RecordSpan::new(start, RecordLength::Exact(length))
+    }
+
+    fn group_sizes(spans: &[RecordSpan], limit: u64) -> Vec<usize> {
+        batches(spans, limit).iter().map(|group| group.len()).collect()
+    }
+
+    #[test]
+    fn short_records_are_grouped_up_to_the_limit() {
+        let spans = [exact(0, 4), exact(4, 4), exact(8, 4), exact(12, 4)];
+        assert_eq!(group_sizes(&spans, 8), vec![2, 2]);
+        assert_eq!(group_sizes(&spans, 16), vec![4]);
+        assert_eq!(group_sizes(&spans, 15), vec![3, 1]);
+    }
+
+    #[test]
+    fn a_record_over_the_limit_stands_alone() {
+        let spans = [
+            exact(0, 2),
+            exact(2, 20),
+            RecordSpan::new(22, RecordLength::MoreThan(10)),
+            exact(40, 2),
+        ];
+        assert_eq!(group_sizes(&spans, 10), vec![1, 1, 1, 1]);
+        assert!(batches(&[], 10).is_empty());
     }
 }
