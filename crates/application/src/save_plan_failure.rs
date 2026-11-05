@@ -16,8 +16,8 @@ pub enum SavePlanFailure<F> {
         /// セルの番号。
         column: usize,
     },
-    /// 原本の行に無いセル（列の数が足りない行）。
-    NoSuchCell {
+    /// 書き換えたセルの番号が昇順でない（差分の持ち方の誤り）。
+    Unordered {
         /// 原本のレコードの番号。
         row: u64,
         /// セルの番号。

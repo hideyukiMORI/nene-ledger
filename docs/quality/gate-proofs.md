@@ -647,6 +647,17 @@ PR #82 の枝 `60d59e1` の exe（`make build-windows`）を施主の Windows 11
 
 🔴 **正直に:** IME は Microsoft IME だけ。パレットで IME をオンにしたときの見え（確定前の文字列はどこにも出ない）と、欄より長い確定前の文字列は試していない。施主の気づき：列の数が足りない行の「セルが無い」所には書けない（`この行には、この列のセルがありません`）。これは最初の縦切りの作り（`begin_edit` と保存の計画の `NoSuchCell`）で、IME の経路の問題ではない。
 
+## 62. 列の数が足りない行の、セルの無い所に書く（GitHub Issue #83・ADR 0024 の施主の判断 4・5）— 仮想の X サーバでの確認（QLT-013）
+
+PR の枝の debug の exe を Xvfb（1024×640）に出し、`xdotool` で打って Ctrl+S で保存し、ファイルを `od -c` で見た（2026-11-05）。
+
+| # | 元のファイル | 操作 | 保存した後のファイル |
+| --- | --- | --- | --- |
+| 1 | `id,name,city\r\n1,"Sato"\r\n2,Suzuki,Osaka\r\n` | 2 行目の 3 列目（セルが無い）で `Tokyo` → Enter → Ctrl+S | `id,name,city\r\n1,"Sato",Tokyo\r\n2,Suzuki,Osaka\r\n`（`"Sato"` の引用と CRLF は元のまま・ほかの行はバイト列のまま・状態の行に `保存しました`） |
+| 2 | `a,b,c\r\n1\r\n2,x,y\r\n` | 2 行目の 3 列目で `z` → Enter → Ctrl+S | `a,b,c\r\n1,,z\r\n2,x,y\r\n`（間の 2 列目は空のセル。開き直した画面では「セルが無い」の色ではなく空のセル） |
+
+🔴 **正直に:** Windows の実機ではまだ。区切りがタブの表と、引用の要る値（区切りを含む値）を足すことは core と application のテストだけ（`row_writing`・`save_planning`）。
+
 ## 7. active の規則と、その証明
 
 CNF-009 は active の規則ごとに `| ID |` で始まる行がここにあることを要求する。
