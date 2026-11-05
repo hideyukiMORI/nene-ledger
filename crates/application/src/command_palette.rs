@@ -149,7 +149,9 @@ impl CommandPalette {
             | Intent::Undo
             | Intent::Redo
             | Intent::InsertRows(_)
-            | Intent::RemoveRows => PaletteOutcome::Stay,
+            | Intent::RemoveRows
+            | Intent::InsertColumns(_)
+            | Intent::RemoveColumns => PaletteOutcome::Stay,
         }
     }
 
@@ -398,17 +400,17 @@ mod tests {
         };
         palette.handle(moving(CursorStep::Bottom), 0);
         assert_eq!(palette.selected(), CommandId::ALL.len() - 1);
-        // 1 回の PageUp は 10 件。操作は 24 なので 3 回で先頭（最後は 0 で止まる）。
-        palette.handle(moving(CursorStep::PageUp), 0);
-        assert_eq!(palette.selected(), CommandId::ALL.len() - 1 - 10);
-        palette.handle(moving(CursorStep::PageUp), 0);
-        assert_eq!(palette.selected(), CommandId::ALL.len() - 1 - 20);
+        // 1 回の PageUp は 10 件。操作は 34 なので 4 回で先頭（最後は 0 で止まる）。
+        for page in 1..=3 {
+            palette.handle(moving(CursorStep::PageUp), 0);
+            assert_eq!(palette.selected(), CommandId::ALL.len() - 1 - 10 * page);
+        }
         palette.handle(moving(CursorStep::PageUp), 0);
         assert_eq!(palette.selected(), 0);
-        palette.handle(moving(CursorStep::PageDown), 0);
-        assert_eq!(palette.selected(), 10);
-        palette.handle(moving(CursorStep::PageDown), 0);
-        assert_eq!(palette.selected(), 20);
+        for page in 1..=3 {
+            palette.handle(moving(CursorStep::PageDown), 0);
+            assert_eq!(palette.selected(), 10 * page);
+        }
         palette.handle(moving(CursorStep::PageDown), 0);
         assert_eq!(palette.selected(), CommandId::ALL.len() - 1);
         palette.handle(moving(CursorStep::RowStart), 0);

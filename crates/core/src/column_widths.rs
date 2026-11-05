@@ -46,6 +46,22 @@ impl ColumnWidths {
         }
     }
 
+    /// `at` 番目の前に、幅 `widths` の列を差し込む（列を足した・消した列を戻した・ADR 0027）。`at` が列の数より
+    /// 後ろなら末尾に足す。
+    pub fn insert(&mut self, at: usize, widths: &[u32]) {
+        let at = at.min(self.columns.len());
+        let tail = self.columns.split_off(at);
+        self.columns.extend_from_slice(widths);
+        self.columns.extend(tail);
+    }
+
+    /// `at` 番目から `count` 列の幅を外して返す（列を消した）。
+    pub fn remove(&mut self, at: usize, count: usize) -> Vec<u32> {
+        let start = at.min(self.columns.len());
+        let end = at.saturating_add(count).min(self.columns.len());
+        self.columns.drain(start..end).collect()
+    }
+
     /// 列ごとの字数。
     #[must_use]
     pub fn columns(&self) -> &[u32] {
@@ -92,6 +108,17 @@ mod tests {
 
     fn slices(rows: &[Vec<String>]) -> Vec<&[String]> {
         rows.iter().map(Vec::as_slice).collect()
+    }
+
+    #[test]
+    fn widths_are_inserted_and_removed_with_their_columns() {
+        let table = rows(&[&["id", "東京都千代田区", "x"]]);
+        let mut widths = ColumnWidths::fit(&slices(&table));
+        widths.insert(1, &[MIN_COLUMN_COLUMNS]);
+        assert_eq!(widths.columns(), &[3, 3, 14, 3]);
+        assert_eq!(widths.remove(2, 5), vec![14, 3]);
+        widths.insert(9, &[7]);
+        assert_eq!(widths.columns(), &[3, 3, 7]);
     }
 
     #[test]

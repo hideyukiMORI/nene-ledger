@@ -14,9 +14,11 @@ use nene_ledger_core::cell_change::CellChange;
 use nene_ledger_core::cell_edits::CellEdits;
 use nene_ledger_core::cell_value::CellValue;
 use nene_ledger_core::column_id::ColumnId;
+use nene_ledger_core::column_order::ColumnOrder;
 use nene_ledger_core::row_id::RowId;
 use nene_ledger_core::row_order::RowOrder;
 
+use crate::column_change::ColumnChange;
 use crate::edit_step::EditStep;
 use crate::row_change::RowChange;
 
@@ -56,8 +58,17 @@ impl EditHistory {
         self.undone.clear();
     }
 
+    /// 列の足し消し `change`（並びにはもう行った）を 1 手として積む。やり直しの列は捨てる。
+    pub fn record_columns(&mut self, change: ColumnChange) {
+        self.done.push(EditStep::Columns(change));
+        self.undone.clear();
+    }
+
     /// 1 手戻す。戻した手（セルなら戻した後の値への書き換え）を返す。戻すものが無ければ `None`。
-    pub fn undo(&mut self, (edits, order): (&mut CellEdits, &mut RowOrder)) -> Option<EditStep> {
+    pub fn undo(
+        &mut self,
+        (edits, order, columns): (&mut CellEdits, &mut RowOrder, &mut ColumnOrder),
+    ) -> Option<EditStep> {
         let step = self.done.pop()?;
         let taken = match &step {
             EditStep::Cells(changes) => {
@@ -72,13 +83,20 @@ impl EditHistory {
                 change.undo(order);
                 step.clone()
             }
+            EditStep::Columns(change) => {
+                change.undo(columns);
+                step.clone()
+            }
         };
         self.undone.push(step);
         Some(taken)
     }
 
     /// 戻した 1 手をやり直す。やり直した手を返す。やり直すものが無ければ `None`。
-    pub fn redo(&mut self, (edits, order): (&mut CellEdits, &mut RowOrder)) -> Option<EditStep> {
+    pub fn redo(
+        &mut self,
+        (edits, order, columns): (&mut CellEdits, &mut RowOrder, &mut ColumnOrder),
+    ) -> Option<EditStep> {
         let step = self.undone.pop()?;
         match &step {
             EditStep::Cells(changes) => {
@@ -87,18 +105,19 @@ impl EditHistory {
                 }
             }
             EditStep::Rows(change) => change.redo(order),
+            EditStep::Columns(change) => change.redo(columns),
         }
         self.done.push(step.clone());
         Some(step)
     }
 
-    /// 行の足し消しの手を持つか。持っていれば、保存の後は原本のレコードの番号が変わるので履歴を残せない。
+    /// 行か列の足し消しの手を持つか。持っていれば、保存の後は原本のレコードと列の番号が変わるので履歴を残せない。
     #[must_use]
     pub fn has_row_steps(&self) -> bool {
         self.done
             .iter()
             .chain(&self.undone)
-            .any(|step| matches!(step, EditStep::Rows(_)))
+            .any(|step| matches!(step, EditStep::Rows(_) | EditStep::Columns(_)))
     }
 
     /// 保存した。触ったセルのファイルの値を、保存した値（差分があればその値）に進める。差分は呼ぶ側が空にする。
@@ -166,13 +185,28 @@ mod tests {
         history.record(change(1, "b", "c"), "a", &mut edits);
         assert_eq!(value(&edits, 1), Some(&text("c")));
         assert_eq!(
-            history.undo((&mut edits, &mut RowOrder::whole())),
+            history.undo((
+                &mut edits,
+                &mut RowOrder::whole(),
+                &mut ColumnOrder::whole()
+            )),
             Some(EditStep::Cells(vec![change(1, "c", "b")]))
         );
         assert_eq!(value(&edits, 1), Some(&text("b")));
-        history.undo((&mut edits, &mut RowOrder::whole()));
+        history.undo((
+            &mut edits,
+            &mut RowOrder::whole(),
+            &mut ColumnOrder::whole(),
+        ));
         assert!(edits.is_empty());
-        assert_eq!(history.undo((&mut edits, &mut RowOrder::whole())), None);
+        assert_eq!(
+            history.undo((
+                &mut edits,
+                &mut RowOrder::whole(),
+                &mut ColumnOrder::whole()
+            )),
+            None
+        );
         assert_eq!(history.redo_count(), 2);
     }
 
@@ -181,14 +215,33 @@ mod tests {
         let mut history = EditHistory::empty();
         let mut edits = CellEdits::empty();
         history.record(change(1, "a", "b"), "a", &mut edits);
-        history.undo((&mut edits, &mut RowOrder::whole()));
-        history.redo((&mut edits, &mut RowOrder::whole()));
+        history.undo((
+            &mut edits,
+            &mut RowOrder::whole(),
+            &mut ColumnOrder::whole(),
+        ));
+        history.redo((
+            &mut edits,
+            &mut RowOrder::whole(),
+            &mut ColumnOrder::whole(),
+        ));
         assert_eq!(value(&edits, 1), Some(&text("b")));
-        history.undo((&mut edits, &mut RowOrder::whole()));
+        history.undo((
+            &mut edits,
+            &mut RowOrder::whole(),
+            &mut ColumnOrder::whole(),
+        ));
         // 新しく書き換えると、やり直しの列は消える。
         history.record(change(2, "x", "y"), "x", &mut edits);
         assert_eq!(history.redo_count(), 0);
-        assert_eq!(history.redo((&mut edits, &mut RowOrder::whole())), None);
+        assert_eq!(
+            history.redo((
+                &mut edits,
+                &mut RowOrder::whole(),
+                &mut ColumnOrder::whole()
+            )),
+            None
+        );
         assert_eq!(history.undo_count(), 1);
     }
 
@@ -200,9 +253,17 @@ mod tests {
         // 保存した（ファイルの値は b になり、差分は空になった）。
         history.saved(&before_saving);
         let mut edits = CellEdits::empty();
-        history.undo((&mut edits, &mut RowOrder::whole()));
+        history.undo((
+            &mut edits,
+            &mut RowOrder::whole(),
+            &mut ColumnOrder::whole(),
+        ));
         assert_eq!(value(&edits, 1), Some(&text("a")));
-        history.redo((&mut edits, &mut RowOrder::whole()));
+        history.redo((
+            &mut edits,
+            &mut RowOrder::whole(),
+            &mut ColumnOrder::whole(),
+        ));
         assert!(edits.is_empty());
     }
 
@@ -245,9 +306,23 @@ mod tests {
         for _ in 0_u32..500 {
             let (mut history, mut edits) = random_history(&mut state);
             let finished = edits.clone();
-            while history.undo((&mut edits, &mut RowOrder::whole())).is_some() {}
+            while history
+                .undo((
+                    &mut edits,
+                    &mut RowOrder::whole(),
+                    &mut ColumnOrder::whole(),
+                ))
+                .is_some()
+            {}
             assert!(edits.is_empty(), "{edits:?}");
-            while history.redo((&mut edits, &mut RowOrder::whole())).is_some() {}
+            while history
+                .redo((
+                    &mut edits,
+                    &mut RowOrder::whole(),
+                    &mut ColumnOrder::whole(),
+                ))
+                .is_some()
+            {}
             assert_eq!(edits, finished);
         }
     }

@@ -674,6 +674,18 @@ PR の枝の debug の exe を Xvfb（1024×640）に出し、`xdotool` で操�
 
 🔴 **正直に:** キー（ADR 0027 の Ctrl++ と Ctrl+-）はまだ割り当てていない（文字の大きさの Ctrl++ / Ctrl+- とぶつかる・施主に諮る）。Windows の実機ではまだ。Undo / Redo は application のテストだけ。
 
+## 64. 列を足す・消す・戻す（GitHub Issue #99・ADR 0027）— 仮想の X サーバでの確認（QLT-013）
+
+PR の枝の debug の exe を Xvfb（1024×640）に出し、`xdotool` で操作して Ctrl+S で保存し、ファイルを `od -c` で見た（2026-11-05）。
+元のファイルは `\xEF\xBB\xBFid,name\r\n1,"Sato, T"\r\n2\r\n`（BOM 付き・2 行目は 1 列だけ）。
+
+| # | 操作 | 見え・ファイル |
+| --- | --- | --- |
+| 1 | パレットで `insert column right`（カーソルは `id`）→ `40` Enter `35` Enter | `id` の右に空の見出しの列が入り、`40`・`35` が入る |
+| 2 | Ctrl+S | `\xEF\xBB\xBFid,,name\r\n1,40,"Sato, T"\r\n2,35\r\n`。BOM・`"Sato, T"` の引用・CRLF は元のまま。1 列だけの行は、足した列まで書き、`name` のセルは「セルが無い」のまま。開き直した画面も同じ |
+
+🔴 **正直に:** キーはまだ（パレットだけ）。足した列の見出しの名前は変えられない（EDIT-04）。列を消す・戻すは application のテストだけ。Windows の実機ではまだ。
+
 ## 7. active の規則と、その証明
 
 CNF-009 は active の規則ごとに `| ID |` で始まる行がここにあることを要求する。
