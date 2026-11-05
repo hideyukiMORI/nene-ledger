@@ -15,11 +15,11 @@ pub enum DocumentEffect {
     Save,
     /// 裏の集計を止める（Esc）。
     StopTotals,
-    /// レコード `first_record` から `count` 個を読んで `Document::copy_text` に渡す（コピー）。
+    /// 行の並びの位置 `first_line` から `count` 行を読んで `Document::copy_text` に渡す（コピー）。
     Copy {
-        /// 最初のレコードの番号。
-        first_record: u64,
-        /// 読むレコードの数（見出しのレコードを含むことがある）。
+        /// 最初の行の位置。
+        first_line: u64,
+        /// 読む行の数（見出しの行を含むことがある）。
         count: u64,
     },
 }

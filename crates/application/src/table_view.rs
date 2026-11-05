@@ -14,17 +14,27 @@ pub struct TableView {
 }
 
 impl TableView {
-    /// レコード `first_record` から読んだ行 `rows`（復号したセルの値）から、見出しのレコード `header` を除いて作る。
+    /// 行の並びの位置 `first_record` から読んだ行 `rows`（復号したセルの値）から、見出しの位置 `header` を除いて作る。
+    /// 行の同一性は原本のレコード（行を足し消ししていないとき）。
     #[must_use]
     pub fn from_records(first_record: u64, rows: &[Vec<String>], header: Option<u64>) -> Self {
         let rows = rows
             .iter()
             .zip(first_record..)
-            .filter(|&(_, record)| Some(record) != header)
-            .map(|(cells, record)| ViewRow::new(record, cells))
+            .map(|(cells, line)| ViewRow::new(line, cells))
+            .collect();
+        Self::from_rows(first_record, rows, header)
+    }
+
+    /// 位置 `first_line` からの行 `rows` から、見出しの位置 `header` の行を除いて作る。
+    #[must_use]
+    pub fn from_rows(first_line: u64, rows: Vec<ViewRow>, header: Option<u64>) -> Self {
+        let rows = rows
+            .into_iter()
+            .filter(|row| Some(row.line()) != header)
             .collect();
         Self {
-            first_body: body_of(first_record, header),
+            first_body: body_of(first_line, header),
             rows,
         }
     }
@@ -52,7 +62,7 @@ mod tests {
     }
 
     fn records(view: &TableView) -> Vec<u64> {
-        view.rows().iter().map(ViewRow::record).collect()
+        view.rows().iter().map(ViewRow::line).collect()
     }
 
     #[test]

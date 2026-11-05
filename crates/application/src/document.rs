@@ -82,6 +82,7 @@ use nene_ledger_core::draw_command::DrawCommand;
 use nene_ledger_core::frame::Frame;
 use nene_ledger_core::glyph_metrics::GlyphMetrics;
 use nene_ledger_core::line_ending::LineEnding;
+use nene_ledger_core::order_run::OrderRun;
 use nene_ledger_core::palette::Palette;
 use nene_ledger_core::pixel_point::PixelPoint;
 use nene_ledger_core::pixel_rect::PixelRect;
@@ -181,7 +182,7 @@ impl Document {
             let cells = rows.get(usize::try_from(record).ok()?)?;
             Some(ViewRow::new(record, cells))
         });
-        let view = TableView::from_records(0, rows, header.as_ref().map(ViewRow::record));
+        let view = TableView::from_records(0, rows, header.as_ref().map(ViewRow::line));
         let cells: Vec<&[String]> = header
             .iter()
             .chain(view.rows())
@@ -418,16 +419,36 @@ impl Document {
         self.index
     }
 
-    /// 本体の `body` 番目の行のレコードの番号（読み始める所）。
+    /// 本体の `body` 番目の行の、行の並びの位置（読み始める所・前書きと見出しも数える）。
     #[must_use]
-    pub fn record_of(&self, body: u64) -> u64 {
-        record_of(body, self.header_record())
+    pub fn line_of(&self, body: u64) -> u64 {
+        record_of(body, self.header_line())
     }
 
-    /// レコード `first_record` から読んだ行 `rows` に差し替える（動いた先）。見出しは除き、列が増えていればその列の幅だけを足す。
-    /// 見出しを除いて行が残らなければ差し替えない。
-    pub fn show(&mut self, first_record: u64, rows: &[Vec<String>]) {
-        let view = TableView::from_records(first_record, rows, self.header_record());
+    /// 行の並びの位置 `first_line` から `count` 行の区間（合成ルートが区間ごとに原本を読み、足した行は空の行にして
+    /// 位置の順に `show`・`copy_text`・`count_totals` に渡す・ADR 0027）。
+    #[must_use]
+    pub fn runs_from(&self, first_line: u64, count: u64) -> Vec<OrderRun> {
+        self.rows.slice(first_line, count)
+    }
+
+    /// 位置 `first_line` から読んだ行 `rows` に差し替える（動いた先）。見出しは除き、列が増えていればその列の幅だけを足す。
+    /// 足した行は空のセルで表の幅まで埋める。見出しを除いて行が残らなければ差し替えない。
+    pub fn show(&mut self, first_line: u64, rows: &[Vec<String>]) {
+        let columns = self.widths.columns().len();
+        let shown: Vec<ViewRow> = rows
+            .iter()
+            .zip(first_line..)
+            .map(|(cells, line)| {
+                let row = self.rows.row_at(line).unwrap_or(RowId::Source(line));
+                match row {
+                    RowId::Source(_) => ViewRow::new(line, cells),
+                    RowId::Added(_) => ViewRow::new(line, &vec![String::new(); columns]),
+                }
+                .with_row(row)
+            })
+            .collect();
+        let view = TableView::from_rows(first_line, shown, self.header_line());
         if view.rows().is_empty() {
             return;
         }
@@ -705,17 +726,17 @@ impl Document {
     fn begin_edit(&mut self, mode: EditMode) -> bool {
         let cursor = self.selection.cursor();
         let column = self.source_column(cursor.column());
-        let Some((record, source)) = self
+        let Some((line, row, source)) = self
             .view_row(cursor.body())
-            .map(|row| (row.record(), row.values().get(column).cloned()))
+            .map(|row| (row.line(), row.row(), row.values().get(column).cloned()))
         else {
             return false;
         };
-        if self.cuts.iter().any(|cut| cut.record() == record) {
+        if self.cuts.iter().any(|cut| cut.record() == line) {
             self.notice = Some(Notice::EditCut);
             return false;
         }
-        let cell = (RowId::Source(record), ColumnId::Source(column));
+        let cell = (row, ColumnId::Source(column));
         // 原本の行に無いセル（列の数が足りない行）は空として入る。保存では間の列を空のセルで埋めて足す
         // （ADR 0024 の施主の判断 4・5）。差分で消したセル（`Absent`）は直さない。
         let shown = match (self.edits.get(cell.0, cell.1), &source) {
@@ -839,12 +860,12 @@ impl Document {
         effect
     }
 
-    /// 原本のセル（`row`・`column`）へカーソルを動かし、見えるように表示を動かす。足した行・列はまだ無い。
+    /// セル（`row`・`column`）へカーソルを動かし、見えるように表示を動かす。並びに無い行・足した列なら動かない。
     fn reveal_cell(&mut self, row: RowId, column: ColumnId, window: WindowView) -> DocumentEffect {
-        let (RowId::Source(record), ColumnId::Source(source)) = (row, column) else {
+        let (Some(line), ColumnId::Source(source)) = (self.rows.position_of(row), column) else {
             return DocumentEffect::Stay;
         };
-        let body = body_of(record, self.header_record());
+        let body = body_of(line, self.header_line());
         let display = self
             .order
             .iter()
@@ -1349,10 +1370,10 @@ impl Document {
     /// 飛ぶ先 `target` のセルを選び、見えるように表示を動かした先の縦の表示の先頭を返す（1 画面 `page` 行・Issue #54）。
     /// レコードの番号は本体の行に写す（見出しのレコードならその次の行）。行の数より先なら最後の行。列が無ければ今の列。
     fn jump(&mut self, target: GoToTarget, page: u64, window: WindowView) -> u64 {
-        let record = target.record();
-        let body = match self.header_record() {
-            Some(header) if record > header => record - 1,
-            Some(_) | None => record,
+        let line = target.record();
+        let body = match self.header_line() {
+            Some(header) if line > header => line - 1,
+            Some(_) | None => line,
         }
         .min(self.last_body());
         let last_column = self.widths.columns().len().saturating_sub(1);
@@ -1877,14 +1898,11 @@ impl Document {
             .first_body()
             .saturating_add(u64::try_from(self.view.rows().len()).unwrap_or(u64::MAX));
         let estimate = match self.index {
-            JobState::Finished(summary) => body_count(summary.records(), self.header_record()),
+            JobState::Finished(summary) => self.body_lines(summary.records()),
             JobState::Running(progress) | JobState::CancelRequested(progress) => {
                 let records = u128::from(progress.records()) * u128::from(progress.total())
                     / u128::from(progress.done().max(1));
-                body_count(
-                    u64::try_from(records).unwrap_or(u64::MAX),
-                    self.header_record(),
-                )
+                self.body_lines(u64::try_from(records).unwrap_or(u64::MAX))
             }
             JobState::Waiting | JobState::Failed | JobState::Cancelled => seen,
         };
@@ -1895,7 +1913,7 @@ impl Document {
     fn reachable_rows(&self) -> Option<u64> {
         match self.index {
             JobState::Running(progress) | JobState::CancelRequested(progress) => {
-                Some(body_count(progress.records(), self.header_record()))
+                Some(self.body_lines(progress.records()))
             }
             JobState::Finished(_) | JobState::Waiting | JobState::Failed | JobState::Cancelled => {
                 None
@@ -2006,8 +2024,8 @@ impl Document {
             Some(scrollbar),
         ) = (self.hold, bars.bar(ScrollOrientation::Vertical))
         {
-            let record = self.record_of(self.view.first_body());
-            let text = format!("{} 行目", group_digits(record.saturating_add(1)));
+            let line = self.line_of(self.view.first_body());
+            let text = format!("{} 行目", group_digits(line.saturating_add(1)));
             commands.extend(painter.tip(scrollbar, text, view.metrics()));
         }
         commands
@@ -2034,11 +2052,11 @@ impl Document {
             self.notice = Some(Notice::TooLargeToCopy);
             return DocumentEffect::Stay;
         }
-        let first_record = self.record_of(top);
-        let last_record = self.record_of(bottom);
+        let first_line = self.line_of(top);
+        let last_line = self.line_of(bottom);
         DocumentEffect::Copy {
-            first_record,
-            count: last_record.saturating_sub(first_record).saturating_add(1),
+            first_line,
+            count: last_line.saturating_sub(first_line).saturating_add(1),
         }
     }
 
@@ -2071,8 +2089,8 @@ impl Document {
         let cut = kept
             .iter()
             .filter(|&&(_, body)| {
-                let record = self.record_of(body);
-                cuts.iter().any(|cut| cut.record() == record)
+                let line = self.line_of(body);
+                cuts.iter().any(|cut| cut.record() == line)
             })
             .count();
         let body: Vec<&[String]> = kept.into_iter().map(|(cells, _)| cells).collect();
@@ -2116,24 +2134,24 @@ impl Document {
             self.totals = SelectionTotals::Counted(stats);
             return TotalsRequest::Settled;
         }
-        let first_record = self.record_of(first);
+        let first_line = self.line_of(first);
         let count = self
-            .record_of(last)
-            .saturating_sub(first_record)
+            .line_of(last)
+            .saturating_sub(first_line)
             .saturating_add(1);
         if last.saturating_sub(first) >= MAX_TOTAL_ROWS {
+            // 🔴 裏の集計は原本の連続したレコードを数える。行を足し消しした後は、位置とレコードがずれるので出さない
+            // （保存すれば数えられる・ADR 0027）。
+            if !self.rows.is_whole() {
+                self.totals = SelectionTotals::Failed;
+                return TotalsRequest::Settled;
+            }
             self.totals = SelectionTotals::Counting(JobProgress::new(0, count, None));
-            return TotalsRequest::Background {
-                first_record,
-                count,
-            };
+            return TotalsRequest::Background { first_line, count };
         }
         // 読めなければ出さないまま（前の範囲の集計を残さない）。
         self.totals = SelectionTotals::Hidden;
-        TotalsRequest::Read {
-            first_record,
-            count,
-        }
+        TotalsRequest::Read { first_line, count }
     }
 
     /// 本体の `first` 番目から続く行 `rows`（復号した値）を、選んだ範囲の帯で数える（重なりは 1 回だけ）。
@@ -2170,12 +2188,12 @@ impl Document {
                 let rows = band.rows();
                 let end = (*rows.end()).min(self.last_body());
                 RowBand::new(
-                    self.record_of(*rows.start())..=self.record_of(end),
+                    self.line_of(*rows.start())..=self.line_of(end),
                     self.source_columns(band.columns()),
                 )
             })
             .collect();
-        (bands, self.header_record())
+        (bands, self.header_line())
     }
 
     /// レコード `first_record`（選んだ範囲の最初の行）から読んだ行 `rows`（復号したセルの値）から、見出しのレコードを除いて
@@ -2201,23 +2219,21 @@ impl Document {
         let width = self.widths.columns().len();
         rows.iter()
             .zip(first_record..)
-            .map(|(cells, record)| {
+            .map(|(cells, line)| {
+                let row = self.rows.row_at(line).unwrap_or(RowId::Source(line));
                 (0..cells.len().max(width))
                     .map(|column| {
                         let cell = cells.get(column).map_or("", String::as_str);
-                        self.overlaid_cell(record, column, cell)
+                        self.overlaid_cell(row, column, cell)
                     })
                     .collect()
             })
             .collect()
     }
 
-    /// レコード `record` の列 `column` の、書き換えを重ねた値。
-    fn overlaid_cell(&self, record: u64, column: usize, cell: &str) -> String {
-        match self
-            .edits
-            .get(RowId::Source(record), ColumnId::Source(column))
-        {
+    /// 行 `row` の列 `column` の、書き換えを重ねた値。
+    fn overlaid_cell(&self, row: RowId, column: usize, cell: &str) -> String {
+        match self.edits.get(row, ColumnId::Source(column)) {
             Some(CellValue::Text(value)) => value.clone(),
             Some(CellValue::Absent) => String::new(),
             None => String::from(cell),
@@ -2229,10 +2245,10 @@ impl Document {
         first_record: u64,
         rows: &'rows [Vec<String>],
     ) -> Vec<&'rows [String]> {
-        let header = self.header_record();
+        let header = self.header_line();
         rows.iter()
             .zip(first_record..)
-            .filter(|&(_, record)| Some(record) != header)
+            .filter(|&(_, line)| Some(line) != header)
             .map(|(cells, _)| cells.as_slice())
             .collect()
     }
@@ -2256,9 +2272,7 @@ impl Document {
 
     /// 表の大きさ（本体の行の数は索引を作り終えてから）。
     fn extent(&self) -> TableExtent {
-        let rows = self
-            .records()
-            .map(|records| body_count(records, self.header_record()));
+        let rows = self.records().map(|records| self.body_lines(records));
         TableExtent::new(rows, self.widths.columns().len())
     }
 
@@ -2353,8 +2367,9 @@ impl Document {
             .view
             .rows()
             .last()
-            .map_or(0, |row| row.record().saturating_add(1));
-        visible_last.max(self.records().unwrap_or(0))
+            .map_or(0, |row| row.line().saturating_add(1));
+        let lines = self.records().map_or(0, |records| self.rows.len(records));
+        visible_last.max(lines)
     }
 
     /// 状態の行に一度だけ知らせる（次の操作で消える）。
@@ -2391,7 +2406,21 @@ impl Document {
     /// 見出しのレコードの番号（無ければ `None`）。
     #[must_use]
     pub fn header_record(&self) -> Option<u64> {
-        self.header.as_ref().map(ViewRow::record)
+        match self.header.as_ref().map(ViewRow::row) {
+            Some(RowId::Source(record)) => Some(record),
+            Some(RowId::Added(_)) | None => None,
+        }
+    }
+
+    /// 見出しの行の、行の並びの位置（前書きの行を足し消しすると動く）。
+    fn header_line(&self) -> Option<u64> {
+        self.header_record()
+            .and_then(|record| self.rows.position_of(RowId::Source(record)))
+    }
+
+    /// 原本のレコードの数 `records` のときの、本体の行の数（行の並びの行の数から見出しを除く）。
+    fn body_lines(&self, records: u64) -> u64 {
+        body_count(self.rows.len(records), self.header_line())
     }
 
     /// 索引を作り終えていれば、レコードの数。
@@ -2484,13 +2513,10 @@ impl Document {
         let cut = self
             .cuts
             .iter()
-            .find(|cut| cut.record() == row.record())
+            .find(|cut| cut.record() == row.line())
             .copied();
         let column = self.source_column(cursor.column());
-        match self
-            .edits
-            .get(RowId::Source(row.record()), ColumnId::Source(column))
-        {
+        match self.edits.get(row.row(), ColumnId::Source(column)) {
             Some(CellValue::Text(value)) => return DetailContent::Value(value),
             Some(CellValue::Absent) => return DetailContent::Missing,
             None => {}
@@ -2518,7 +2544,7 @@ impl Document {
     ) -> Vec<DrawCommand> {
         let cursor = self.selection.cursor();
         let place = DetailPlace::new(
-            self.record_of(cursor.body()),
+            self.line_of(cursor.body()),
             self.source_column(cursor.column()),
             self.header()
                 .and_then(|header| header.cells().get(self.source_column(cursor.column())))
@@ -2537,7 +2563,7 @@ impl Document {
             format_status(self.format),
             self.widths.columns().len(),
             cursor_status(
-                self.record_of(cursor.body()),
+                self.line_of(cursor.body()),
                 self.source_column(cursor.column())
             )
         )
@@ -3029,8 +3055,8 @@ mod tests {
     #[test]
     fn the_header_is_frozen_and_left_out_of_the_body() {
         let document = headed();
-        assert_eq!(document.header().map(ViewRow::record), Some(0));
-        let records: Vec<u64> = document.view().rows().iter().map(ViewRow::record).collect();
+        assert_eq!(document.header().map(ViewRow::line), Some(0));
+        let records: Vec<u64> = document.view().rows().iter().map(ViewRow::line).collect();
         assert_eq!(records, vec![1, 2]);
         let frame = document.frame(normal(), palette());
         // 見出しは表の最初の行（タイトルバー 28 の下）、本体の最初の行はその下（行の高さ 25）。
@@ -3038,7 +3064,7 @@ mod tests {
         let (_, first) = text_at(&frame, "a");
         assert_eq!(id.origin().y(), 28);
         assert_eq!(first.origin().y(), 28 + 25);
-        assert_eq!(document.record_of(0), 1);
+        assert_eq!(document.line_of(0), 1);
     }
 
     #[test]
@@ -3082,7 +3108,7 @@ mod tests {
             DocumentEffect::Read { first_body: 91 }
         );
         assert_eq!(document.selection().cursor(), CellPosition::new(98, 1));
-        assert_eq!(document.record_of(91), 92);
+        assert_eq!(document.line_of(91), 92);
     }
 
     fn wide() -> Document {
@@ -3294,16 +3320,13 @@ mod tests {
     }
 
     fn copy_from(document: &mut Document, rows: &[Vec<String>]) -> Option<ClipboardText> {
-        let DocumentEffect::Copy {
-            first_record,
-            count,
-        } = document.apply(Intent::Copy, normal())
+        let DocumentEffect::Copy { first_line, count } = document.apply(Intent::Copy, normal())
         else {
             panic!("コピーなら読ませる");
         };
-        let end = usize::try_from(first_record + count).ok()?;
-        let start = usize::try_from(first_record).ok()?;
-        document.copy_text(first_record, rows.get(start..end)?, &[])
+        let end = usize::try_from(first_line + count).ok()?;
+        let start = usize::try_from(first_line).ok()?;
+        document.copy_text(first_line, rows.get(start..end)?, &[])
     }
 
     #[test]
@@ -3329,7 +3352,7 @@ mod tests {
         assert_eq!(
             document.apply(Intent::Copy, window),
             DocumentEffect::Copy {
-                first_record: 1,
+                first_line: 1,
                 count: 2
             }
         );
@@ -3713,7 +3736,7 @@ mod tests {
         assert_eq!(
             document.refresh_totals(),
             TotalsRequest::Read {
-                first_record: 1,
+                first_line: 1,
                 count: 2
             }
         );
@@ -3738,7 +3761,7 @@ mod tests {
         assert_eq!(
             document.refresh_totals(),
             TotalsRequest::Background {
-                first_record: 1,
+                first_line: 1,
                 count: MAX_TOTAL_ROWS + 1
             }
         );
@@ -4470,7 +4493,7 @@ mod tests {
         assert_eq!(
             document.apply(Intent::Copy, normal()),
             DocumentEffect::Copy {
-                first_record: 1,
+                first_line: 1,
                 count: 5_000
             }
         );
@@ -4484,8 +4507,8 @@ mod tests {
         document.report(JobReport::Finished(IndexSummary::new(1, None)));
         document.apply(Intent::SelectAll, normal());
         let effect = document.apply(Intent::Copy, normal());
-        if let DocumentEffect::Copy { first_record, .. } = effect {
-            assert_eq!(document.copy_text(first_record, &[], &[]), None);
+        if let DocumentEffect::Copy { first_line, .. } = effect {
+            assert_eq!(document.copy_text(first_line, &[], &[]), None);
         }
         assert_eq!(document.notice, Some(Notice::NothingToCopy));
     }
@@ -4896,6 +4919,59 @@ mod tests {
             document.cell_at(center(area), normal()),
             Some(CellPosition::new(1, 1))
         );
+    }
+
+    #[test]
+    fn rows_follow_the_row_order_and_an_added_row_can_be_written() {
+        let mut document = editable();
+        // 2 行目の前に 1 行足す（画面の操作は次の Issue。ここでは並びを直に変える）。
+        let added = document.rows.insert(1, 1);
+        assert_eq!(
+            document.runs_from(0, 4),
+            vec![
+                OrderRun::Source {
+                    first: 0,
+                    count: Some(1)
+                },
+                OrderRun::Added(vec![0]),
+                OrderRun::Source {
+                    first: 1,
+                    count: Some(2)
+                },
+            ]
+        );
+        // 合成ルートは区間ごとに読み、足した行はセルの無い行で渡す。
+        let rows = vec![
+            vec![String::from("0012"), String::from("東京")],
+            Vec::new(),
+            vec![String::from("b1"), String::from("b2")],
+        ];
+        document.show(0, &rows);
+        let ids: Vec<RowId> = document.view().rows().iter().map(ViewRow::row).collect();
+        assert_eq!(ids, vec![RowId::Source(0), added[0], RowId::Source(1)]);
+        // 足した行は表の幅まで空のセル。番号は上から通し番号（ADR 0027 の決定 1）。
+        assert_eq!(
+            document.view().rows()[1].cells(),
+            &[String::new(), String::new()]
+        );
+        assert_eq!(document.view().rows()[2].line(), 2);
+        document.apply(moving(CursorStep::Down), normal());
+        typed(&mut document, "new");
+        document.apply(Intent::Confirm, normal());
+        assert_eq!(
+            document.edits().get(added[0], ColumnId::Source(0)),
+            Some(&CellValue::Text(String::from("new")))
+        );
+        // 2 行目の「b1」は原本のレコード 1 のまま（位置は 2）。
+        document.apply(Intent::Edit, normal());
+        typed(&mut document, "!");
+        document.apply(Intent::Confirm, normal());
+        assert_eq!(
+            edited(&document, 1, 0),
+            Some(&CellValue::Text(String::from("b1!")))
+        );
+        // 2 回の確定でカーソルは 4 行目（原本のレコード 2）へ。
+        assert!(document.status().contains("4 行目"));
     }
 
     #[test]

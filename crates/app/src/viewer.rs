@@ -3,6 +3,7 @@
 use nene_ledger_application::clipboard_text::ClipboardText;
 use nene_ledger_application::close_state::CloseState;
 use nene_ledger_application::command_palette::CommandPalette;
+use nene_ledger_application::cut_record::CutRecord;
 use nene_ledger_application::document::Document;
 use nene_ledger_application::document_effect::DocumentEffect;
 use nene_ledger_application::format_summary::FormatSummary;
@@ -24,6 +25,7 @@ use nene_ledger_application::totals_request::TotalsRequest;
 use nene_ledger_application::window_view::WindowView;
 use nene_ledger_application::zoom_level::ZoomLevel;
 use nene_ledger_core::frame::Frame;
+use nene_ledger_core::order_run::OrderRun;
 use nene_ledger_core::pixel_point::PixelPoint;
 use nene_ledger_core::pixel_rect::PixelRect;
 use nene_ledger_core::preedit::Preedit;
@@ -31,11 +33,13 @@ use nene_ledger_scan::index_job::IndexJob;
 use nene_ledger_scan::index_outcome::IndexOutcome;
 use nene_ledger_scan::range_job::RangeJob;
 use nene_ledger_scan::range_outcome::RangeOutcome;
+use nene_ledger_scan::scan_failure::ScanFailure;
 use nene_ledger_store::save_job::SaveJob;
 
 use crate::open_palette::OpenPalette;
 use crate::preferences::Preferences;
 use crate::reader::Reader;
+use crate::rows::WINDOW_RECORDS;
 use crate::saving::{SavingFailure, describe, problem_of, start_saving};
 use crate::totals_fold::TotalsFold;
 use crate::warn;
@@ -170,22 +174,17 @@ impl Viewer {
         match effect {
             DocumentEffect::Stay => None,
             DocumentEffect::Read { first_body } => {
-                let first = self.document.record_of(first_body);
-                if let Ok(rows) = self.reader.read(first) {
-                    let (cells, cuts) = rows.into_parts();
+                let first = self.document.line_of(first_body);
+                if let Ok((cells, cuts)) = self.read_lines(first, WINDOW_RECORDS) {
                     self.document.show(first, &cells);
                     self.document.mark_cut(cuts);
                 }
                 None
             }
-            DocumentEffect::Copy {
-                first_record,
-                count,
-            } => {
+            DocumentEffect::Copy { first_line, count } => {
                 let count = usize::try_from(count).ok()?;
-                let rows = self.reader.read_count(first_record, count).ok()?;
-                let (rows, cuts) = rows.into_parts();
-                self.document.copy_text(first_record, &rows, &cuts)
+                let (rows, cuts) = self.read_lines(first_line, count).ok()?;
+                self.document.copy_text(first_line, &rows, &cuts)
             }
             DocumentEffect::StopTotals => {
                 if let Some(job) = &self.totals {
@@ -200,23 +199,42 @@ impl Viewer {
         }
     }
 
+    /// 行の並びの位置 `first_line` から `count` 行を、区間ごとに原本から読んで位置の順に並べる（ADR 0027）。足した行は
+    /// セルの無い行にする（`Document` が表の幅まで空のセルで埋める）。切り詰めたレコードの番号は位置に直す。
+    fn read_lines(
+        &self,
+        first_line: u64,
+        count: usize,
+    ) -> Result<(Vec<Vec<String>>, Vec<CutRecord>), ScanFailure> {
+        let mut cells: Vec<Vec<String>> = Vec::with_capacity(count);
+        let mut cuts = Vec::new();
+        let wanted = u64::try_from(count).unwrap_or(u64::MAX);
+        for run in self.document.runs_from(first_line, wanted) {
+            let line = first_line.saturating_add(u64::try_from(cells.len()).unwrap_or(u64::MAX));
+            match run {
+                OrderRun::Source { first, count: rows } => {
+                    let length = rows.map_or(count_left(wanted, &cells), widen_count);
+                    let (part, part_cuts) = self.reader.read_count(first, length)?.into_parts();
+                    cuts.extend(moved_cuts(part_cuts, first, line));
+                    cells.extend(part);
+                }
+                OrderRun::Added(rows) => cells.extend(rows.iter().map(|_| Vec::new())),
+            }
+        }
+        Ok((cells, cuts))
+    }
+
     /// 選んだ範囲が変わっていれば集計を作り直す（前の裏の計算は捨てる）。見えている行の外なら選んだ行を読み
     /// （読めなければ出さない）、大きければ裏で数え始める（始められなければ読めなかったと知らせる）。
     fn refresh_totals(&mut self) {
-        let (first_record, count, background) = match self.document.refresh_totals() {
+        let (first_line, count, background) = match self.document.refresh_totals() {
             TotalsRequest::Unchanged => return,
             TotalsRequest::Settled => {
                 self.totals = None;
                 return;
             }
-            TotalsRequest::Read {
-                first_record,
-                count,
-            } => (first_record, count, false),
-            TotalsRequest::Background {
-                first_record,
-                count,
-            } => (first_record, count, true),
+            TotalsRequest::Read { first_line, count } => (first_line, count, false),
+            TotalsRequest::Background { first_line, count } => (first_line, count, true),
         };
         // 前の仕事を手放す（中止して合流する）。
         self.totals = None;
@@ -227,12 +245,13 @@ impl Viewer {
         if background {
             let (bands, header) = self.document.totals_scope();
             let fold = TotalsFold::new(bands, header, self.reader.format());
-            match self.reader.spawn_fold(first_record, count, fold) {
+            // 裏の集計は行を足し消ししていないときだけ来る（位置は原本のレコードの番号と同じ）。
+            match self.reader.spawn_fold(first_line, count, fold) {
                 Ok(job) => self.totals = Some(job),
                 Err(_failure) => self.document.totals_report(SelectionTotals::Failed),
             }
-        } else if let Ok(rows) = self.reader.read_count(first_record, count) {
-            self.document.count_totals(first_record, rows.cells());
+        } else if let Ok((rows, _cuts)) = self.read_lines(first_line, count) {
+            self.document.count_totals(first_line, &rows);
         }
     }
 
@@ -571,4 +590,23 @@ impl Session for Viewer {
             None => self.document.pointer_shape(),
         }
     }
+}
+
+/// `wanted` 行のうち、まだ読んでいない行の数。
+fn count_left(wanted: u64, read: &[Vec<String>]) -> usize {
+    let left = wanted.saturating_sub(u64::try_from(read.len()).unwrap_or(u64::MAX));
+    usize::try_from(left).unwrap_or(usize::MAX)
+}
+
+/// 行の数を `usize` にする（収まらなければ最大）。
+fn widen_count(rows: u64) -> usize {
+    usize::try_from(rows).unwrap_or(usize::MAX)
+}
+
+/// 原本のレコード `first` から読んだ区間の、切り詰めたレコードの番号を、位置 `line` からの位置に直す。
+fn moved_cuts(cuts: Vec<CutRecord>, first: u64, line: u64) -> impl Iterator<Item = CutRecord> {
+    cuts.into_iter().map(move |cut| {
+        let moved = line.saturating_add(cut.record().saturating_sub(first));
+        CutRecord::new(moved, cut.total_bytes())
+    })
 }

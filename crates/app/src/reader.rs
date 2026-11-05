@@ -152,12 +152,7 @@ impl Reader {
         self.index = index;
     }
 
-    /// `first` からの窓の分の行を読み、表示の値にする。
-    pub(crate) fn read(&self, first: u64) -> Result<Rows, ScanFailure> {
-        self.read_count(first, WINDOW_RECORDS)
-    }
-
-    /// `first` からの `count` 個の行を読み、復号した値にする（コピー）。
+    /// `first` からの `count` 個の行を読み、復号した値にする（表示の窓・コピー・集計。行の並びの区間ごとに呼ぶ）。
     pub(crate) fn read_count(&self, first: u64, count: usize) -> Result<Rows, ScanFailure> {
         read_rows(
             &self.source,
