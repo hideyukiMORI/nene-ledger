@@ -5,6 +5,7 @@
 
 extern crate alloc;
 
+pub mod added_row_shape;
 pub mod bar_hit;
 pub mod bar_marks;
 pub mod body_mapping;
@@ -89,6 +90,7 @@ pub mod settings_file;
 pub mod settings_port;
 pub mod source_bytes;
 pub mod status_line;
+pub mod table_changes;
 pub mod table_extent;
 pub mod table_view;
 pub mod text_wrap;

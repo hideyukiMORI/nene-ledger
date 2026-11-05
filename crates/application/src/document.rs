@@ -7,6 +7,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::ops::RangeInclusive;
 
+use crate::added_row_shape::AddedRowShape;
 use crate::bar_hit::BarHit;
 use crate::bar_marks::BarMarks;
 use crate::body_mapping::{body_count, body_of, record_of};
@@ -62,6 +63,7 @@ use crate::selection_totals::SelectionTotals;
 use crate::status_line::{
     cursor_status, format_status, group_digits, index_status, notice_status, totals_status,
 };
+use crate::table_changes::TableChanges;
 use crate::table_extent::TableExtent;
 use crate::table_view::TableView;
 use crate::thumb_state::ThumbState;
@@ -79,6 +81,7 @@ use nene_ledger_core::display_width::display_columns;
 use nene_ledger_core::draw_command::DrawCommand;
 use nene_ledger_core::frame::Frame;
 use nene_ledger_core::glyph_metrics::GlyphMetrics;
+use nene_ledger_core::line_ending::LineEnding;
 use nene_ledger_core::palette::Palette;
 use nene_ledger_core::pixel_point::PixelPoint;
 use nene_ledger_core::pixel_rect::PixelRect;
@@ -86,6 +89,7 @@ use nene_ledger_core::pixel_size::PixelSize;
 use nene_ledger_core::pointer_point::PointerPoint;
 use nene_ledger_core::preedit::Preedit;
 use nene_ledger_core::row_id::RowId;
+use nene_ledger_core::row_order::RowOrder;
 use nene_ledger_core::scroll_axis::ScrollAxis;
 use nene_ledger_core::table_layout::{GRID_LINE, TableLayout};
 use nene_ledger_core::text_role::TextRole;
@@ -117,6 +121,8 @@ pub struct Document {
     custom: BTreeMap<usize, u32>,
     /// 指が見出しの列の境目の上にあるか（カーソルの形）。
     grip: bool,
+    /// 行の並び（ADR 0024 の層 1・ADR 0027）。
+    rows: RowOrder,
     /// 書き換えたセル（ADR 0024 の層 2）。画面の表は原本 ＋ これから作る派生値。
     edits: CellEdits,
     /// 編集中のセル（ADR 0026）。
@@ -202,6 +208,7 @@ impl Document {
             index: JobState::Waiting,
             custom: BTreeMap::new(),
             grip: false,
+            rows: RowOrder::whole(),
             edits: CellEdits::empty(),
             editor: None,
             saving: false,
@@ -214,6 +221,18 @@ impl Document {
     #[must_use]
     pub const fn edits(&self) -> &CellEdits {
         &self.edits
+    }
+
+    /// 保存に渡す差分の全部（行の並び・セルの書き換え・足した行の書き方・ADR 0027 の決定 5）。
+    #[must_use]
+    pub fn changes(&self) -> TableChanges<'_> {
+        let ending = self
+            .format
+            .line_endings()
+            .dominant()
+            .unwrap_or(LineEnding::CrLf);
+        let shape = AddedRowShape::new(self.widths.columns().len(), ending);
+        TableChanges::new(&self.rows, &self.edits, shape)
     }
 
     /// 編集中のセル。
@@ -331,6 +350,7 @@ impl Document {
         // 履歴は残し、触ったセルのファイルの値を保存した値に進める（保存の後も元に戻せる）。
         self.history.saved(&self.edits);
         self.edits = CellEdits::empty();
+        self.rows = RowOrder::whole();
         self.editor = None;
         self.index = JobState::Waiting;
         self.notice = Some(Notice::Saved);

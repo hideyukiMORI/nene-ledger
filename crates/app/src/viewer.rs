@@ -81,7 +81,7 @@ impl Viewer {
 
     /// 書き換えの保存を裏で始める。始められなければ理由を知らせる。
     fn start_saving(&mut self) {
-        match start_saving(self.document.edits(), &self.reader) {
+        match start_saving(self.document.changes(), &self.reader) {
             Ok(job) => {
                 self.saving = Some(job);
                 self.document.begin_saving();
