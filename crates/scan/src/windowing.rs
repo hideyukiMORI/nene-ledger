@@ -114,7 +114,9 @@ fn record_spans(
             }
             return Ok(spans(&wanted, RecordLength::Exact(end)));
         }
-        for start in block_starts(&mut starts, &block) {
+        // 🔴 始まりを 1 つずつ取り出し、要る数がそろったらそこで返す。塊の全部を先に切ると、窓ごとに 1 MiB を切る
+        // 手間がかかる（空行だけの 100 MB の `--dump` で 575 s・GitHub Issue #23）。
+        for start in block.iter().filter_map(|&byte| starts.step(byte)) {
             if seen == last {
                 return Ok(spans(&wanted, RecordLength::Exact(start)));
             }
@@ -164,11 +166,6 @@ fn spans(starts: &[u64], tail: RecordLength) -> Vec<RecordSpan> {
             }
         })
         .collect()
-}
-
-/// 塊の中でレコードが始まる、原本の中のバイト位置。
-fn block_starts(starts: &mut RecordStarts, block: &[u8]) -> Vec<u64> {
-    block.iter().filter_map(|&byte| starts.step(byte)).collect()
 }
 
 /// 1 レコードを、上限までだけ読んで切る。
