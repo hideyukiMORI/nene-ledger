@@ -1,6 +1,7 @@
 //! 方言の判別に確信が無いときの、上位 2 つの点数。
 
 use nene_ledger_core::detection::Detection;
+use nene_ledger_core::dialect_candidate::DialectCandidate;
 
 /// 方言の判別に確信が無いときの、1 位と 2 位の点数（千分率）。開いたときに状態の行で知らせ、候補から選ぶ入口を示す（FR-023・Issue #3）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -10,20 +11,20 @@ pub(crate) struct DialectDoubt {
 }
 
 impl DialectDoubt {
-    /// 判別 `detection` に確信が無ければ、その上位 2 つの点数。確信があれば `None`。候補が足りなければ 0 点。
+    /// 判別 `detection` に確信が無ければ、1 位と、競う候補（`Detection::rival`・引用の逃がし方だけが違う候補は除く）の
+    /// 点数。確信があれば `None`。1 位が 0 点（どの区切りでも 1 列にしか切れない・空のファイル）なら、迷う読み方が
+    /// 無いので知らせない（GitHub Issue #24）。
     pub(crate) fn of(detection: &Detection) -> Option<Self> {
-        if detection.confident() {
+        let top = detection
+            .candidates()
+            .first()
+            .map_or(0, |candidate| candidate.score());
+        if detection.confident() || top == 0 {
             return None;
         }
-        let score = |rank: usize| {
-            detection
-                .candidates()
-                .get(rank)
-                .map_or(0, |candidate| candidate.score())
-        };
         Some(Self {
-            top: score(0),
-            second: score(1),
+            top,
+            second: detection.rival().map_or(0, DialectCandidate::score),
         })
     }
 
@@ -53,5 +54,15 @@ mod tests {
         assert_eq!(doubt.top(), tie.candidates()[0].score());
         assert_eq!(doubt.second(), tie.candidates()[1].score());
         assert!(doubt.top().saturating_sub(doubt.second()) < 100);
+    }
+
+    /// 空のファイルと 1 列のファイルは、迷う読み方が無いので知らせない（GitHub Issue #24）。
+    #[test]
+    fn nothing_to_doubt_in_an_empty_or_single_column_file() {
+        assert_eq!(DialectDoubt::of(&Detection::of(b"")), None);
+        assert_eq!(
+            DialectDoubt::of(&Detection::of(b"alpha\nbeta\ngamma\n")),
+            None
+        );
     }
 }
