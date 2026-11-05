@@ -22,18 +22,26 @@ pub struct Source {
 impl Source {
     /// `path` を読むだけで開く。
     ///
+    /// 🔴 普通のファイルだけを開く。デバイス（`/dev/zero`）や名前つきの管は大きさが分からず、読み出しが空に
+    /// ならないものもあるので、索引が終わらない（GitHub Issue #25）。
+    ///
     /// # Errors
     ///
-    /// 開けない・大きさを読めないとき。
+    /// 開けない・大きさを読めない・普通のファイルでない（`ErrorKind::InvalidInput`）とき。
     pub fn open(path: &Path) -> Result<Self, ScanFailure> {
         let file = reading_options()
             .open(path)
             .map_err(|error| ScanFailure::Open(error.kind()))?;
-        let len = file
+        let metadata = file
             .metadata()
-            .map_err(|error| ScanFailure::Open(error.kind()))?
-            .len();
-        Ok(Self { file, len })
+            .map_err(|error| ScanFailure::Open(error.kind()))?;
+        if !metadata.is_file() {
+            return Err(ScanFailure::Open(ErrorKind::InvalidInput));
+        }
+        Ok(Self {
+            file,
+            len: metadata.len(),
+        })
     }
 
     /// 同じ原本を別に読む口（裏の仕事に渡す）。位置を指定して読むので、読む位置を共有しない。

@@ -108,6 +108,19 @@ mod reading {
         (marks, u64::try_from(records.len()).unwrap())
     }
 
+    /// 普通のファイルでないもの（ディレクトリ・デバイス）は開かない（GitHub Issue #25。`/dev/zero` で索引が終わらなかった）。
+    #[test]
+    fn only_regular_files_are_opened() {
+        let directory = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+        assert!(Source::open(&directory).is_err());
+        #[cfg(unix)]
+        assert_eq!(
+            Source::open(std::path::Path::new("/dev/zero")).unwrap_err(),
+            nene_ledger_scan::scan_failure::ScanFailure::Open(std::io::ErrorKind::InvalidInput)
+        );
+        assert!(Source::open(&fixture("regular", b"a,b\n")).is_ok());
+    }
+
     #[test]
     fn index_matches_the_reference_for_any_block_size() {
         let input = sample(5000);
