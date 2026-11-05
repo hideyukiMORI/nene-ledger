@@ -151,7 +151,9 @@ impl CommandPalette {
             | Intent::InsertRows(_)
             | Intent::RemoveRows
             | Intent::InsertColumns(_)
-            | Intent::RemoveColumns => PaletteOutcome::Stay,
+            | Intent::RemoveColumns
+            | Intent::InsertHere
+            | Intent::RemoveHere => PaletteOutcome::Stay,
         }
     }
 

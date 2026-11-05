@@ -337,7 +337,9 @@ impl Document {
             | Intent::InsertRows(_)
             | Intent::RemoveRows
             | Intent::InsertColumns(_)
-            | Intent::RemoveColumns => None,
+            | Intent::RemoveColumns
+            | Intent::InsertHere
+            | Intent::RemoveHere => None,
         };
         Some(choice.map_or(DocumentEffect::Stay, |choice| self.choose_close(choice)))
     }
@@ -607,6 +609,8 @@ impl Document {
                     | Intent::RemoveRows
                     | Intent::InsertColumns(_)
                     | Intent::RemoveColumns
+                    | Intent::InsertHere
+                    | Intent::RemoveHere
             )
         {
             self.notice = Some(Notice::StillSaving);
@@ -657,7 +661,9 @@ impl Document {
             | Intent::InsertRows(_)
             | Intent::RemoveRows
             | Intent::InsertColumns(_)
-            | Intent::RemoveColumns => current,
+            | Intent::RemoveColumns
+            | Intent::InsertHere
+            | Intent::RemoveHere => current,
             Intent::SelectAll
             | Intent::SelectRows
             | Intent::SelectColumns
@@ -701,8 +707,13 @@ impl Document {
             return Some(self.insert_columns(place, window));
         }
         match intent {
-            Intent::RemoveRows => Some(self.remove_rows(window)),
             Intent::RemoveColumns => Some(self.remove_columns(window)),
+            Intent::RemoveHere if self.columns_chosen() => Some(self.remove_columns(window)),
+            Intent::RemoveRows | Intent::RemoveHere => Some(self.remove_rows(window)),
+            Intent::InsertHere if self.columns_chosen() => {
+                Some(self.insert_columns(ColumnPlace::Left, window))
+            }
+            Intent::InsertHere => Some(self.insert_rows(RowPlace::Above, window)),
             Intent::Scroll(_)
             | Intent::Move { .. }
             | Intent::Point { .. }
@@ -772,6 +783,8 @@ impl Document {
             | Intent::RemoveRows
             | Intent::InsertColumns(_)
             | Intent::RemoveColumns
+            | Intent::InsertHere
+            | Intent::RemoveHere
             | Intent::Point { .. }
             | Intent::GoTo(_)
             | Intent::OpenGoTo
@@ -866,7 +879,9 @@ impl Document {
             | Intent::InsertRows(_)
             | Intent::RemoveRows
             | Intent::InsertColumns(_)
-            | Intent::RemoveColumns => Some(intent),
+            | Intent::RemoveColumns
+            | Intent::InsertHere
+            | Intent::RemoveHere => Some(intent),
         }
     }
 
@@ -1038,6 +1053,15 @@ impl Document {
                 self.after_rows_changed(body, window)
             }
         }
+    }
+
+    /// Ctrl++ と Ctrl+- が列に効くか（列全体を選んでいて、行全体ではない・ADR 0027 の決定 2）。すべてを選んでいれば行。
+    fn columns_chosen(&self) -> bool {
+        let (top, bottom) = (self.selection.top_left(), self.selection.bottom_right());
+        let last_column = self.widths.columns().len().saturating_sub(1);
+        let whole_columns = top.body() == 0 && bottom.body() == TO_END;
+        let whole_rows = top.column() == 0 && bottom.column() == last_column;
+        whole_columns && !whole_rows
     }
 
     /// 足し消しする表の列（最初・最後・数）。列全体を選んでいれば選んだ列、そうでなければカーソルの列。
@@ -1384,7 +1408,9 @@ impl Document {
             | Intent::InsertRows(_)
             | Intent::RemoveRows
             | Intent::InsertColumns(_)
-            | Intent::RemoveColumns => {}
+            | Intent::RemoveColumns
+            | Intent::InsertHere
+            | Intent::RemoveHere => {}
         }
     }
 
@@ -1589,7 +1615,9 @@ impl Document {
             | Intent::InsertRows(_)
             | Intent::RemoveRows
             | Intent::InsertColumns(_)
-            | Intent::RemoveColumns => None,
+            | Intent::RemoveColumns
+            | Intent::InsertHere
+            | Intent::RemoveHere => None,
         }
     }
 
@@ -5619,6 +5647,32 @@ mod tests {
         reread(&mut document, &three_rows());
         assert_eq!(header_cells(&document), ["a", "b", "c"]);
         assert_eq!(document.widths.columns().len(), 3);
+    }
+
+    #[test]
+    fn control_plus_and_minus_act_on_columns_only_when_whole_columns_are_chosen() {
+        let mut document = three();
+        document.report(JobReport::Finished(IndexSummary::new(3, None)));
+        // セルだけを選んでいれば行（カーソルの行の上に足す・その行を消す）。
+        document.apply(Intent::InsertHere, normal());
+        assert!(!document.rows.is_whole());
+        assert!(document.columns.is_whole());
+        document.apply(Intent::RemoveHere, normal());
+        assert!(document.rows.is_whole());
+        // 列全体を選んでいれば列。
+        document.apply(Intent::SelectColumns, normal());
+        document.apply(Intent::InsertHere, normal());
+        assert!(!document.columns.is_whole());
+        document.apply(Intent::SelectColumns, normal());
+        document.apply(Intent::RemoveHere, normal());
+        assert!(document.columns.is_whole());
+        // すべてを選んでいれば行。
+        document.apply(Intent::SelectAll, normal());
+        document.apply(Intent::RemoveHere, normal());
+        text_at(
+            &document.frame(normal(), palette()),
+            "2 行を消しました（Ctrl+Z で戻す）",
+        );
     }
 
     #[test]
