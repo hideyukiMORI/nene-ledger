@@ -4,12 +4,16 @@
 use std::ops::ControlFlow;
 use std::path::Path;
 
+use nene_ledger_application::added_row_shape::AddedRowShape;
 use nene_ledger_application::file_stamp::FileStamp;
 use nene_ledger_application::replace_failure::ReplaceFailure;
 use nene_ledger_application::save_plan_failure::SavePlanFailure;
 use nene_ledger_application::save_planning::save_plan;
 use nene_ledger_application::save_problem::SaveProblem;
+use nene_ledger_application::table_changes::TableChanges;
 use nene_ledger_core::cell_edits::CellEdits;
+use nene_ledger_core::line_ending::LineEnding;
+use nene_ledger_core::row_order::RowOrder;
 use nene_ledger_core::text_format::TextFormat;
 use nene_ledger_scan::block_size::BlockSize;
 use nene_ledger_scan::index_outcome::IndexOutcome;
@@ -50,6 +54,7 @@ impl From<OpenFailure> for SavingFailure {
 /// 書き換えが無ければ、原本の全体を写して置き換える（`--resave`・KEEP-02 の実測）。置き換えに失敗したら、
 /// 途中で止まった（`Interrupted`）とき以外は一時ファイルを消す（再試行を尋ねる画面はまだ無い）。
 pub(crate) fn save_edited(path: &Path, edits: &CellEdits) -> Result<(), SavingFailure> {
+    let rows = RowOrder::whole();
     // 🔴 印は開く前に取る。開いた後で変わっていれば、保存の前に違いが分かる（FILE-01）。
     let opened = stamp_of(path).map_err(|kind| SavingFailure::Save(SaveFailure::Target(kind)))?;
     let source = Source::open(path).map_err(OpenFailure::from)?;
@@ -60,7 +65,9 @@ pub(crate) fn save_edited(path: &Path, edits: &CellEdits) -> Result<(), SavingFa
         finished_index(&source, format)?
     };
     let mut lookup = ScanLookup::new(&source, &index, format);
-    let plan = save_plan(edits, &mut lookup, source.len(), format.dialect())
+    // 端末からの保存は行を足し消ししないので、足した行の書き方は使わない。
+    let changes = TableChanges::new(&rows, edits, AddedRowShape::new(1, LineEnding::CrLf));
+    let plan = save_plan(changes, &mut lookup, source.len(), format.dialect())
         .map_err(SavingFailure::Plan)?;
     let mut bytes = ScanBytes::new(source.try_clone().map_err(OpenFailure::from)?);
     let saved = save_with_os(path, (&plan, format, opened), &mut bytes);
@@ -74,7 +81,10 @@ pub(crate) fn save_edited(path: &Path, edits: &CellEdits) -> Result<(), SavingFa
 
 /// 窓の保存（Ctrl+S・ADR 0026 の決定 6）を始める。計画はここ（画面のスレッド）で作り、書いて置き換えるのは裏の仕事。
 /// 比べる印は、読み手が開く前に取ったもの（開いた後の外からの変更を見つける・FILE-01）。
-pub(crate) fn start_saving(edits: &CellEdits, reader: &Reader) -> Result<SaveJob, SavingFailure> {
+pub(crate) fn start_saving(
+    changes: TableChanges<'_>,
+    reader: &Reader,
+) -> Result<SaveJob, SavingFailure> {
     let opened = reader
         .opened()
         .ok_or(SavingFailure::Save(SaveFailure::Target(
@@ -88,8 +98,13 @@ pub(crate) fn start_saving(edits: &CellEdits, reader: &Reader) -> Result<SaveJob
     let format = reader.format();
     let plan = {
         let mut lookup = reader.lookup();
-        save_plan(edits, &mut lookup, reader.source_length(), format.dialect())
-            .map_err(SavingFailure::Plan)?
+        save_plan(
+            changes,
+            &mut lookup,
+            reader.source_length(),
+            format.dialect(),
+        )
+        .map_err(SavingFailure::Plan)?
     };
     let bytes = ScanBytes::new(reader.source_copy().map_err(OpenFailure::from)?);
     #[cfg(windows)]

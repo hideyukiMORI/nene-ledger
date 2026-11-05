@@ -23,6 +23,11 @@ pub enum SavePlanFailure<F> {
         /// セルの番号。
         column: usize,
     },
+    /// 足した行の値が、その方言では書けない（`Plain` の方言で区切りか改行を含む）。
+    UnwritableAdded {
+        /// セルの番号。
+        column: usize,
+    },
     /// この版ではまだ保存できない書き換え（足した行と列・「セルが無い」への書き換え。ADR 0024 の層 1）。
     Unsupported,
 }
