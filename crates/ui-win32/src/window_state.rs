@@ -16,8 +16,9 @@ use nene_ledger_core::pixel_point::PixelPoint;
 use nene_ledger_core::pixel_size::PixelSize;
 use nene_ledger_core::window_chrome::WindowChrome;
 use nene_ledger_core::window_placement::WindowPlacement;
-use windows::Win32::Foundation::HWND;
+use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::Graphics::Gdi::InvalidateRect;
+use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_CLOSE};
 
 use crate::clipboard;
 use crate::pen::Pen;
@@ -155,6 +156,30 @@ impl<'session> WindowState<'session> {
             let _placed = clipboard::put(self.window, text.as_str());
         }
         self.invalidate();
+        self.follow_finish();
+    }
+
+    /// 閉じるよう求められた（`WM_CLOSE`）。すぐ閉じてよければ `true`。だめなら尋ねる画面を描き直す（ADR 0026）。
+    pub(crate) fn close(&mut self) -> bool {
+        let closing = self.session.close();
+        if !closing {
+            self.invalidate();
+        }
+        closing
+    }
+
+    /// 描く相手が閉じると決めたら、`WM_CLOSE` を積む（借用を手放した後に、閉じる頼みとして届く）。
+    #[expect(
+        unsafe_code,
+        reason = "RS-010: Win32 の PostMessageW で自分の窓に WM_CLOSE を積む（ADR 0002 の 4）"
+    )]
+    fn follow_finish(&self) {
+        if !self.session.finished() {
+            return;
+        }
+        // SAFETY: 自分の窓へ、値だけのメッセージを積む。
+        let _posted: Result<(), _> =
+            unsafe { PostMessageW(Some(self.window), WM_CLOSE, WPARAM(0), LPARAM(0)) };
     }
 
     /// 中身の上の左のボタンを押した（離すまで、動きはドラッグとして渡す）。
@@ -217,6 +242,7 @@ impl<'session> WindowState<'session> {
         let view = self.view();
         self.session.refresh(view);
         self.invalidate();
+        self.follow_finish();
     }
 
     /// 時計の刻み（`WM_TIMER`）。数えてから取り込ませる。

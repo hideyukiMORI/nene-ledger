@@ -597,6 +597,22 @@ Shift_JIS・縦棒区切りの見本（`crates/app/fixtures/shift-jis-pipe.csv`�
 
 🔴 **正直に:** Windows の実機（`ReplaceFileW`・Excel が開いているときの止まり方）は未確認。保存の進み具合と中止（SAVE-02）・別名で保存・閉じるときに尋ねる画面はまだ。保存の後は Undo の履歴が無い（UNDO-01 がまだ）。
 
+## 59. 未保存のまま閉じるときに尋ねる（GitHub Issue #73・ADR 0026 の決定 7）— 仮想の X サーバでの確認（QLT-013）
+
+`id,name` の 3 行（CRLF）を debug の窓で開き、xdotool でキーを送り、タイトルバーの × を押した（押して 150 ms 後に離す・2026-11-05）。
+
+| 操作 | 結果 |
+| --- | --- |
+| ↓ → `zz` Enter → × | 窓の真ん中に `直したセルが保存されていません。閉じる前に保存しますか？` と 3 つのボタン（`保存して閉じる (S)`・`保存しないで閉じる (D)`・`やめる (Esc)`）。窓は閉じない |
+| Esc | 尋ねる画面が消え、窓は残る |
+| × → S | 保存してから窓が閉じる。ファイルの 3 行目が `2,zz\r\n`（ほかの行は元のまま） |
+| （開き直して）↓ `9` Enter → × → D | 保存せずに閉じる。ファイルは変わらない |
+| （開き直して）× | 書き換えが無いので、尋ねずにすぐ閉じる |
+
+選び方（Enter・S・D・Esc・ボタンを押す）・保存に失敗したら閉じないこと・保存の途中で閉じようとしたときは application のテスト（`closing_with_edits_asks_and_escape_keeps_the_window`・`a_failed_save_does_not_close`・`closing_while_saving_asks_and_save_closes_after_it` など）。
+
+🔴 **正直に:** 窓の管理者からの閉じる頼み（`WM_DELETE_WINDOW`）は、Xvfb に窓の管理者が居ないので試していない（× のボタンと同じ `close` を通る）。Windows の `WM_CLOSE`（× と Alt+F4）は `make lint-windows` の型検査だけ。
+
 ## 7. active の規則と、その証明
 
 CNF-009 は active の規則ごとに `| ID |` で始まる行がここにあることを要求する。
