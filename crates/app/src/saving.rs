@@ -4,6 +4,7 @@
 use std::ops::ControlFlow;
 use std::path::Path;
 
+use nene_ledger_application::file_stamp::FileStamp;
 use nene_ledger_application::replace_failure::ReplaceFailure;
 use nene_ledger_application::save_plan_failure::SavePlanFailure;
 use nene_ledger_application::save_planning::save_plan;
@@ -17,6 +18,7 @@ use nene_ledger_scan::source::Source;
 use nene_ledger_scan::sparse_index::SparseIndex;
 use nene_ledger_store::save_failure::SaveFailure;
 use nene_ledger_store::saving::{discard, save};
+use nene_ledger_store::stamping::stamp_of;
 
 use crate::open_failure::OpenFailure;
 use crate::opening::guess_format;
@@ -45,6 +47,8 @@ impl From<OpenFailure> for SavingFailure {
 /// 書き換えが無ければ、原本の全体を写して置き換える（`--resave`・KEEP-02 の実測）。置き換えに失敗したら、
 /// 途中で止まった（`Interrupted`）とき以外は一時ファイルを消す（再試行を尋ねる画面はまだ無い）。
 pub(crate) fn save_edited(path: &Path, edits: &CellEdits) -> Result<(), SavingFailure> {
+    // 🔴 印は開く前に取る。開いた後で変わっていれば、保存の前に違いが分かる（FILE-01）。
+    let opened = stamp_of(path).map_err(|kind| SavingFailure::Save(SaveFailure::Target(kind)))?;
     let source = Source::open(path).map_err(OpenFailure::from)?;
     let format = guess_format(&source)?.format();
     let index = if edits.is_empty() {
@@ -56,7 +60,7 @@ pub(crate) fn save_edited(path: &Path, edits: &CellEdits) -> Result<(), SavingFa
     let plan = save_plan(edits, &mut lookup, source.len(), format.dialect())
         .map_err(SavingFailure::Plan)?;
     let mut bytes = ScanBytes::new(&source);
-    let saved = save_with_os(path, (&plan, format), &mut bytes);
+    let saved = save_with_os(path, (&plan, format, opened), &mut bytes);
     if let Err(SaveFailure::Replace { failure, temporary }) = &saved
         && *failure != ReplaceFailure::Interrupted
     {
@@ -84,6 +88,12 @@ pub(crate) fn describe(failure: &SavingFailure) -> String {
         SavingFailure::Save(SaveFailure::Replace { failure, .. }) => {
             format!("置き換えられなかった（{failure:?}）。原本は元のまま")
         }
+        SavingFailure::Save(SaveFailure::ChangedOutside) => String::from(
+            "開いた後にほかのアプリがファイルを変えたので、保存しなかった（原本は元のまま）",
+        ),
+        SavingFailure::Save(SaveFailure::Blocked(_)) => String::from(
+            "ほかのアプリがファイルを開いているので、保存を始めなかった（原本は元のまま）",
+        ),
         SavingFailure::Save(save) => format!("保存できなかった: {save:?}"),
     }
 }
@@ -103,14 +113,18 @@ fn finished_index(source: &Source, format: TextFormat) -> Result<SparseIndex, Op
 /// OS の置き換え（Linux は `rename`・Windows は `ReplaceFileW`・施主の判断 1）で保存する。
 fn save_with_os(
     path: &Path,
-    (plan, format): (&nene_ledger_core::save_plan::SavePlan, TextFormat),
+    (plan, format, opened): (
+        &nene_ledger_core::save_plan::SavePlan,
+        TextFormat,
+        FileStamp,
+    ),
     bytes: &mut ScanBytes<'_>,
 ) -> Result<(), SaveFailure> {
     #[cfg(windows)]
     let replacing = nene_ledger_adapters_windows::file_replacing::FileReplacing;
     #[cfg(not(windows))]
     let replacing = nene_ledger_store::rename_replacing::RenameReplacing;
-    save(path, (plan, format.encoding()), bytes, &replacing)
+    save(path, (plan, format.encoding(), opened), bytes, &replacing)
 }
 
 #[cfg(test)]
