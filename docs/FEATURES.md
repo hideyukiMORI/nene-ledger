@@ -67,7 +67,7 @@
 
 | 番号 | 機能 | フェーズ | 状態 | FR | 競合 | 根拠 |
 | --- | --- | --- | --- | --- | --- | --- |
-| BIG-01 | 大きさに依らず最初の画面がすぐ出る（先頭を切るだけ） | 1 | 実装済み | FR-004 | 一部 | 速さ・EmEditor / CSView・索引を待たずに先頭を出す（Issue #20）。巨大なレコードの所で止まる（Issue #23・gate-proofs 第 16 節の約 300 MB）。100 万行でも動く（第 36 節）。Windows は Issue #59（gate-proofs 第 46 節）・100 万行と約 300 MB。最初の画面の時間の測定（BIG-11）はまだ |
+| BIG-01 | 大きさに依らず最初の画面がすぐ出る（先頭を切るだけ） | 1 | 実装済み | FR-004 | 一部 | 速さ・EmEditor / CSView・索引を待たずに先頭を出す（Issue #20）。巨大なレコードの所で止まる（Issue #23・gate-proofs 第 16 節の約 300 MB）。止まるのは索引がその後ろを数えていないときだけで、作り終えた索引があれば 1 MiB を超えるレコードは切り詰めて後ろも返す（GitHub Issue #13・scan の `the_records_after_a_long_closed_cell_are_returned`・`without_the_index_a_long_record_stops_the_window_at_the_limit`・`an_unclosed_quote_to_the_end_stops_at_the_limit_even_with_the_index`）。100 万行でも動く（第 36 節）。Windows は Issue #59（gate-proofs 第 46 節）・100 万行と約 300 MB。最初の画面の時間の測定（BIG-11）はまだ |
 | BIG-02 | 行の索引を裏で作り、進み具合を見せる。作り終わる前から閲覧できる（編集は BIG-12・Issue #51） | 1 | 未着手 | FR-004 | 少 | 速さ・EmEditor・裏の索引と進み具合は Issue #21（gate-proofs 第 14 節）、作り終える前の閲覧は Issue #22。作り終える前の編集は BIG-12 に分けた（Issue #51） |
 | BIG-03 | 見えている行と列だけを描く（行も列も） | 1 | 確認済み | FR-004 | 多 | 文献・落とし穴 24・見えている範囲だけを索引の目印から読み（Issue #22・gate-proofs 第 15 節）、窓の外の列は描かない（Issue #19・#26）。横の移動は Issue #28（第 19 節）。Windows は Issue #59（gate-proofs 第 46 節） |
 | BIG-04 | メモリはファイルの大きさでなく索引に比例（閲覧。編集の差分は BIG-13・Issue #51） | 1 | 未着手 | FR-004 | 少 | 速さ・Modern の読み取り専用・まばらな索引（Issue #11）と、持ち越すのは状態だけ（Issue #13。256 MiB の閉じない引用符で最大常駐 3,784 KB を 1 回実測）。窓を含めた記憶の倍率の測定（BIG-11）はまだ。差分は BIG-13 |

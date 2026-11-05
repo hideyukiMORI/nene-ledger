@@ -32,7 +32,7 @@ pub fn read_records(
     range: RecordRange,
 ) -> Result<RecordWindow, ScanFailure> {
     let mark = nearest_mark(source, index, format, range.first())?;
-    read_records_from(source, format, mark, range)
+    read_records_from(source, (index, format), mark, range)
 }
 
 /// レコード `record` の前で最も近い目印。目印が無ければ BOM の後ろ。
@@ -52,19 +52,20 @@ pub(crate) fn nearest_mark(
     }
 }
 
-/// `range` のレコードを、目印 `mark`（`range` より前）から切って返す。
+/// `range` のレコードを、目印 `mark`（`range` より前）から切って返す。`index` は、上限を超えたレコードの
+/// 後ろを探すかと、`Literal` で読み直す引用符の位置に使う（目印は引かない）。
 ///
 /// # Errors
 ///
 /// 読み出しの失敗。
 pub(crate) fn read_records_from(
     source: &Source,
-    format: TextFormat,
+    (index, format): (&SparseIndex, TextFormat),
     mark: Mark,
     range: RecordRange,
 ) -> Result<RecordWindow, ScanFailure> {
     let dialect = format.dialect();
-    let spans = record_spans(source, dialect, mark, range)?;
+    let spans = record_spans(source, (index, dialect), mark, range)?;
     let records = spans
         .into_iter()
         .filter_map(|span| read_one(source, dialect, span).transpose())
@@ -74,13 +75,16 @@ pub(crate) fn read_records_from(
 
 /// `mark` から切り進めて、`range` の各レコードの始まりと長さ。範囲がファイルの外なら空。
 ///
-/// 終わりは次のレコードの始まりか、ファイルの終わり。🔴 範囲の中のレコードが `RECORD_READ_LIMIT` を超えたら、
-/// その先は探さずに止める（そのレコードは `MoreThan`・それより後ろは返さない）。閉じない引用符で
-/// ファイルの残り全部が 1 つのレコードになっても、手間は上限で抑えられる（BIG-01・Issue #23）。
-/// 方言が `UnclosedQuote::Literal` なら、ファイルの終わりで閉じなかった引用符の次から読み直す（ADR 0018）。
+/// 終わりは次のレコードの始まりか、ファイルの終わり。範囲の中のレコードが `RECORD_READ_LIMIT` を超えても、
+/// 索引がその後ろにレコードを数えていれば、終わりまで切り進めて後ろも返す（読むのは上限まで・GitHub Issue #13）。
+/// 🔴 索引が後ろを知らない（作り終える前・最後のレコード）なら、その先は探さずに止める（そのレコードは
+/// `MoreThan`）。閉じない引用符でファイルの残り全部が 1 つのレコードになっても、手間は上限で抑えられる
+/// （BIG-01・公開前の Issue #23）。手間は索引が既に読んだ長さを超えない。
+/// 方言が `UnclosedQuote::Literal` なら、索引が覚えている閉じなかった引用符はその場で、まだ覚えていなければ
+/// ファイルの終わりで、引用符の次から読み直す（ADR 0018 の決定 4）。
 fn record_spans(
     source: &Source,
-    dialect: Dialect,
+    (index, dialect): (&SparseIndex, Dialect),
     mark: Mark,
     range: RecordRange,
 ) -> Result<Vec<RecordSpan>, ScanFailure> {
@@ -119,11 +123,29 @@ fn record_spans(
             }
             seen = seen.saturating_add(1);
         }
-        let current = wanted.last().copied();
-        if current.is_some_and(|start| starts.position().saturating_sub(start) > limit) {
+        if reread_known_literal(&mut starts, index) {
+            continue;
+        }
+        let long = wanted
+            .last()
+            .is_some_and(|&start| starts.position().saturating_sub(start) > limit);
+        // 今のレコードの番号は mark.record() + seen - 1。索引がその次を数えていなければ止める。
+        if long && index.records() <= mark.record().saturating_add(seen) {
             return Ok(spans(&wanted, RecordLength::MoreThan(limit)));
         }
     }
+}
+
+/// 引用の中にいて、その引用符を索引が「入力の終わりまで閉じなかった」と覚えていれば、方言が `Literal` なら
+/// 入力の終わりを待たずに引用符の次から読み直す（読み直したら `true`）。
+///
+/// 索引も同じ状態機械で切っており、閉じなかった引用符から先は入力の終わりまで引用の中にいてレコードの始まりが
+/// 無いので、ここで読み直しても、終わりで読み直すのと同じレコードになる。`ToEnd` では何もしない。
+fn reread_known_literal(starts: &mut RecordStarts, index: &SparseIndex) -> bool {
+    let known = starts
+        .unclosed_quote()
+        .is_some_and(|quote| index.unclosed_quotes().binary_search(&quote).is_ok());
+    known && starts.resume_literally().is_some()
 }
 
 /// 始まりの列から、レコードの位置と長さの列を作る。最後のレコードは `tail` で終わる

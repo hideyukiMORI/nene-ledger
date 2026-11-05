@@ -11,6 +11,7 @@ mod folding {
     use nene_ledger_core::dialect::Dialect;
     use nene_ledger_core::text_encoding::TextEncoding;
     use nene_ledger_core::text_format::TextFormat;
+    use nene_ledger_core::unclosed_quote::UnclosedQuote;
     use nene_ledger_scan::block_size::BlockSize;
     use nene_ledger_scan::indexed_source::IndexedSource;
     use nene_ledger_scan::indexing::build_index;
@@ -166,5 +167,74 @@ mod folding {
         .unwrap();
         job.cancel();
         assert_eq!(job.wait().unwrap(), RangeOutcome::Cancelled);
+    }
+
+    /// 作り終えた索引で、`input` を `dialect` で読む。
+    fn indexed(name: &str, input: &[u8], dialect: Dialect) -> IndexedSource {
+        std::fs::write(path(name), input).unwrap();
+        let format = TextFormat::new(TextEncoding::Utf8, dialect);
+        let source = Source::open(&path(name)).unwrap();
+        let outcome = build_index(&source, format, BlockSize::MEBIBYTE, |_| {
+            ControlFlow::Continue(())
+        })
+        .unwrap();
+        let nene_ledger_scan::index_outcome::IndexOutcome::Finished(index) = outcome else {
+            panic!("止まった");
+        };
+        IndexedSource::new(source, index, format)
+    }
+
+    /// 索引が数えたレコードを全部、どの塊の大きさでも畳み込み、進み具合もその数で終わる。
+    /// 塊ごとに原本を読み直すので、レコードの多いファイルでは小さな塊を使わない。
+    fn assert_folds_every_record(from: &IndexedSource, sizes: &[usize]) {
+        let total = from.index().records();
+        let range = RecordRange::new(0, usize::try_from(total).unwrap());
+        for &size in sizes {
+            assert_chunks_match(from, range, size);
+            assert_eq!(whole(from, range).len(), range.count(), "塊 {size}");
+        }
+    }
+
+    #[test]
+    fn the_records_after_a_long_closed_cell_are_folded() {
+        // 2 MiB の閉じた引用のセルの後ろに 8 レコード（GitHub Issue #13 の 1。直す前は 2 件で「数え終えた」）。
+        let mut input = b"h1,h2\n1,\"".to_vec();
+        input.extend(core::iter::repeat_n(b'z', 2 << 20_u32));
+        input.extend(b"\"\n");
+        for row in 2..10_u32 {
+            input.extend(format!("{row},x\n").as_bytes());
+        }
+        let from = indexed("long-closed-cell", &input, Dialect::rfc4180());
+        assert_eq!(from.index().records(), 10);
+        assert_folds_every_record(&from, &[1, 3, 1024]);
+    }
+
+    #[test]
+    fn a_long_record_between_short_ones_does_not_end_the_fold() {
+        // 見出し・短い 5 行・3 MiB の 1 行・短い 4 行（11 レコード。直す前は 6 件で「数え終えた」）。
+        let mut input = b"id,v\n".to_vec();
+        for row in 0..5_u32 {
+            input.extend(format!("{row},a\n").as_bytes());
+        }
+        input.extend(b"5,");
+        input.extend(core::iter::repeat_n(b'w', 3 << 20_u32));
+        input.extend(b"\n");
+        for row in 6..10_u32 {
+            input.extend(format!("{row},b\n").as_bytes());
+        }
+        let from = indexed("long-unquoted", &input, Dialect::rfc4180());
+        assert_eq!(from.index().records(), 11);
+        assert_folds_every_record(&from, &[1, 2, 4096]);
+    }
+
+    #[test]
+    fn the_records_after_a_long_literal_quote_are_folded() {
+        // `Literal` で、1 MiB を超えて閉じない引用符の後ろ（GitHub Issue #13 の 2）。
+        let mut input = b"a\n\"b\n".to_vec();
+        input.extend(b"x,y\n".repeat(300_000));
+        let literal = Dialect::rfc4180().with_unclosed_quote(UnclosedQuote::Literal);
+        let from = indexed("long-literal", &input, literal);
+        assert_eq!(from.index().records(), 300_002);
+        assert_folds_every_record(&from, &[4096, 100_000]);
     }
 }
