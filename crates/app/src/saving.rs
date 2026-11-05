@@ -98,7 +98,9 @@ pub(crate) fn start_saving(
         return Err(SavingFailure::Untitled);
     };
     let opened = source_unchanged(reader)?.ok_or(SavingFailure::Untitled)?;
-    spawn_saving(changes, reader, (path, SaveTarget::Existing(opened)))
+    // 保存先が原本なので、原本の変化は保存先の印で store が見つける。
+    let bytes = ScanBytes::new(reader.source_copy().map_err(OpenFailure::from)?);
+    spawn_saving(changes, reader, (path, SaveTarget::Existing(opened)), bytes)
 }
 
 /// 名前を付けて保存（ADR 0028 の決定 5）を始める。保存先 `target` が既にあれば、今の印と比べてから置き換える
@@ -110,8 +112,13 @@ pub(crate) fn start_saving_as(
 ) -> Result<SaveJob, SavingFailure> {
     let expected =
         target_state(target).map_err(|kind| SavingFailure::Save(SaveFailure::Target(kind)))?;
-    let _opened = source_unchanged(reader)?;
-    spawn_saving(changes, reader, (target, expected))
+    let source = reader.source_copy().map_err(OpenFailure::from)?;
+    // 原本が保存先と別なので、書いている間の原本の変化も置き換えの直前に確かめる（GitHub Issue #126）。
+    let bytes = match (source_unchanged(reader)?, reader.path()) {
+        (Some(opened), Some(path)) => ScanBytes::guarded(source, path.to_path_buf(), opened),
+        (None, _) | (Some(_), None) => ScanBytes::new(source),
+    };
+    spawn_saving(changes, reader, (target, expected), bytes)
 }
 
 /// 原本のファイルが、開く前に取った印のままか。原本の無い新しい表は `None`。計画は原本の今の中身を読むので、
@@ -137,6 +144,7 @@ fn spawn_saving(
     changes: TableChanges<'_>,
     reader: &Reader,
     (target, expected): (&Path, SaveTarget),
+    bytes: ScanBytes,
 ) -> Result<SaveJob, SavingFailure> {
     let format = reader.format();
     let plan = {
@@ -149,7 +157,6 @@ fn spawn_saving(
         )
         .map_err(SavingFailure::Plan)?
     };
-    let bytes = ScanBytes::new(reader.source_copy().map_err(OpenFailure::from)?);
     #[cfg(windows)]
     let replacing = nene_ledger_adapters_windows::file_replacing::FileReplacing;
     #[cfg(not(windows))]

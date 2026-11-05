@@ -11,4 +11,11 @@ pub trait SourceBytes {
     ///
     /// 読み出しの失敗。
     fn read_at(&mut self, offset: u64, buffer: &mut [u8]) -> Result<usize, Self::Failure>;
+
+    /// 書き終えた後、置き換える（名前を付ける）直前に、原本が開いたときのままか。読み始めてから外から変わっていれば
+    /// `false`（store は書かない）。保存先が原本と同じ普通の保存は、保存先の印で見つけるので、既定は `true`
+    /// （名前を付けて保存で、原本が保存先と別のときに実装が確かめる・GitHub Issue #126）。
+    fn unchanged(&mut self) -> bool {
+        true
+    }
 }

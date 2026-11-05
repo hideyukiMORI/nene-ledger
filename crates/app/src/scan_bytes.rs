@@ -2,20 +2,37 @@
 
 use std::io::ErrorKind;
 
+use std::path::PathBuf;
+
+use nene_ledger_application::file_stamp::FileStamp;
 use nene_ledger_application::source_bytes::SourceBytes;
 use nene_ledger_scan::block_size::BlockSize;
 use nene_ledger_scan::scan_failure::ScanFailure;
 use nene_ledger_scan::source::Source;
+use nene_ledger_store::stamping::stamp_of;
 
-/// 原本を、位置を指定して読む。
+/// 原本を、位置を指定して読む。名前を付けて保存では、原本の道筋と開く前の印を持ち、置き換えの直前に比べる。
 pub(crate) struct ScanBytes {
     source: Source,
+    original: Option<(PathBuf, FileStamp)>,
 }
 
 impl ScanBytes {
     /// 原本 `source` を読む。
     pub(crate) fn new(source: Source) -> Self {
-        Self { source }
+        Self {
+            source,
+            original: None,
+        }
+    }
+
+    /// 原本 `source` を読み、置き換えの直前に、道筋 `path` の今の印が `opened` のままかを確かめる
+    /// （名前を付けて保存・GitHub Issue #126）。
+    pub(crate) fn guarded(source: Source, path: PathBuf, opened: FileStamp) -> Self {
+        Self {
+            source,
+            original: Some((path, opened)),
+        }
     }
 }
 
@@ -40,5 +57,11 @@ impl SourceBytes for ScanBytes {
             to.copy_from_slice(from);
         }
         Ok(count)
+    }
+
+    fn unchanged(&mut self) -> bool {
+        self.original
+            .as_ref()
+            .is_none_or(|(path, opened)| stamp_of(path).ok() == Some(*opened))
     }
 }

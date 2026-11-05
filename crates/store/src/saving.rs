@@ -58,8 +58,9 @@ where
     crate::lock_probe::probe(&target).map_err(SaveFailure::Blocked)?;
     let texts = encoded_texts(plan, encoding)?;
     let (file, temporary) = create_beside(&target).map_err(SaveFailure::Write)?;
-    if let Err(failure) =
-        write_plan(file, plan, &texts, source).and_then(|()| unchanged_since(&target, opened))
+    if let Err(failure) = write_plan(file, plan, &texts, source)
+        .and_then(|()| unchanged_since(&target, opened))
+        .and_then(|()| source_unchanged(source))
     {
         discard(&temporary);
         return Err(failure);
@@ -97,8 +98,9 @@ pub fn save_absent<S: SourceBytes<Failure = ErrorKind>>(
     still_absent(&created)?;
     let texts = encoded_texts(plan, encoding)?;
     let (file, temporary) = create_beside(&created).map_err(SaveFailure::Write)?;
-    if let Err(failure) =
-        write_plan(file, plan, &texts, source).and_then(|()| still_absent(&created))
+    if let Err(failure) = write_plan(file, plan, &texts, source)
+        .and_then(|()| still_absent(&created))
+        .and_then(|()| source_unchanged(source))
     {
         discard(&temporary);
         return Err(failure);
@@ -109,6 +111,17 @@ pub fn save_absent<S: SourceBytes<Failure = ErrorKind>>(
     })?;
     sync_folder(&folder);
     Ok(())
+}
+
+/// 原本が読み始めたときのままか（名前を付けて保存で、原本が保存先と別のとき・GitHub Issue #126）。
+fn source_unchanged<S: SourceBytes<Failure = ErrorKind>>(
+    source: &mut S,
+) -> Result<(), SaveFailure> {
+    if source.unchanged() {
+        Ok(())
+    } else {
+        Err(SaveFailure::ChangedOutside)
+    }
 }
 
 /// `target` がまだ無いか（リンクも数える）。
