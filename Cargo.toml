@@ -1,7 +1,7 @@
 [workspace]
 resolver = "3"
 # 🔴 空の将来用クレートは作らない（PROJECT_LAYOUT 第 1 節）。製品クレートは具体的な責務とソースができたときに足す。
-members = ["crates/adapters-windows", "crates/adapters-x11", "crates/app", "crates/application", "crates/core", "crates/scan", "crates/ui-win32", "crates/ui-x11", "xtask"]
+members = ["crates/adapters-windows", "crates/adapters-x11", "crates/app", "crates/application", "crates/core", "crates/scan", "crates/store", "crates/ui-win32", "crates/ui-x11", "xtask"]
 
 [workspace.package]
 # 版はここが唯一の出どころ。画面の表示はこれをビルド時に受け取る。

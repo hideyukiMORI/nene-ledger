@@ -140,6 +140,7 @@ dependencies = [
  "nene-ledger-application",
  "nene-ledger-core",
  "nene-ledger-scan",
+ "nene-ledger-store",
  "nene-ledger-ui-win32",
  "nene-ledger-ui-x11",
 ]
@@ -174,6 +175,15 @@ version = "0.1.0"
 
 [[package]]
 name = "nene-ledger-scan"
+version = "0.1.0"
+dependencies = [
+ "encoding_rs",
+ "nene-ledger-application",
+ "nene-ledger-core",
+]
+
+[[package]]
+name = "nene-ledger-store"
 version = "0.1.0"
 dependencies = [
  "encoding_rs",

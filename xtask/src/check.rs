@@ -536,7 +536,7 @@ pub(crate) fn scan_does_not_write(file: &SourceFile) -> Vec<Violation> {
 }
 
 /// クレート間で許された依存（ARC-002）。鍵はディレクトリ名、値は依存してよいパッケージ名。
-/// 🔴 外部クレートを足すのは ADR と deny.toml と、この表の仕事（ARC-013）。いまの外部クレートは scan の `encoding_rs` だけ（ADR 0015・Issue #18）。
+/// 🔴 外部クレートを足すのは ADR と deny.toml と、この表の仕事（ARC-013）。いまの外部クレートは scan と store の `encoding_rs` だけ（ADR 0015・Issue #18・ADR 0025・GitHub Issue #58）。
 const ALLOWED_DEPENDENCIES: [(&str, &[&str]); 10] = [
     ("crates/core/", &[]),
     ("crates/application/", &["nene-ledger-core"]),
@@ -546,7 +546,7 @@ const ALLOWED_DEPENDENCIES: [(&str, &[&str]); 10] = [
     ),
     (
         "crates/store/",
-        &["nene-ledger-application", "nene-ledger-core"],
+        &["nene-ledger-application", "nene-ledger-core", "encoding_rs"],
     ),
     (
         "crates/adapters-x11/",
@@ -1163,17 +1163,26 @@ mod tests {
     }
 
     #[test]
-    fn cnf013_allows_only_the_listed_external_crate_in_the_scan() {
+    fn cnf013_allows_only_the_listed_external_crate_in_the_scan_and_the_store() {
         let listed = fixture(
             "crates/scan/Cargo.toml",
             "[dependencies]\nencoding_rs = { version = \"0.8.42\", default-features = false }\n",
         );
         assert!(dependencies_follow_graph(&listed).is_empty());
+        // store も符号化に同じ crate を使う（ADR 0025 の決定 4）。ほかの区画では拒む。
         let store = fixture(
             "crates/store/Cargo.toml",
             "[dependencies]\nencoding_rs = \"0.8\"\n",
         );
-        assert_eq!(rules(&dependencies_follow_graph(&store)), vec!["CNF-013"]);
+        assert!(dependencies_follow_graph(&store).is_empty());
+        let application = fixture(
+            "crates/application/Cargo.toml",
+            "[dependencies]\nencoding_rs = \"0.8\"\n",
+        );
+        assert_eq!(
+            rules(&dependencies_follow_graph(&application)),
+            vec!["CNF-013"]
+        );
     }
 
     #[test]

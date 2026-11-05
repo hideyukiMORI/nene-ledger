@@ -15,6 +15,7 @@ workspace = true
 nene-ledger-application = { path = "../application" }
 nene-ledger-core = { path = "../core" }
 nene-ledger-scan = { path = "../scan" }
+nene-ledger-store = { path = "../store" }
 
 [target.'cfg(not(windows))'.dependencies]
 nene-ledger-adapters-x11 = { path = "../adapters-x11" }

@@ -190,8 +190,8 @@ UI 層は、application が作った値を描き、利用者の操作を意図�
 
 ### ARC-013 — 外部依存は許可制
 
-- 依存を足すときは ADR を 1 本立てる。いま許可された外部クレートは scan の `encoding_rs`（[ADR 0015](adr/0015-encodings-with-encoding-rs.md)・Issue #18）と ui-x11 の `x11rb`・`cairo-rs`（[ADR 0016](adr/0016-ui-dependencies-x11rb-cairo-windows.md)・Issue #20）。表は [CODING_RULES](CODING_RULES.md) 第 5 節
-- 予定: X11 と描画は `x11rb` と `cairo-rs`、Windows は `windows`（[ADR 0002](adr/0002-no-toolkit-x11rb-cairo-win32-direct2d.md)）。保存の符号化（store）も `encoding_rs`。ファイルの写像は `memmap2` か OS の直呼び（[ADR 0006](adr/0006-confined-unsafe-for-scan.md)）。いずれも導入の Issue で ADR と実測をそろえる
+- 依存を足すときは ADR を 1 本立てる。いま許可された外部クレートは scan と store の `encoding_rs`（[ADR 0015](adr/0015-encodings-with-encoding-rs.md)・Issue #18・store は [ADR 0025](adr/0025-save-by-replacement-and-windows-locks.md)・GitHub Issue #58）と ui-x11 の `x11rb`・`cairo-rs`（[ADR 0016](adr/0016-ui-dependencies-x11rb-cairo-windows.md)・Issue #20）。表は [CODING_RULES](CODING_RULES.md) 第 5 節
+- 予定: X11 と描画は `x11rb` と `cairo-rs`、Windows は `windows`（[ADR 0002](adr/0002-no-toolkit-x11rb-cairo-win32-direct2d.md)）。ファイルの写像は `memmap2` か OS の直呼び（[ADR 0006](adr/0006-confined-unsafe-for-scan.md)）。いずれも導入の Issue で ADR と実測をそろえる
 - 分析エンジン（DuckDB 等）は組み込まない（[ADR 0007](adr/0007-own-engine-and-external-benchmarks.md)）
 - バージョンに `*` を書かない（`clippy::wildcard_dependencies`）。版の固定は `Cargo.lock` の仕事であり、マニフェストに `=` を書かない
 - 内部クレート（`publish = false`）同士の path 依存には版を書かない

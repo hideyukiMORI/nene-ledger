@@ -65,7 +65,7 @@ scan
     -> application, core（外部: encoding_rs（ADR 0015・Issue #18）。写像と SIMD は ADR 0006 の導入の Issue で決める）
 
 store
-    -> application, core（外部: 予定。encoding_rs）
+    -> application, core（外部: encoding_rs（ADR 0025・GitHub Issue #58）。scan には依存しない）
 
 adapters-x11
     -> application, core（外部: 予定。x11rb）
