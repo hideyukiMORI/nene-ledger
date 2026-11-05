@@ -6,7 +6,7 @@
 #    全件は限定した検証で影響を覆えない理由を REASON= に添えたときだけ回す（QLT-001 / ADR 0003）。
 CARGO ?= cargo
 
-.PHONY: all check ci fmt fmt-check lint lint-windows build-windows test conformance validate-git coverage deny doc-check build prove screenshot bench-pollock doctor clean
+.PHONY: all check ci fmt fmt-check lint lint-windows build-windows test conformance validate-git coverage deny doc-check build prove screenshot bench-pollock fetch-corpus bench-corpus doctor clean
 
 all: doctor
 
@@ -117,6 +117,21 @@ bench-pollock:
 	@if [ -z "$(POLLOCK)" ]; then echo "bench-pollock: POLLOCK=<Pollock の置き場> を指定する"; exit 2; fi
 	$(CARGO) build --release --locked -p nene-ledger
 	$(CARGO) run --quiet --release -p xtask --locked -- bench-pollock "$(POLLOCK)"
+
+## fetch-corpus / bench-corpus — 実データの突き合わせ（QLT-014・BIG-11・ADR 0023・GitHub Issue #26）。
+## 出どころと正解の表は docs/quality/corpus/sources.tsv。ファイルはリポジトリの外（CORPUS=<置き場>）に取得する。
+## 参照の読み方は製品と独立した Python の csv（標準ライブラリだけ）。🔴 CI では走らせない（取得がネットワークに依る）。
+## 判別を変える PR では bench-corpus を走らせ、変わったファイルを本文に書く。表の判定の列を書き直すなら
+## python3 -I tools/corpus/compare.py "$(CORPUS)" --binary target/release/nene-ledger --update <版>。
+CORPUS ?=
+fetch-corpus:
+	@if [ -z "$(CORPUS)" ]; then echo "fetch-corpus: CORPUS=<置き場> を指定する"; exit 2; fi
+	python3 -I tools/corpus/fetch.py "$(CORPUS)"
+
+bench-corpus:
+	@if [ -z "$(CORPUS)" ]; then echo "bench-corpus: CORPUS=<置き場> を指定する"; exit 2; fi
+	$(CARGO) build --release --locked -p nene-ledger
+	python3 -I tools/corpus/compare.py "$(CORPUS)" --binary target/release/nene-ledger
 
 ## doctor — 開発環境（クラウドのコンテナ・WSLg）に道具が揃っているかを見る。検査ではない。
 doctor:

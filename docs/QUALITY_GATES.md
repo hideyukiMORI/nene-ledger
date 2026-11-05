@@ -126,7 +126,7 @@ Xvfb の上での表示確認は「仮想の X サーバでの確認」であり
 「速い」「巨大なファイルでも」と書くときは、ファイルの大きさ・行数・列数・機械・道具の版と、比較相手（DuckDB・qsv・xsv・Modern CSV）の同じファイルでの数字を添える（[ADR 0007](adr/0007-own-engine-and-external-benchmarks.md)）。
 測っていない大きさについて「動く」「速い」と書かない。目標（SPECIFICATION 第 2 節）と実測を混ぜない。
 
-- 機械強制: **planned**（主張が実測を名指ししているかはレビュー事項。測る道具は `make bench-pollock`（正しく読めた率・Issue #24）、記録の形は [quality/benchmarks.md](quality/benchmarks.md)。速さの比較相手（DuckDB・qsv・xsv）の測り方は次の性能の Issue）
+- 機械強制: **planned**（主張が実測を名指ししているかはレビュー事項。測る道具は `make bench-pollock`（正しく読めた率・Issue #24）と `make bench-corpus`（実データの突き合わせ・ADR 0023）、記録の形は [quality/benchmarks.md](quality/benchmarks.md)。速さの比較相手（DuckDB・qsv・xsv）の測り方は次の性能の Issue）
 
 ---
 
