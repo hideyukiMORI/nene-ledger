@@ -187,7 +187,7 @@ impl<'view> FramePainter<'view> {
         self.fill(gutter, gutter_fill);
         // 行番号はファイルの中のレコードの番号で、1 始まりで見せる（レコードの番号は 0 始まり）。
         if style != RowStyle::Numbers {
-            let shown = row.record().saturating_add(1).to_string();
+            let shown = row.line().saturating_add(1).to_string();
             self.text(gutter, &shown, gutter_ink);
         }
         let mut cursor = None;
@@ -224,7 +224,7 @@ impl<'view> FramePainter<'view> {
             self.paint_editing(rect, editing);
             return;
         }
-        match self.edited(style, row.record(), source) {
+        match self.edited(style, row.row(), source) {
             Some(CellValue::Text(value)) => {
                 let shown = single_line(value);
                 self.paint_cell(rect, Some(&shown), mark);
@@ -234,12 +234,10 @@ impl<'view> FramePainter<'view> {
         }
     }
 
-    /// 本体の行のセル（レコード `record` の元の列 `source`）の書き換え。見出しの行は書き換えない（EDIT-04 はまだ）。
-    fn edited(&self, style: RowStyle, record: u64, source: usize) -> Option<&'view CellValue> {
+    /// 本体の行のセル（行 `row` の元の列 `source`）の書き換え。見出しの行は書き換えない（EDIT-04 はまだ）。
+    fn edited(&self, style: RowStyle, row: RowId, source: usize) -> Option<&'view CellValue> {
         match style {
-            RowStyle::Body(_) => self
-                .edits?
-                .get(RowId::Source(record), ColumnId::Source(source)),
+            RowStyle::Body(_) => self.edits?.get(row, ColumnId::Source(source)),
             RowStyle::Header | RowStyle::Numbers => None,
         }
     }
@@ -507,7 +505,7 @@ mod tests {
     /// 本体の続いた行 `rows`（最初のレコードの番号から本体の番目も同じ）。
     fn view(rows: &[ViewRow]) -> TableView {
         let cells: Vec<Vec<String>> = rows.iter().map(|row| row.cells().to_vec()).collect();
-        TableView::from_records(rows.first().map_or(0, ViewRow::record), &cells, None)
+        TableView::from_records(rows.first().map_or(0, ViewRow::line), &cells, None)
     }
 
     /// 見出しと本体の行から列の幅を決め、窓の大きさ `size` に描く。
@@ -553,7 +551,7 @@ mod tests {
         first_column: usize,
     ) -> Vec<DrawCommand> {
         let cells: Vec<&[String]> = header.into_iter().chain(rows).map(ViewRow::cells).collect();
-        let last = rows.last().map_or(0, |row| row.record() + 1);
+        let last = rows.last().map_or(0, |row| row.line() + 1);
         let layout = TableLayout::new(&ColumnWidths::fit(&cells), first_column, last, metrics());
         let painter = FramePainter::new(&layout, metrics(), palette(), size);
         let painter = match selection {

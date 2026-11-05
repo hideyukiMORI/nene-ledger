@@ -7,17 +7,18 @@ pub enum TotalsRequest {
     Unchanged,
     /// 数え終えたか、出さない。
     Settled,
-    /// レコード `first_record` から `count` 個を読んで `Document::count_totals` に渡す。
+    /// 行の並びの位置 `first_line` から `count` 行を読んで `Document::count_totals` に渡す。
     Read {
         /// 最初のレコードの番号。
-        first_record: u64,
+        first_line: u64,
         /// 読むレコードの数（見出しのレコードを含むことがある）。
         count: u64,
     },
-    /// レコード `first_record` から `count` 個を裏で数え、`Document::totals_report` に知らせる。
+    /// 位置 `first_line` から `count` 行を裏で数え、`Document::totals_report` に知らせる（行を足し消ししていないとき
+    /// だけ来るので、位置は原本のレコードの番号と同じ）。
     Background {
         /// 最初のレコードの番号。
-        first_record: u64,
+        first_line: u64,
         /// 数えるレコードの数（見出しのレコードを含むことがある）。
         count: u64,
     },

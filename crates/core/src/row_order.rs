@@ -65,6 +65,39 @@ impl RowOrder {
         None
     }
 
+    /// 行 `row` の位置。並びに無ければ `None`（終わりまでの区間は、原本の終わりを確かめずに数える）。
+    #[must_use]
+    pub fn position_of(&self, row: RowId) -> Option<u64> {
+        let mut before = 0_u64;
+        for run in &self.runs {
+            if let Some(offset) = offset_in(run, row) {
+                return Some(before.saturating_add(offset));
+            }
+            before = before.saturating_add(run.len(0));
+        }
+        None
+    }
+
+    /// `index` 番目から `count` 行の区間（原本の区間は行の数を決めて返す）。原本を読む側が区間ごとに読む。
+    /// 終わりまでの区間に落ちる分は、原本の終わりを確かめずに `count` 行まで返す（読む側で短くなる）。
+    #[must_use]
+    pub fn slice(&self, index: u64, count: u64) -> Vec<OrderRun> {
+        let mut copy = self.clone();
+        let _head = copy.remove(0, index);
+        let end = copy.split(count);
+        copy.runs
+            .into_iter()
+            .take(end)
+            .map(|run| match run {
+                OrderRun::Source { first, count: None } => OrderRun::Source {
+                    first,
+                    count: Some(count),
+                },
+                other @ (OrderRun::Source { .. } | OrderRun::Added(_)) => other,
+            })
+            .collect()
+    }
+
     /// `index` 番目の前に `count` 行を足し、足した行を返す。並びの終わりより後ろなら終わりに足す。
     pub fn insert(&mut self, index: u64, count: u64) -> Vec<RowId> {
         let first = self.next_added;
@@ -157,6 +190,21 @@ fn joined(last: &OrderRun, run: &OrderRun) -> Option<OrderRun> {
     }
 }
 
+/// 区間 `run` の中の、行 `row` の位置。区間に無ければ `None`。
+fn offset_in(run: &OrderRun, row: RowId) -> Option<u64> {
+    match (run, row) {
+        (OrderRun::Source { first, count }, RowId::Source(record)) => {
+            let offset = record.checked_sub(*first)?;
+            count.is_none_or(|count| offset < count).then_some(offset)
+        }
+        (OrderRun::Added(rows), RowId::Added(added)) => rows
+            .iter()
+            .position(|&listed| listed == added)
+            .and_then(|index| u64::try_from(index).ok()),
+        (OrderRun::Source { .. }, RowId::Added(_)) | (OrderRun::Added(_), RowId::Source(_)) => None,
+    }
+}
+
 /// 区間 `run` を、頭の `offset` 行とその後ろに割る。
 fn split_run(run: &OrderRun, offset: u64) -> (OrderRun, OrderRun) {
     match run {
@@ -230,6 +278,44 @@ mod tests {
         assert_eq!(order.len(SOURCE), SOURCE - 1);
         let added = order.insert(SOURCE - 1, 1);
         assert_eq!(order.row_at(SOURCE - 1), added.first().copied());
+    }
+
+    #[test]
+    fn positions_and_slices_follow_the_runs() {
+        let mut order = RowOrder::whole();
+        let added = order.insert(2, 2);
+        let _gone = order.remove(5, 1);
+        // 並び: S0 S1 A0 A1 S2 S4 S5 …
+        assert_eq!(order.position_of(RowId::Source(1)), Some(1));
+        assert_eq!(order.position_of(added[1]), Some(3));
+        assert_eq!(order.position_of(RowId::Source(3)), None);
+        assert_eq!(order.position_of(RowId::Source(4)), Some(5));
+        assert_eq!(
+            order.slice(1, 5),
+            vec![
+                OrderRun::Source {
+                    first: 1,
+                    count: Some(1)
+                },
+                OrderRun::Added(vec![0, 1]),
+                OrderRun::Source {
+                    first: 2,
+                    count: Some(1)
+                },
+                OrderRun::Source {
+                    first: 4,
+                    count: Some(1)
+                },
+            ]
+        );
+        // 終わりまでの区間は、求めた数まで。
+        assert_eq!(
+            RowOrder::whole().slice(10, 3),
+            vec![OrderRun::Source {
+                first: 10,
+                count: Some(3)
+            }]
+        );
     }
 
     /// 決まった種から作る疑似乱数（テストの決定性）。
