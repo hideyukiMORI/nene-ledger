@@ -29,6 +29,7 @@ pub mod record_window;
 pub mod scan_failure;
 mod scan_state;
 pub mod source;
+mod source_origin;
 pub mod sparse_index;
 pub mod window_record;
 pub mod windowing;

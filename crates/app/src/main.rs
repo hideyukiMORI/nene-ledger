@@ -26,6 +26,7 @@ use std::process::ExitCode;
 
 use nene_ledger_application::file_stamp::FileStamp;
 use nene_ledger_application::theme_state::ThemeState;
+use nene_ledger_scan::source::Source;
 
 use crate::open_failure::OpenFailure;
 
@@ -82,6 +83,12 @@ fn main() -> ExitCode {
         }
         rest => (None, rest),
     };
+    // `--new` は原本の無い新しい表を開く（ADR 0028 の決定 1・2）。
+    if let [flag] = rest
+        && flag == "--new"
+    {
+        return show_blank(theme);
+    }
     let Some(path) = rest.first().map(PathBuf::from).or_else(chosen_file) else {
         return ExitCode::from(2_u8);
     };
@@ -102,13 +109,51 @@ fn open_and_show(path: &Path, theme: Option<ThemeState>) -> ExitCode {
     }
 }
 
+/// 原本の無い新しい表（1 行 × 3 列・ADR 0028）を窓に出す。
+fn show_blank(theme: Option<ThemeState>) -> ExitCode {
+    let summary = opening::blank_summary();
+    let document = nene_ledger_application::document::Document::blank(
+        String::from(opening::BLANK_TITLE),
+        summary,
+    );
+    let start = Start {
+        document,
+        format: summary.format(),
+        path: None,
+        stamp: None,
+    };
+    match run_window(start, || Ok(opening::blank_source()), theme) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(message) => {
+            report(&message);
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// 窓に出す表と、その原本の読み方・道筋（新しい表は無い）・開く前に取った印。
+struct Start {
+    document: nene_ledger_application::document::Document,
+    format: nene_ledger_core::text_format::TextFormat,
+    path: Option<PathBuf>,
+    stamp: Option<FileStamp>,
+}
+
 /// 窓を開き、その起こす口で裏の索引の仕事を始め、閉じられるまで描く。
 fn show(
     path: &Path,
     opened: &opening::Opened,
     (theme, stamp): (Option<ThemeState>, Option<FileStamp>),
 ) -> ExitCode {
-    match run_window(path, opened, (theme, stamp)) {
+    let start = Start {
+        document: first_document(opened),
+        format: opened.summary().format(),
+        path: Some(path.to_path_buf()),
+        stamp,
+    };
+    let open_source =
+        || Source::open(path).map_err(|failure| format!("ファイルを読めなかった: {failure:?}"));
+    match run_window(start, open_source, theme) {
         Ok(()) => ExitCode::SUCCESS,
         Err(message) => {
             report(&message);
@@ -118,33 +163,32 @@ fn show(
 }
 
 /// 窓を開いて画面を結ぶ。窓（ui）と時計は OS ごとに取り替え、画面の状態と仕事の結び方は 1 つ（Issue #55）。
+/// 原本は `open_source` で開く（索引の仕事と画面のスレッドとで別に開く）。
 fn run_window(
-    path: &Path,
-    opened: &opening::Opened,
-    (theme, stamp): (Option<ThemeState>, Option<FileStamp>),
+    start: Start,
+    open_source: impl Fn() -> Result<Source, String>,
+    theme: Option<ThemeState>,
 ) -> Result<(), String> {
     use nene_ledger_application::ticker::Ticker;
     use nene_ledger_scan::block_size::BlockSize;
     use nene_ledger_scan::index_job::IndexJob;
-    use nene_ledger_scan::source::Source;
     #[cfg(windows)]
     use nene_ledger_ui_win32::ui::Ui;
     #[cfg(not(windows))]
     use nene_ledger_ui_x11::ui::Ui;
 
+    let Start {
+        document,
+        format,
+        path,
+        stamp,
+    } = start;
     let ui =
-        Ui::open(opened.title()).map_err(|failure| format!("窓を出せなかった: {failure:?}"))?;
-    let open_source =
-        || Source::open(path).map_err(|failure| format!("ファイルを読めなかった: {failure:?}"));
-    let format = opened.summary().format();
+        Ui::open(document.title()).map_err(|failure| format!("窓を出せなかった: {failure:?}"))?;
     let job = IndexJob::spawn(open_source()?, format, BlockSize::MEBIBYTE, ui.wakeup())
         .map_err(|failure| format!("索引の仕事を始められなかった: {failure:?}"))?;
     // 画面のスレッドが範囲を読むための原本は、索引の仕事とは別に開く（位置を指定して読むので共有しなくてよい）。
-    let reader = reader::Reader::new(
-        (open_source()?, path.to_path_buf(), stamp),
-        format,
-        ui.wakeup(),
-    );
+    let reader = reader::Reader::new((open_source()?, path, stamp), format, ui.wakeup());
     // 押し続けとドラッグの時計。X11 はアダプタのスレッド、Windows は窓のタイマー（SetTimer）。
     #[cfg(not(windows))]
     let ticker: Box<dyn Ticker> = Box::new(
@@ -158,7 +202,7 @@ fn run_window(
         report(&message);
     }
     let mut viewer = viewer::Viewer::new(
-        first_document(opened),
+        document,
         workers::Workers::new(job, ticker),
         reader,
         preferences,
@@ -222,7 +266,7 @@ fn chosen_file() -> Option<PathBuf> {
     #[cfg(not(windows))]
     {
         report(
-            "使い方: nene-ledger [--theme <配色>] <CSV か TSV のファイル> | nene-ledger --dump <ファイル>",
+            "使い方: nene-ledger [--theme <配色>] <CSV か TSV のファイル> | nene-ledger [--theme <配色>] --new | nene-ledger --dump <ファイル>",
         );
         None
     }

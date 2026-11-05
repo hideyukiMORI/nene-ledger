@@ -42,6 +42,8 @@ pub(crate) enum SavingFailure {
     Plan(SavePlanFailure<ScanFailure>),
     /// 書けない・置き換えられない。
     Save(SaveFailure),
+    /// 原本のファイルが無い新しい表（ADR 0028）。
+    Untitled,
 }
 
 impl From<OpenFailure> for SavingFailure {
@@ -91,6 +93,9 @@ pub(crate) fn start_saving(
     changes: TableChanges<'_>,
     reader: &Reader,
 ) -> Result<SaveJob, SavingFailure> {
+    let Some(path) = reader.path() else {
+        return Err(SavingFailure::Untitled);
+    };
     let opened = reader
         .opened()
         .ok_or(SavingFailure::Save(SaveFailure::Target(
@@ -98,7 +103,7 @@ pub(crate) fn start_saving(
         )))?;
     // 計画は原本の今の中身を読むので、外から変わっていれば計画より先に止める（行が無いと言うより正しい理由）。
     // 書く前と置き換えの直前にも store が確かめる（ADR 0025）。
-    if stamp_of(reader.path()).ok() != Some(opened) {
+    if stamp_of(path).ok() != Some(opened) {
         return Err(SavingFailure::Save(SaveFailure::ChangedOutside));
     }
     let format = reader.format();
@@ -118,7 +123,7 @@ pub(crate) fn start_saving(
     #[cfg(not(windows))]
     let replacing = nene_ledger_store::rename_replacing::RenameReplacing;
     SaveJob::spawn(
-        reader.path().to_path_buf(),
+        path.to_path_buf(),
         (plan, format.encoding(), opened),
         (bytes, replacing),
         reader.wakeup(),
@@ -130,6 +135,7 @@ pub(crate) fn start_saving(
 pub(crate) fn problem_of(failure: &SavingFailure) -> SaveProblem {
     match failure {
         SavingFailure::Open(_) | SavingFailure::Plan(_) => SaveProblem::Unplannable,
+        SavingFailure::Untitled => SaveProblem::Untitled,
         SavingFailure::Save(SaveFailure::ChangedOutside | SaveFailure::SourceShrank) => {
             SaveProblem::ChangedOutside
         }
@@ -164,6 +170,7 @@ pub(crate) fn describe(failure: &SavingFailure) -> String {
         SavingFailure::Open(OpenFailure::Scan(scan)) => format!("原本を読めなかった: {scan:?}"),
         SavingFailure::Open(OpenFailure::Write(error)) => format!("書き出せなかった: {error}"),
         SavingFailure::Plan(plan) => format!("保存の中身を作れなかった: {plan:?}"),
+        SavingFailure::Untitled => String::from("新しい表にはまだファイルが無い"),
         SavingFailure::Save(SaveFailure::Unrepresentable(text)) => {
             format!("ファイルの文字コードで表せない字がある: {text}")
         }
@@ -278,5 +285,42 @@ mod tests {
             refused,
             Err(SavingFailure::Save(SaveFailure::Unrepresentable(_)))
         ));
+    }
+
+    /// 新しい表（BOM だけの原本 ＋ 足した 1 行と 3 列）の保存の中身は、BOM 付きの UTF-8・CRLF・カンマで、
+    /// 要るときだけ引用する（ADR 0028 の決定 3・強制の 1 つ目）。
+    #[test]
+    fn a_blank_table_is_planned_as_utf8_with_a_bom_crlf_and_commas() {
+        use nene_ledger_core::save_step::SaveStep;
+        let summary = crate::opening::blank_summary();
+        let format = summary.format();
+        let source = crate::opening::blank_source();
+        let mut rows = RowOrder::whole();
+        let added_rows = rows.insert(0, 2);
+        let mut columns = ColumnOrder::whole();
+        let added = columns.insert(0, 3);
+        let mut edits = CellEdits::empty();
+        edits.set(added_rows[0], added[0], text("名前"));
+        edits.set(added_rows[0], added[2], text("a,b"));
+        edits.set(added_rows[1], added[1], text("0012"));
+        let ending = summary
+            .line_endings()
+            .dominant()
+            .unwrap_or(LineEnding::CrLf);
+        let changes = TableChanges::new((&rows, &columns), &edits, AddedRowShape::new(3, ending));
+        let index = SparseIndex::empty();
+        let mut lookup = ScanLookup::new(&source, &index, format);
+        let plan = save_plan(changes, &mut lookup, source.len(), format.dialect()).unwrap();
+        let mut written = Vec::new();
+        for step in plan.steps() {
+            match step {
+                SaveStep::Copy { offset, length } => {
+                    let size = BlockSize::new(usize::try_from(*length).unwrap()).unwrap();
+                    written.extend(source.read_block(*offset, size).unwrap());
+                }
+                SaveStep::Text(text) => written.extend_from_slice(text.as_bytes()),
+            }
+        }
+        assert_eq!(written, "\u{FEFF}名前,,\"a,b\"\r\n,0012,\r\n".as_bytes());
     }
 }

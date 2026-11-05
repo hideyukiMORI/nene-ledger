@@ -15,6 +15,8 @@ pub enum SaveProblem {
     Interrupted,
     /// 書き換えた行を読めない・長すぎる・その方言で書けない値。
     Unplannable,
+    /// 原本のファイルが無い新しい表（名前を付けて保存が要る・ADR 0028）。
+    Untitled,
     /// それ以外（書けない・読めない・スレッドを作れない）。
     Other,
 }
