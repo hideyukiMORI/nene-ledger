@@ -13,6 +13,7 @@ use nene_ledger_core::pixel_size::PixelSize;
 use nene_ledger_core::table_layout::TableLayout;
 use nene_ledger_core::text_role::TextRole;
 
+use crate::cell_display::fitted;
 use crate::cell_mark::CellMark;
 use crate::ranges::Ranges;
 use crate::row_style::RowStyle;
@@ -160,7 +161,7 @@ impl<'view> FramePainter<'view> {
         // 行番号はファイルの中のレコードの番号で、1 始まりで見せる（レコードの番号は 0 始まり）。
         if style != RowStyle::Numbers {
             let shown = row.record().saturating_add(1).to_string();
-            self.text(gutter, shown, gutter_ink);
+            self.text(gutter, &shown, gutter_ink);
         }
         let mut cursor = None;
         for column in self.layout.visible_columns() {
@@ -307,7 +308,7 @@ impl<'view> FramePainter<'view> {
         };
         self.fill(rect, background);
         if !text.is_empty() {
-            self.text(rect, text.clone(), self.palette.text());
+            self.text(rect, text, self.palette.text());
         }
     }
 
@@ -316,8 +317,15 @@ impl<'view> FramePainter<'view> {
         self.commands.push(DrawCommand::Fill { rect, color });
     }
 
-    /// `rect` の中に、左の余白を空けて縦の真ん中に文字を書く。`rect` の外は切り取る。
-    fn text(&mut self, rect: PixelRect, text: String, color: Color) {
+    /// `rect` の中に、左の余白を空けて縦の真ん中に文字を書く。左右の余白の内に収まらなければ `…` で省略し
+    /// （GitHub Issue #7）、`rect` の外は切り取る（幅は近似なので）。
+    fn text(&mut self, rect: PixelRect, text: &str, color: Color) {
+        let room = rect
+            .size()
+            .width()
+            .saturating_sub(self.layout.padding().saturating_mul(2));
+        let columns = room / self.metrics.half_width().max(1);
+        let text = fitted(text, columns);
         let spare = rect
             .size()
             .height()
