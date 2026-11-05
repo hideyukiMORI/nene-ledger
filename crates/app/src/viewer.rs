@@ -371,7 +371,7 @@ impl Viewer {
             outcome,
             PaletteOutcome::OpenReading(_) | PaletteOutcome::OpenCandidates
         );
-        if !reading || (self.document.edits().is_empty() && !self.document.is_saving()) {
+        if !reading || (!self.document.has_unsaved() && !self.document.is_saving()) {
             return false;
         }
         self.palette = None;
