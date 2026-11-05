@@ -20,6 +20,7 @@ use nene_ledger_application::reading_aspect::ReadingAspect;
 use nene_ledger_application::reading_choice::ReadingChoice;
 use nene_ledger_application::save_problem::SaveProblem;
 use nene_ledger_application::save_target::SaveTarget;
+use nene_ledger_application::selection_mode::SelectionMode;
 use nene_ledger_application::selection_totals::SelectionTotals;
 use nene_ledger_application::session::Session;
 use nene_ledger_application::settings_failure::SettingsFailure;
@@ -71,6 +72,8 @@ pub(crate) struct Viewer {
     saving: Option<SaveJob>,
     /// 裏で回っている保存が名前を付けて保存なら、その保存先（終われば窓がそこを指す・ADR 0028 の決定 5）。
     saving_as: Option<PathBuf>,
+    /// 直前の意図をパレットが受けたか（パレットの項目を押して閉じた直後の 2 度目の押しを、表のダブルクリックにしない）。
+    palette_took_last: bool,
 }
 
 impl Viewer {
@@ -93,6 +96,7 @@ impl Viewer {
             trial: None,
             saving: None,
             saving_as: None,
+            palette_took_last: false,
         }
     }
 
@@ -212,29 +216,32 @@ impl Viewer {
             return;
         }
         // 前の索引の仕事と集計は、置き換える前のファイルのもの。捨ててから開き直す。名前を付けて保存したなら、
-        // 窓は保存先を指す（題名も替える・ADR 0028 の決定 5）。
+        // 開けたときだけ窓は保存先を指す（題名も替える・ADR 0028 の決定 5）。
         self.totals = None;
-        let title = saved_as.map(|path| {
-            let title = crate::opening::title_of(&path);
-            self.reader.retarget(path);
-            title
-        });
-        let reopened = self.reader.reopen_saved();
-        let reread = match (title, self.reader.line_endings()) {
-            (Some(title), Some(endings)) => self.document.saved_as(title, endings),
-            (Some(title), None) => {
-                let endings = self.document.format_summary().line_endings();
-                self.document.saved_as(title, endings)
-            }
-            (None, _) => self.document.saved(),
-        };
-        match reopened {
+        let title = saved_as.as_deref().map(crate::opening::title_of);
+        match self.reader.reopen_saved(saved_as) {
             Ok(job) => {
                 self.job = job;
+                let reread = match (title, self.reader.line_endings()) {
+                    (Some(title), Some(endings)) => self.document.saved_as(title, endings),
+                    (Some(title), None) => {
+                        let endings = self.document.format_summary().line_endings();
+                        self.document.saved_as(title, endings)
+                    }
+                    (None, _) => self.document.saved(),
+                };
                 self.effect(reread);
+            }
+            Err(failure) if title.is_some() => {
+                // 保存先には書けたが開けない。窓は前の原本と差分のまま（保存先を指したことにしない）。
+                warn(&format!(
+                    "名前を付けて保存した後に開けなかった: {failure:?}"
+                ));
+                self.document.reopen_failed_after_save_as();
             }
             Err(failure) => {
                 warn(&format!("保存した後に開き直せなかった: {failure:?}"));
+                let _reread = self.document.saved();
                 self.document.notify(Notice::ReopenFailed);
             }
         }
@@ -486,7 +493,16 @@ impl Viewer {
             outcome,
             PaletteOutcome::OpenReading(_) | PaletteOutcome::OpenCandidates
         );
-        if !reading || (!self.document.has_unsaved() && !self.document.is_saving()) {
+        if !reading {
+            return false;
+        }
+        // 新しい表の原本は BOM だけなので、読み方を変えると表が化け、新しい表でなくなる（ADR 0028 の決定 3）。
+        if self.document.is_untitled() {
+            self.palette = None;
+            self.document.notify(Notice::ReadingNeedsFile);
+            return true;
+        }
+        if !self.document.has_unsaved() && !self.document.is_saving() {
             return false;
         }
         self.palette = None;
@@ -624,7 +640,20 @@ impl Session for Viewer {
 
     /// 意図を画面の状態に取り込み、求められたことをして、選んだ範囲の集計を作り直す。
     fn intent(&mut self, intent: Intent, view: WindowView) -> Option<ClipboardText> {
+        let palette_took_last = core::mem::replace(&mut self.palette_took_last, false);
+        // パレットを押して閉じた直後の 2 度目の押しは、表では 1 度の押し（直し始めない）。
+        let intent = if let Intent::DoubleClick { at } = intent
+            && (palette_took_last || self.palette.is_some())
+        {
+            Intent::Point {
+                at,
+                mode: SelectionMode::Collapse,
+            }
+        } else {
+            intent
+        };
         if self.palette.is_some() {
+            self.palette_took_last = true;
             return self.palette_intent(intent, view);
         }
         if intent == Intent::OpenGoTo {

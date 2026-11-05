@@ -9,6 +9,7 @@ use windows::Win32::UI::Controls::Dialogs::{
     GetOpenFileNameW, GetSaveFileNameW, OFN_EXPLORER, OFN_FILEMUSTEXIST, OFN_NOCHANGEDIR,
     OFN_OVERWRITEPROMPT, OFN_PATHMUSTEXIST, OPENFILENAMEW,
 };
+use windows::Win32::UI::Input::KeyboardAndMouse::GetActiveWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
     IDYES, MB_DEFBUTTON2, MB_ICONERROR, MB_ICONWARNING, MB_OK, MB_YESNO, MessageBoxW,
 };
@@ -71,6 +72,9 @@ pub fn choose_save_file(folder: Option<&Path>, name: &str) -> Option<PathBuf> {
         lpstrInitialDir: initial
             .as_ref()
             .map_or(PCWSTR::null(), |initial| PCWSTR(initial.as_ptr())),
+        // 持ち主は今の窓（画面を出している間は押せなくなる・閉じられない）。
+        // SAFETY: 呼んだスレッドの今の窓を尋ねるだけ。
+        hwndOwner: unsafe { GetActiveWindow() },
         lpstrTitle: w!("名前を付けて保存 — NeNe Ledger"),
         lpstrDefExt: w!("csv"),
         Flags: OFN_EXPLORER | OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR,

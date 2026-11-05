@@ -471,6 +471,16 @@ impl Document {
         self.saved()
     }
 
+    /// 名前を付けて保存して書けたが、保存先を開けなかった。窓は前の原本と差分のまま（題名・書き換え・新しい表かは
+    /// 変えない）。保存して閉じると選んでいれば、書けたので閉じる。
+    pub fn reopen_failed_after_save_as(&mut self) {
+        self.saving = false;
+        if self.closing == CloseState::AfterSave {
+            self.closing = CloseState::Finished;
+        }
+        self.notice = Some(Notice::ReopenFailed);
+    }
+
     /// 名前を付けて保存の保存先を選ばずにやめた。保存して閉じると選んでいたなら、閉じずに戻る。
     pub fn save_as_cancelled(&mut self) {
         if self.closing == CloseState::AfterSave && !self.saving {
@@ -1056,8 +1066,8 @@ impl Document {
     }
 
     /// クリップボードの文字列 `text` を貼る（CLIP-01）。タブ区切り（Excel の形）として読み、1 つのセルなら：
-    /// 編集中は欄のカーソルに挿し、そうでなければカーソルのセルの値をそれにする（1 手として履歴に積む）。
-    /// 編集中に複数のセルを貼れば、字のまま挿す（最後の改行は除く）。編集していなければ、複数のセルはまだ貼らずに知らせる。
+    /// カーソルのセルの値をそれにする（1 手として履歴に積む）。編集中は、何であれ字のまま欄のカーソルに挿す（最後の改行は
+    /// 除く・引用は解かない）。編集していなければ、複数のセルはまだ貼らずに知らせる。
     /// 値は変えない（型を推し量らない・KEEP-01）。
     pub fn paste(&mut self, text: &str) {
         if self.closing != CloseState::Open || text.is_empty() {
@@ -1077,11 +1087,12 @@ impl Document {
             _ => None,
         };
         if let Some(editor) = self.editor.as_mut() {
+            // 欄には字のまま挿す（引用を解かない・Excel のセルの中の貼り付けと同じ）。最後の改行だけ除く。
             let raw = text
                 .strip_suffix("\r\n")
                 .or_else(|| text.strip_suffix('\n'))
                 .unwrap_or(text);
-            editor.insert(single.as_deref().unwrap_or(raw));
+            editor.insert(raw);
             return;
         }
         let Some(value) = single else {
@@ -6492,5 +6503,18 @@ mod tests {
         document.apply(Intent::DoubleClick { at: inside(0, 0) }, window);
         document.apply(Intent::Release, window);
         assert_eq!(document.editor(), None);
+    }
+
+    /// 編集中の貼り付けは字のまま（引用を解かない・レビューで見つけた）。
+    #[test]
+    fn pasting_into_the_field_keeps_quotes() {
+        let mut editing = editable();
+        editing.apply(Intent::Edit, normal());
+        editing.paste("\"abc\"\r\n");
+        assert!(
+            editing
+                .editor()
+                .is_some_and(|editor| editor.field().text() == "0012\"abc\"")
+        );
     }
 }

@@ -75,11 +75,6 @@ impl Reader {
         self.path.as_deref()
     }
 
-    /// 名前を付けて保存した先 `path` を、これからの原本の道筋にする（次の [`Self::reopen_saved`] で開く・ADR 0028 の決定 5）。
-    pub(crate) fn retarget(&mut self, path: PathBuf) {
-        self.path = Some(path);
-    }
-
     /// 窓を起こす口（裏の仕事に渡す）。
     pub(crate) fn wakeup(&self) -> Arc<dyn Wakeup> {
         Arc::clone(&self.wakeup)
@@ -101,15 +96,18 @@ impl Reader {
     }
 
     /// 保存して置き換えた後のファイルを、同じ読み方で開き直して索引を作り直す（ADR 0026 の決定 6）。
-    /// 置き換えの前の口（Linux では前のファイルを指したまま）は捨てる。
-    pub(crate) fn reopen_saved(&mut self) -> Result<IndexJob, ScanFailure> {
-        let path = self
-            .path
-            .as_deref()
+    /// 置き換えの前の口（Linux では前のファイルを指したまま）は捨てる。名前を付けて保存なら `saved_as` の道筋を開き、
+    /// 開けたときだけ、これからの原本の道筋にする（開けなければ前の原本・道筋・印のまま・ADR 0028 の決定 5）。
+    pub(crate) fn reopen_saved(
+        &mut self,
+        saved_as: Option<PathBuf>,
+    ) -> Result<IndexJob, ScanFailure> {
+        let path = saved_as
+            .or_else(|| self.path.clone())
             .ok_or(ScanFailure::Open(std::io::ErrorKind::NotFound))?;
         // 印は開く前に取る（開いた後の外からの変更を次の保存で見つける）。
-        let opened = stamp_of(path).ok();
-        let source = Source::open(path)?;
+        let opened = stamp_of(&path).ok();
+        let source = Source::open(&path)?;
         let job = IndexJob::spawn(
             source.try_clone()?,
             self.format,
@@ -119,6 +117,7 @@ impl Reader {
         self.source = source;
         self.index = SparseIndex::empty();
         self.opened = opened;
+        self.path = Some(path);
         Ok(job)
     }
 
