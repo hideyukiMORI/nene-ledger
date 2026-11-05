@@ -101,6 +101,10 @@ pub fn notice_status(notice: Notice) -> String {
         Notice::RangesNotAligned => {
             String::from("離れた範囲は、行か列が揃っていないとコピーできません")
         }
+        Notice::CopyAwaitsIndex => String::from(
+            "ファイルの終わりまでの行を数え終えてからコピーしてください（索引を作っています）",
+        ),
+        Notice::NothingToCopy => String::from("コピーする行がありません"),
         Notice::Zoom(level) => format!("文字の大きさ {}%", level.percent()),
         Notice::SettingsUnsaved => {
             String::from("設定を保存できませんでした（この起動の間だけ有効）")
@@ -431,6 +435,19 @@ mod tests {
             vec!["UTF-16LE（BOM）", "UTF-16BE（BOM）", "UTF-16LE", "UTF-16BE"]
         );
         assert_eq!(delimiter_name(b' '), "空白区切り");
+    }
+
+    /// コピーしなかった理由の文言（GitHub Issue #39）。
+    #[test]
+    fn copy_refusals_have_lines() {
+        assert_eq!(
+            notice_status(Notice::CopyAwaitsIndex),
+            "ファイルの終わりまでの行を数え終えてからコピーしてください（索引を作っています）"
+        );
+        assert_eq!(
+            notice_status(Notice::NothingToCopy),
+            "コピーする行がありません"
+        );
     }
 
     #[test]

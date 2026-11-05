@@ -18,6 +18,10 @@ pub enum Notice {
     TooLargeToCopy,
     /// 離れた範囲の行も列も揃っていないのでコピーしなかった（Issue #46）。
     RangesNotAligned,
+    /// ファイルの終わりまでの選択を、索引を作り終える前なのでコピーしなかった（行の数がまだ決まらない・GitHub Issue #39）。
+    CopyAwaitsIndex,
+    /// コピーする行が無いのでコピーしなかった（クリップボードを替えない・GitHub Issue #39）。
+    NothingToCopy,
     /// 設定を書けなかった（変えた見た目はこの起動の間だけ）。
     SettingsUnsaved,
     /// 文字の大きさを変えた。
