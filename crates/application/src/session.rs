@@ -28,4 +28,11 @@ pub trait Session {
 
     /// 中身の上で出すカーソルの形（最後の `hover` と、押している間の状態から・Issue #64）。
     fn pointer_shape(&self) -> PointerShape;
+
+    /// 閉じるよう求められた（× のボタン・Alt+F4・窓の管理者）。すぐ閉じてよければ `true`。
+    /// 未保存の書き換えがあれば尋ねる画面を出して `false`（UI は窓を閉じずに描き直す・ADR 0026 の決定 7）。
+    fn close(&mut self) -> bool;
+
+    /// 描く相手が閉じると決めた（尋ねる画面で選んだ・保存が終わった）。UI は窓を閉じる。
+    fn finished(&self) -> bool;
 }

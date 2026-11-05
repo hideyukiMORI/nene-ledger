@@ -67,8 +67,13 @@ impl Ui {
             let event = self.window.next_event()?;
             match self.respond(session, &event, &mut screen)? {
                 Step::Wait => {}
-                Step::Redraw => self.redraw(session, &mut screen)?,
-                Step::Quit => return Ok(()),
+                // 閉じる頼み（窓の管理者・× のボタン）は描く相手に尋ねる。未保存なら尋ねる画面を出して残る（ADR 0026）。
+                Step::Quit if session.close() => return Ok(()),
+                Step::Redraw | Step::Quit => self.redraw(session, &mut screen)?,
+            }
+            // 尋ねる画面で選んだ・保存が終わったので、描く相手が閉じると決めた。
+            if session.finished() {
+                return Ok(());
             }
         }
     }

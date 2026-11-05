@@ -1,6 +1,7 @@
 //! 窓が描く相手。画面の状態と、裏の索引の仕事と、範囲の読み取りを結ぶ。
 
 use nene_ledger_application::clipboard_text::ClipboardText;
+use nene_ledger_application::close_state::CloseState;
 use nene_ledger_application::command_palette::CommandPalette;
 use nene_ledger_application::document::Document;
 use nene_ledger_application::document_effect::DocumentEffect;
@@ -430,6 +431,16 @@ impl Viewer {
 }
 
 impl Session for Viewer {
+    fn close(&mut self) -> bool {
+        // 尋ねる画面はパレットより前に出す。
+        self.palette = None;
+        self.document.ask_close()
+    }
+
+    fn finished(&self) -> bool {
+        self.document.close_state() == CloseState::Finished
+    }
+
     fn frame(&self, view: WindowView) -> Frame {
         let frame = self
             .document

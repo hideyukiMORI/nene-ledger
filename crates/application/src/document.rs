@@ -17,6 +17,9 @@ use crate::cell_restore::CellRestore;
 use crate::chrome_painter::ChromePainter;
 use crate::client_bands::ClientBands;
 use crate::clipboard_text::ClipboardText;
+use crate::close_choice::CloseChoice;
+use crate::close_prompt::ClosePrompt;
+use crate::close_state::CloseState;
 use crate::column_shift::ColumnShift;
 use crate::cursor_moves::step_cursor;
 use crate::cursor_step::CursorStep;
@@ -117,6 +120,8 @@ pub struct Document {
     editor: Option<CellEditor>,
     /// 裏で保存している間（直すことと保存を受けない）。
     saving: bool,
+    /// 閉じる手順（ADR 0026 の決定 7）。
+    closing: CloseState,
 }
 
 /// 状態の行の右端に出すパレットの案内。
@@ -195,6 +200,7 @@ impl Document {
             edits: CellEdits::empty(),
             editor: None,
             saving: false,
+            closing: CloseState::Open,
         }
     }
 
@@ -216,6 +222,95 @@ impl Document {
         self.saving
     }
 
+    /// 閉じる手順の状態。`Finished` なら UI が窓を閉じる。
+    #[must_use]
+    pub const fn close_state(&self) -> CloseState {
+        self.closing
+    }
+
+    /// 閉じるよう求められた（× のボタン・Alt+F4・窓の管理者）。編集中なら確定する。
+    /// 未保存の書き換えが無く、保存もしていなければ `true`（すぐ閉じてよい）。あれば尋ねる画面を出して `false`。
+    pub fn ask_close(&mut self) -> bool {
+        if self.closing == CloseState::Finished {
+            return true;
+        }
+        self.commit_edit();
+        if self.edits.is_empty() && !self.saving {
+            self.closing = CloseState::Finished;
+            return true;
+        }
+        if self.closing == CloseState::Open {
+            self.closing = CloseState::Asking;
+        }
+        false
+    }
+
+    /// 尋ねる画面を出している間の意図。尋ねていなければ `None`（ふだんの意図として続ける）。
+    fn close_intent(&mut self, intent: Intent, window: WindowView) -> Option<DocumentEffect> {
+        match self.closing {
+            CloseState::Open => return None,
+            // 保存が終わるまで待つ（ほかの操作は受けない）。
+            CloseState::AfterSave | CloseState::Finished => return Some(DocumentEffect::Stay),
+            CloseState::Asking => {}
+        }
+        let choice = match intent {
+            Intent::Type('s' | 'S') | Intent::Confirm => Some(CloseChoice::Save),
+            Intent::Type('d' | 'D') => Some(CloseChoice::Discard),
+            Intent::Cancel => Some(CloseChoice::Cancel),
+            Intent::Point { at, .. } => ClosePrompt::new(window).choice_at(at),
+            Intent::Scroll(_)
+            | Intent::Move { .. }
+            | Intent::Drag { .. }
+            | Intent::Release
+            | Intent::GoTo(_)
+            | Intent::OpenGoTo
+            | Intent::SelectAll
+            | Intent::SelectRows
+            | Intent::SelectColumns
+            | Intent::MoveColumns(_)
+            | Intent::ResetColumns
+            | Intent::ResetWidths
+            | Intent::FreezeColumns
+            | Intent::UnfreezeColumns
+            | Intent::Copy
+            | Intent::ToggleDetail
+            | Intent::Theme(_)
+            | Intent::Zoom(_)
+            | Intent::OpenPalette
+            | Intent::Type(_)
+            | Intent::Erase
+            | Intent::Edit
+            | Intent::Delete
+            | Intent::BreakLine
+            | Intent::Advance(_)
+            | Intent::Save => None,
+        };
+        Some(choice.map_or(DocumentEffect::Stay, |choice| self.choose_close(choice)))
+    }
+
+    /// 尋ねる画面で `choice` を選んだ。
+    fn choose_close(&mut self, choice: CloseChoice) -> DocumentEffect {
+        match choice {
+            CloseChoice::Cancel => {
+                self.closing = CloseState::Open;
+                DocumentEffect::Stay
+            }
+            CloseChoice::Discard => {
+                self.closing = CloseState::Finished;
+                DocumentEffect::Stay
+            }
+            CloseChoice::Save => {
+                self.closing = CloseState::AfterSave;
+                if self.saving {
+                    // 今の保存が終われば閉じる。
+                    DocumentEffect::Stay
+                } else {
+                    DocumentEffect::Save
+                }
+            }
+        }
+    }
+
     /// 裏の保存を始めた（`DocumentEffect::Save` を受けて合成ルートが呼ぶ）。
     pub fn begin_saving(&mut self) {
         self.saving = true;
@@ -229,6 +324,9 @@ impl Document {
         self.editor = None;
         self.index = JobState::Waiting;
         self.notice = Some(Notice::Saved);
+        if self.closing == CloseState::AfterSave {
+            self.closing = CloseState::Finished;
+        }
         DocumentEffect::Read {
             first_body: self.view.first_body(),
         }
@@ -237,6 +335,10 @@ impl Document {
     /// 保存できなかった。書き換えは残す。
     pub fn save_failed(&mut self, problem: SaveProblem) {
         self.saving = false;
+        // 保存して閉じると選んでいても、保存できなければ閉じない（書き換えを失わない）。
+        if self.closing == CloseState::AfterSave {
+            self.closing = CloseState::Open;
+        }
         self.notice = Some(Notice::SaveFailed(problem));
     }
 
@@ -347,6 +449,9 @@ impl Document {
     /// 縦の表示の先頭（本体の何番目か）が変わるなら、そこから読ませる。末尾は索引を作り終えて行の数が分かってから。
     /// コピーなら選択の行を読ませる（大きすぎれば知らせるだけ）。前の知らせは消す。
     pub fn apply(&mut self, intent: Intent, window: WindowView) -> DocumentEffect {
+        if let Some(effect) = self.close_intent(intent, window) {
+            return effect;
+        }
         self.notice = None;
         if self.saving
             && matches!(
@@ -2153,6 +2258,10 @@ impl Document {
         };
         commands.extend(ChromePainter::new(view, palette).title_bar(&title));
         commands.extend(ChromePainter::new(view, palette).border());
+        if self.closing == CloseState::Asking {
+            // 尋ねる画面は窓の真ん中に、表の上に重ねる（位置は窓の左上が原点・押した位置と同じ）。
+            commands.extend(ClosePrompt::new(view).paint(palette));
+        }
         Frame::new(view.size(), commands)
     }
 
@@ -2354,6 +2463,9 @@ impl Document {
         }
         if let Some(notice) = self.notice {
             return notice_status(notice);
+        }
+        if self.closing == CloseState::AfterSave {
+            return String::from("保存してから閉じます…");
         }
         if self.saving {
             return String::from("保存しています…");
@@ -4692,5 +4804,104 @@ mod tests {
             "「😀」はファイルの文字コードで表せないので保存できませんでした（直した値は残っています）",
         );
         text_at(&frame, "● e.csv — NeNe Ledger");
+    }
+
+    #[test]
+    fn closing_without_edits_closes_at_once() {
+        let mut document = editable();
+        assert!(document.ask_close());
+        assert_eq!(document.close_state(), CloseState::Finished);
+    }
+
+    #[test]
+    fn closing_with_edits_asks_and_escape_keeps_the_window() {
+        let mut document = editable();
+        typed(&mut document, "x");
+        // 編集中の値も、閉じる前に確定する。
+        assert!(!document.ask_close());
+        assert_eq!(document.close_state(), CloseState::Asking);
+        assert!(!document.edits().is_empty());
+        let frame = document.frame(normal(), palette());
+        text_at(&frame, "保存しないで閉じる (D)");
+        // 尋ねている間は表を動かさない。
+        document.apply(moving(CursorStep::Down), normal());
+        assert_eq!(document.selection().cursor(), CellPosition::new(0, 0));
+        document.apply(Intent::Cancel, normal());
+        assert_eq!(document.close_state(), CloseState::Open);
+        assert!(!document.edits().is_empty());
+    }
+
+    #[test]
+    fn choosing_discard_finishes_and_choosing_save_waits_for_the_save() {
+        let mut discarding = editable();
+        typed(&mut discarding, "x");
+        discarding.ask_close();
+        discarding.apply(Intent::Type('d'), normal());
+        assert_eq!(discarding.close_state(), CloseState::Finished);
+
+        let mut saving = editable();
+        typed(&mut saving, "x");
+        saving.ask_close();
+        assert_eq!(
+            saving.apply(Intent::Confirm, normal()),
+            DocumentEffect::Save
+        );
+        assert_eq!(saving.close_state(), CloseState::AfterSave);
+        saving.begin_saving();
+        text_at(&saving.frame(normal(), palette()), "保存してから閉じます…");
+        saving.saved();
+        assert_eq!(saving.close_state(), CloseState::Finished);
+    }
+
+    #[test]
+    fn a_failed_save_does_not_close() {
+        let mut document = editable();
+        typed(&mut document, "x");
+        document.ask_close();
+        assert_eq!(
+            document.apply(Intent::Type('S'), normal()),
+            DocumentEffect::Save
+        );
+        document.begin_saving();
+        document.save_failed(SaveProblem::Locked);
+        assert_eq!(document.close_state(), CloseState::Open);
+        assert!(!document.edits().is_empty());
+    }
+
+    #[test]
+    fn the_buttons_of_the_prompt_can_be_pressed() {
+        let mut document = editable();
+        typed(&mut document, "x");
+        document.ask_close();
+        let window = normal();
+        let (_, discard) = ClosePrompt::new(window).buttons()[1];
+        let at = PixelPoint::new(
+            discard.origin().x() + discard.size().width() / 2,
+            discard.origin().y() + discard.size().height() / 2,
+        );
+        document.apply(
+            Intent::Point {
+                at,
+                mode: SelectionMode::Collapse,
+            },
+            window,
+        );
+        assert_eq!(document.close_state(), CloseState::Finished);
+    }
+
+    #[test]
+    fn closing_while_saving_asks_and_save_closes_after_it() {
+        let mut document = editable();
+        typed(&mut document, "x");
+        document.apply(Intent::Save, normal());
+        document.begin_saving();
+        assert!(!document.ask_close());
+        assert_eq!(
+            document.apply(Intent::Confirm, normal()),
+            DocumentEffect::Stay
+        );
+        assert_eq!(document.close_state(), CloseState::AfterSave);
+        document.saved();
+        assert_eq!(document.close_state(), CloseState::Finished);
     }
 }
