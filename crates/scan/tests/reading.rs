@@ -596,4 +596,46 @@ mod reading {
             );
         }
     }
+
+    /// `Literal` で読んでも、上限を超える閉じた引用のセルを切り詰めた行は、厳格に読むのと同じセルになる（GitHub Issue #34。
+    /// 直す前は、切った所に閉じる引用符が無いのでセルの中のカンマで割れ、349,526 のセルになった）。
+    #[test]
+    fn a_long_closed_quoted_cell_is_not_split_when_read_literally() {
+        let mut input = b"a,b,c\n1,\"".to_vec();
+        while input.len() < 2 * RECORD_READ_LIMIT.get() {
+            input.extend_from_slice(b"x,y");
+        }
+        input.extend_from_slice(b"\",3\n2,q,r\n");
+        let source = Source::open(&fixture("long-closed-quote-literal", &input)).unwrap();
+        let cells = |dialect: Dialect| -> Vec<(usize, bool)> {
+            let index = index_with(&source, dialect, 1 << 20_u32);
+            read_records(&source, &index, utf8(dialect), RecordRange::new(0, 3))
+                .unwrap()
+                .records()
+                .iter()
+                .map(|record| (record.record().fields().len(), record.is_truncated()))
+                .collect()
+        };
+        let strict = cells(Dialect::rfc4180());
+        assert_eq!(strict, [(3, false), (2, true), (3, false)]);
+        assert_eq!(cells(literal()), strict);
+    }
+
+    /// 本当に閉じない引用符のある長い行は、`Literal` を選んだなら引用符を文字として読み、区切りで割る。
+    #[test]
+    fn a_long_line_with_a_really_unclosed_quote_is_still_read_literally() {
+        let mut input = b"a,b,c\n1,\"".to_vec();
+        while input.len() < 2 * RECORD_READ_LIMIT.get() {
+            input.extend_from_slice(b"x,y");
+        }
+        input.extend_from_slice(b"\n");
+        let source = Source::open(&fixture("long-unclosed-quote-literal", &input)).unwrap();
+        let index = index_with(&source, literal(), 1 << 20_u32);
+        assert_eq!(index.unclosed_quotes().len(), 1);
+        let window =
+            read_records(&source, &index, utf8(literal()), RecordRange::new(0, 2)).unwrap();
+        let long = &window.records()[1];
+        assert!(long.is_truncated());
+        assert!(long.record().fields().len() > 3);
+    }
 }

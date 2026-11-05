@@ -3,6 +3,7 @@
 use nene_ledger_core::dialect::Dialect;
 use nene_ledger_core::records::Records;
 use nene_ledger_core::text_format::TextFormat;
+use nene_ledger_core::unclosed_quote::UnclosedQuote;
 
 use crate::block_size::BlockSize;
 use crate::mark::Mark;
@@ -68,7 +69,9 @@ pub(crate) fn read_records_from(
     let spans = record_spans(source, (index, dialect), mark, range)?;
     let records = spans
         .into_iter()
-        .filter_map(|span| read_one(source, dialect, span).transpose())
+        .filter_map(|span| {
+            read_one(source, cutting_dialect(index, dialect, span), span).transpose()
+        })
         .collect::<Result<Vec<_>, _>>()?;
     Ok(RecordWindow::new(records))
 }
@@ -185,4 +188,26 @@ fn read_one(
     let bytes = source.read_block(span.start(), size)?;
     let record = Records::new(&bytes, dialect).next();
     Ok(record.map(|record| WindowRecord::new(span.start(), span.length(), bytes, record)))
+}
+
+/// レコード `span` を切る方言。🔴 上限を超えて先頭だけを読むレコードは、閉じた引用のセルでも切った所に閉じる引用符が
+/// 無いので、`Literal` のままだと引用符を文字とみなしてセルの中の区切りで割れる（GitHub Issue #34・210 万字のセルが
+/// 349,526 のセルになった）。切り詰めるレコードは厳格（`ToEnd`）に切る。ただし、索引が入力の終わりまで閉じなかったと
+/// 覚えている引用符がそのレコードの中にあれば、利用者の選んだ `Literal` のまま切る。
+fn cutting_dialect(index: &SparseIndex, dialect: Dialect, span: RecordSpan) -> Dialect {
+    let limit = u64::try_from(RECORD_READ_LIMIT.get()).unwrap_or(u64::MAX);
+    let end = match span.length() {
+        RecordLength::Exact(length) if length <= limit => return dialect,
+        RecordLength::Exact(length) => span.start().saturating_add(length),
+        RecordLength::MoreThan(_) => u64::MAX,
+    };
+    let quotes = index.unclosed_quotes();
+    let after_start = quotes.partition_point(|&quote| quote < span.start());
+    let unclosed_inside = quotes.get(after_start).is_some_and(|&quote| quote < end);
+    match dialect.unclosed_quote() {
+        UnclosedQuote::Literal if !unclosed_inside => {
+            dialect.with_unclosed_quote(UnclosedQuote::ToEnd)
+        }
+        UnclosedQuote::Literal | UnclosedQuote::ToEnd => dialect,
+    }
 }
