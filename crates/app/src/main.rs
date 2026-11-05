@@ -24,6 +24,7 @@ mod workers;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use nene_ledger_application::file_stamp::FileStamp;
 use nene_ledger_application::theme_state::ThemeState;
 
 use crate::open_failure::OpenFailure;
@@ -84,9 +85,16 @@ fn main() -> ExitCode {
     let Some(path) = rest.first().map(PathBuf::from).or_else(chosen_file) else {
         return ExitCode::from(2_u8);
     };
-    match opening::open(&path) {
-        Ok(opened) if opened.looks_binary() && !open_anyway(&path) => ExitCode::SUCCESS,
-        Ok(opened) => show(&path, &opened, theme),
+    open_and_show(&path, theme)
+}
+
+/// `path` を開いて窓に出す。文字のファイルでないようなら、開くかを尋ねる。
+fn open_and_show(path: &Path, theme: Option<ThemeState>) -> ExitCode {
+    // 🔴 印は開く前に取る。開いた後で外から変われば、保存の前に違いが分かる（FILE-01・ADR 0025）。
+    let stamp = nene_ledger_store::stamping::stamp_of(path).ok();
+    match opening::open(path) {
+        Ok(opened) if opened.looks_binary() && !open_anyway(path) => ExitCode::SUCCESS,
+        Ok(opened) => show(path, &opened, (theme, stamp)),
         Err(failure) => {
             report(&describe(&failure));
             ExitCode::FAILURE
@@ -95,8 +103,12 @@ fn main() -> ExitCode {
 }
 
 /// 窓を開き、その起こす口で裏の索引の仕事を始め、閉じられるまで描く。
-fn show(path: &Path, opened: &opening::Opened, theme: Option<ThemeState>) -> ExitCode {
-    match run_window(path, opened, theme) {
+fn show(
+    path: &Path,
+    opened: &opening::Opened,
+    (theme, stamp): (Option<ThemeState>, Option<FileStamp>),
+) -> ExitCode {
+    match run_window(path, opened, (theme, stamp)) {
         Ok(()) => ExitCode::SUCCESS,
         Err(message) => {
             report(&message);
@@ -109,7 +121,7 @@ fn show(path: &Path, opened: &opening::Opened, theme: Option<ThemeState>) -> Exi
 fn run_window(
     path: &Path,
     opened: &opening::Opened,
-    theme: Option<ThemeState>,
+    (theme, stamp): (Option<ThemeState>, Option<FileStamp>),
 ) -> Result<(), String> {
     use nene_ledger_application::ticker::Ticker;
     use nene_ledger_scan::block_size::BlockSize;
@@ -128,7 +140,11 @@ fn run_window(
     let job = IndexJob::spawn(open_source()?, format, BlockSize::MEBIBYTE, ui.wakeup())
         .map_err(|failure| format!("索引の仕事を始められなかった: {failure:?}"))?;
     // 画面のスレッドが範囲を読むための原本は、索引の仕事とは別に開く（位置を指定して読むので共有しなくてよい）。
-    let reader = reader::Reader::new(open_source()?, format, ui.wakeup());
+    let reader = reader::Reader::new(
+        (open_source()?, path.to_path_buf(), stamp),
+        format,
+        ui.wakeup(),
+    );
     // 押し続けとドラッグの時計。X11 はアダプタのスレッド、Windows は窓のタイマー（SetTimer）。
     #[cfg(not(windows))]
     let ticker: Box<dyn Ticker> = Box::new(
@@ -217,7 +233,7 @@ fn chosen_file() -> Option<PathBuf> {
     clippy::print_stderr,
     reason = "RS-014: 合成ルートは --dump の注意を端末に出してよい（測定で値の欠けを知らせる・GitHub Issue #36）"
 )]
-fn warn(message: &str) {
+pub(crate) fn warn(message: &str) {
     eprintln!("nene-ledger: {message}");
 }
 

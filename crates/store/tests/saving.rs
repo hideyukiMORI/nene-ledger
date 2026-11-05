@@ -314,4 +314,67 @@ mod saving {
         assert_eq!(std::fs::read(&target).unwrap(), b"changed while saving\n");
         assert!(leftovers(&dir).is_empty());
     }
+
+    /// 起こされた回数を数える口。
+    struct Counting(std::sync::atomic::AtomicUsize);
+
+    impl nene_ledger_application::wakeup::Wakeup for Counting {
+        fn wake(&self) {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    #[test]
+    fn a_save_job_writes_in_the_background_and_wakes_the_window() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let dir = folder("job");
+        let target = dir.join("t.csv");
+        std::fs::write(&target, b"a,b\n").unwrap();
+        let mut plan = SavePlan::empty();
+        plan.copy(0, 2);
+        plan.text("x\n");
+        let wakeup = Arc::new(Counting(AtomicUsize::new(0)));
+        let shared: Arc<dyn nene_ledger_application::wakeup::Wakeup> = wakeup.clone();
+        let job = nene_ledger_store::save_job::SaveJob::spawn(
+            target.clone(),
+            (plan, TextEncoding::Utf8, stamp_of(&target).unwrap()),
+            (Bytes(b"a,b\n".to_vec()), RenameReplacing),
+            shared,
+        )
+        .unwrap();
+        assert_eq!(job.wait(), Ok(()));
+        assert_eq!(std::fs::read(&target).unwrap(), b"a,x\n");
+        assert_eq!(wakeup.0.load(Ordering::SeqCst), 1);
+        assert!(leftovers(&dir).is_empty());
+    }
+
+    #[test]
+    fn a_failed_save_job_reports_the_failure_once() {
+        use std::sync::Arc;
+        use std::sync::atomic::AtomicUsize;
+        let dir = folder("job-failed");
+        let target = dir.join("t.csv");
+        std::fs::write(&target, b"a\n").unwrap();
+        let opened = stamp_of(&target).unwrap();
+        std::fs::write(&target, b"changed\n").unwrap();
+        let mut plan = SavePlan::empty();
+        plan.text("x\n");
+        let mut job = nene_ledger_store::save_job::SaveJob::spawn(
+            target.clone(),
+            (plan, TextEncoding::Utf8, opened),
+            (Bytes(Vec::new()), RenameReplacing),
+            Arc::new(Counting(AtomicUsize::new(0))),
+        )
+        .unwrap();
+        let outcome = loop {
+            if let Some(outcome) = job.take_result() {
+                break outcome;
+            }
+            std::thread::yield_now();
+        };
+        assert_eq!(outcome, Err(SaveFailure::ChangedOutside));
+        assert_eq!(job.take_result(), None);
+        assert_eq!(std::fs::read(&target).unwrap(), b"changed\n");
+    }
 }

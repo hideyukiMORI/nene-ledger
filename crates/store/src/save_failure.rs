@@ -32,4 +32,8 @@ pub enum SaveFailure {
         /// 残っている一時ファイル。
         temporary: PathBuf,
     },
+    /// 裏の保存のスレッドを作れない（何も書いていない）。
+    Spawn(ErrorKind),
+    /// 裏の保存のスレッドが止まった（書いた一時ファイルが残っていることがある）。
+    Panicked,
 }

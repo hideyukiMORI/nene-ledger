@@ -58,13 +58,15 @@ pub enum CommandId {
     UnfreezeColumns,
     /// 選んだ範囲をコピーする。
     Copy,
+    /// 書き換えを保存する（ADR 0026 の決定 6）。
+    Save,
     /// キーの一覧を見る（2 段目・Issue #63）。
     ShowKeys,
 }
 
 impl CommandId {
     /// すべての操作（何も打たないときの順）。
-    pub const ALL: [Self; 24] = [
+    pub const ALL: [Self; 25] = [
         Self::Top,
         Self::Bottom,
         Self::GoTo,
@@ -88,6 +90,7 @@ impl CommandId {
         Self::FreezeColumns,
         Self::UnfreezeColumns,
         Self::Copy,
+        Self::Save,
         Self::ShowKeys,
     ];
 
@@ -122,6 +125,7 @@ impl CommandId {
             Self::FreezeColumns => "カーソルの列まで左に固定する",
             Self::UnfreezeColumns => "列の固定を外す",
             Self::Copy => "選んだ範囲をコピーする",
+            Self::Save => "直したセルを保存する",
             Self::ShowKeys => "キーの一覧を見る…",
         }
     }
@@ -153,6 +157,7 @@ impl CommandId {
             Self::FreezeColumns => "かーそるのれつまでひだりにこていする",
             Self::UnfreezeColumns => "れつのこていをはずす",
             Self::Copy => "えらんだはんいをこぴーする",
+            Self::Save => "なおしたせるをほぞんする",
             Self::ShowKeys => "きーのいちらんをみる",
         }
     }
@@ -191,6 +196,7 @@ impl CommandId {
             Self::FreezeColumns => &["freeze", "pin", "lock columns", "fixed column"],
             Self::UnfreezeColumns => &["unfreeze", "unpin", "unlock columns"],
             Self::Copy => &["copy", "clipboard"],
+            Self::Save => &["save", "write"],
             Self::ShowKeys => &["keys", "shortcuts", "keyboard", "help"],
         }
     }
@@ -223,6 +229,7 @@ impl CommandId {
             | Self::UnfreezeColumns
             | Self::ShowKeys => None,
             Self::Copy => Some("Ctrl+C"),
+            Self::Save => Some("Ctrl+S"),
         }
     }
 
@@ -253,6 +260,7 @@ impl CommandId {
             | Self::FreezeColumns
             | Self::UnfreezeColumns
             | Self::Copy
+            | Self::Save
             | Self::ShowKeys => None,
         }
     }
@@ -289,6 +297,7 @@ impl CommandId {
             Self::FreezeColumns => Some(Intent::FreezeColumns),
             Self::UnfreezeColumns => Some(Intent::UnfreezeColumns),
             Self::Copy => Some(Intent::Copy),
+            Self::Save => Some(Intent::Save),
         }
     }
 }

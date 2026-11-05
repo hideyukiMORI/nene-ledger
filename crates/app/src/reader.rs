@@ -1,7 +1,9 @@
 //! 動いた先の範囲を読む。
 
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use nene_ledger_application::file_stamp::FileStamp;
 use nene_ledger_application::wakeup::Wakeup;
 use nene_ledger_core::dialect_candidate::DialectCandidate;
 use nene_ledger_core::text_encoding::TextEncoding;
@@ -15,9 +17,11 @@ use nene_ledger_scan::record_range::RecordRange;
 use nene_ledger_scan::scan_failure::ScanFailure;
 use nene_ledger_scan::source::Source;
 use nene_ledger_scan::sparse_index::SparseIndex;
+use nene_ledger_store::stamping::stamp_of;
 
 use crate::opening::detect;
 use crate::rows::{Rows, WINDOW_RECORDS, read_rows};
+use crate::scan_lookup::ScanLookup;
 
 /// 動いた先の範囲を読む材料。画面のスレッドが持つ原本と読み方と、作り終えた索引（まだなら作り始める前の索引）と、
 /// 裏の仕事が画面のスレッドを起こす口。
@@ -26,6 +30,10 @@ pub(crate) struct Reader {
     format: TextFormat,
     index: SparseIndex,
     wakeup: Arc<dyn Wakeup>,
+    /// 原本の道筋（保存と、保存の後の開き直しに使う）。
+    path: PathBuf,
+    /// 開く前に取った原本の印（保存の前に比べる・FILE-01）。取れなければ `None`（保存できない）。
+    opened: Option<FileStamp>,
 }
 
 impl core::fmt::Debug for Reader {
@@ -41,13 +49,67 @@ impl core::fmt::Debug for Reader {
 
 impl Reader {
     /// 作り始める前の索引（先頭から切り進める）で始める。
-    pub(crate) fn new(source: Source, format: TextFormat, wakeup: Arc<dyn Wakeup>) -> Self {
+    pub(crate) fn new(
+        (source, path, opened): (Source, PathBuf, Option<FileStamp>),
+        format: TextFormat,
+        wakeup: Arc<dyn Wakeup>,
+    ) -> Self {
         Self {
             source,
             format,
             index: SparseIndex::empty(),
             wakeup,
+            path,
+            opened,
         }
+    }
+
+    /// 開く前に取った原本の印。
+    pub(crate) fn opened(&self) -> Option<FileStamp> {
+        self.opened
+    }
+
+    /// 原本の道筋。
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// 窓を起こす口（裏の仕事に渡す）。
+    pub(crate) fn wakeup(&self) -> Arc<dyn Wakeup> {
+        Arc::clone(&self.wakeup)
+    }
+
+    /// 原本の大きさ（バイト）。
+    pub(crate) fn source_length(&self) -> u64 {
+        self.source.len()
+    }
+
+    /// 原本の別の口（裏の保存が読む）。
+    pub(crate) fn source_copy(&self) -> Result<Source, ScanFailure> {
+        self.source.try_clone()
+    }
+
+    /// 保存の計画のために、原本のレコードを今の索引と読み方で引く口。
+    pub(crate) fn lookup(&self) -> ScanLookup<'_> {
+        ScanLookup::new(&self.source, &self.index, self.format)
+    }
+
+    /// 保存して置き換えた後のファイルを、同じ読み方で開き直して索引を作り直す（ADR 0026 の決定 6）。
+    /// 置き換えの前の口（Linux では前のファイルを指したまま）は捨てる。
+    pub(crate) fn reopen_saved(&mut self) -> Result<IndexJob, ScanFailure> {
+        // 印は開く前に取る（開いた後の外からの変更を次の保存で見つける）。
+        let opened = stamp_of(&self.path).ok();
+        let source = Source::open(&self.path)?;
+        let job = IndexJob::spawn(
+            source.try_clone()?,
+            self.format,
+            BlockSize::MEBIBYTE,
+            Arc::clone(&self.wakeup),
+        )?;
+        self.source = source;
+        self.index = SparseIndex::empty();
+        self.opened = opened;
+        Ok(job)
     }
 
     /// 読み方。

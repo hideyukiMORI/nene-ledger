@@ -8,18 +8,18 @@ use nene_ledger_scan::scan_failure::ScanFailure;
 use nene_ledger_scan::source::Source;
 
 /// 原本を、位置を指定して読む。
-pub(crate) struct ScanBytes<'a> {
-    source: &'a Source,
+pub(crate) struct ScanBytes {
+    source: Source,
 }
 
-impl<'a> ScanBytes<'a> {
+impl ScanBytes {
     /// 原本 `source` を読む。
-    pub(crate) fn new(source: &'a Source) -> Self {
+    pub(crate) fn new(source: Source) -> Self {
         Self { source }
     }
 }
 
-impl SourceBytes for ScanBytes<'_> {
+impl SourceBytes for ScanBytes {
     type Failure = ErrorKind;
 
     fn read_at(&mut self, offset: u64, buffer: &mut [u8]) -> Result<usize, ErrorKind> {

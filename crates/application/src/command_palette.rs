@@ -144,7 +144,8 @@ impl CommandPalette {
             | Intent::Edit
             | Intent::Delete
             | Intent::BreakLine
-            | Intent::Advance(_) => PaletteOutcome::Stay,
+            | Intent::Advance(_)
+            | Intent::Save => PaletteOutcome::Stay,
         }
     }
 

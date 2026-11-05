@@ -35,6 +35,7 @@ const VK_A: u16 = 0x41;
 const VK_C: u16 = 0x43;
 const VK_G: u16 = 0x47;
 const VK_P: u16 = 0x50;
+const VK_S: u16 = 0x53;
 const VK_T: u16 = 0x54;
 const VK_U: u16 = 0x55;
 const VK_NUMPAD0: u16 = 0x60;
@@ -121,6 +122,7 @@ fn control_intent(key: u16, shift: bool, alt: bool) -> Option<Intent> {
         (VK_PRIOR, true) => Some(Intent::MoveColumns(ColumnShift::Left)),
         (VK_NEXT, true) => Some(Intent::MoveColumns(ColumnShift::Right)),
         (VK_A, false) => Some(Intent::SelectAll),
+        (VK_S, false) => Some(Intent::Save),
         (VK_G, false) => Some(Intent::OpenGoTo),
         (VK_P, true) => Some(Intent::OpenPalette),
         (VK_U, true) => Some(Intent::ToggleDetail),
