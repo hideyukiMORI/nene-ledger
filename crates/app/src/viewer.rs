@@ -25,6 +25,8 @@ use nene_ledger_application::window_view::WindowView;
 use nene_ledger_application::zoom_level::ZoomLevel;
 use nene_ledger_core::frame::Frame;
 use nene_ledger_core::pixel_point::PixelPoint;
+use nene_ledger_core::pixel_rect::PixelRect;
+use nene_ledger_core::preedit::Preedit;
 use nene_ledger_scan::index_job::IndexJob;
 use nene_ledger_scan::index_outcome::IndexOutcome;
 use nene_ledger_scan::range_job::RangeJob;
@@ -530,6 +532,31 @@ impl Session for Viewer {
         self.refresh_totals();
         self.sync_ticker();
         copied
+    }
+
+    fn compose(&mut self, preedit: Option<Preedit>, _view: WindowView) {
+        // パレットの欄は英字とローマ字で絞るので、確定前の文字列は描かない（確定は 1 字ずつ渡す）。
+        if self.palette.is_none() {
+            self.document.compose(preedit);
+        }
+    }
+
+    fn commit_text(&mut self, text: &str, view: WindowView) {
+        if self.palette.is_none() {
+            self.document.commit_text(text);
+            return;
+        }
+        for character in text.chars() {
+            // 字を打ってもクリップボードに置くものは出ない。
+            let _clipboard = self.intent(Intent::Type(character), view);
+        }
+    }
+
+    fn composition_area(&self, view: WindowView) -> Option<PixelRect> {
+        self.palette
+            .is_none()
+            .then(|| self.document.composition_area(view))
+            .flatten()
     }
 
     fn hover(&mut self, at: Option<PixelPoint>, view: WindowView) -> bool {

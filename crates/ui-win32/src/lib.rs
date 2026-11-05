@@ -5,6 +5,8 @@
 //! 🔴 Windows の実機ではまだ動かしていない（QLT-013・Issue #7）。キーとマウスの割り当てと当たり判定の写しは、どの OS でもテストする。
 
 #[cfg(any(windows, test))]
+mod composition;
+#[cfg(any(windows, test))]
 mod hit_code;
 #[cfg(any(windows, test))]
 mod key_intent;
@@ -15,6 +17,8 @@ mod pixels;
 mod clipboard;
 #[cfg(windows)]
 pub mod desktop;
+#[cfg(windows)]
+mod ime;
 #[cfg(windows)]
 mod pen;
 #[cfg(windows)]

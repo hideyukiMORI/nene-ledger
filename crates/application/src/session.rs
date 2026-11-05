@@ -2,6 +2,8 @@
 
 use nene_ledger_core::frame::Frame;
 use nene_ledger_core::pixel_point::PixelPoint;
+use nene_ledger_core::pixel_rect::PixelRect;
+use nene_ledger_core::preedit::Preedit;
 
 use crate::clipboard_text::ClipboardText;
 use crate::intent::Intent;
@@ -22,6 +24,15 @@ pub trait Session {
 
     /// 利用者の意図。`view` は今の窓（1 画面の大きさを決める）。コピーなら、クリップボードに置く文字列を返す。
     fn intent(&mut self, intent: Intent, view: WindowView) -> Option<ClipboardText>;
+
+    /// IME の確定前の文字列が変わった（`None` で消えた・ADR 0026 の決定 4）。編集中のセルの中に描く。
+    fn compose(&mut self, preedit: Option<Preedit>, view: WindowView);
+
+    /// IME が文字列を確定した。編集の欄に挿す（パレットでは 1 字ずつ打ったのと同じ）。
+    fn commit_text(&mut self, text: &str, view: WindowView);
+
+    /// IME の候補の窓を置く所（編集中のセルの、窓の中の矩形）。無ければ `None`（UI は動かさない）。
+    fn composition_area(&self, view: WindowView) -> Option<PixelRect>;
 
     /// 指がボタンを押さずに中身の `at` へ動いた（`None` は中身の外）。見た目が変わるなら `true`（描き直す）。
     fn hover(&mut self, at: Option<PixelPoint>, view: WindowView) -> bool;

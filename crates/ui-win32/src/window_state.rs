@@ -13,7 +13,9 @@ use nene_ledger_core::chrome_hit::ChromeHit;
 use nene_ledger_core::display_scale::DisplayScale;
 use nene_ledger_core::glyph_metrics::GlyphMetrics;
 use nene_ledger_core::pixel_point::PixelPoint;
+use nene_ledger_core::pixel_rect::PixelRect;
 use nene_ledger_core::pixel_size::PixelSize;
+use nene_ledger_core::preedit::Preedit;
 use nene_ledger_core::window_chrome::WindowChrome;
 use nene_ledger_core::window_placement::WindowPlacement;
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
@@ -157,6 +159,21 @@ impl<'session> WindowState<'session> {
         }
         self.invalidate();
         self.follow_finish();
+    }
+
+    /// IME の組み立て（ADR 0026 の決定 4）。確定した文字列があれば先に欄へ挿し、確定前の文字列を欄に出す（`None` で消す）。
+    pub(crate) fn composition(&mut self, result: Option<&str>, preedit: Option<Preedit>) {
+        let view = self.view();
+        if let Some(text) = result {
+            self.session.commit_text(text, view);
+        }
+        self.session.compose(preedit, view);
+        self.invalidate();
+    }
+
+    /// IME の候補の窓を置く所（編集中のセルの、窓の中の矩形）。
+    pub(crate) fn composition_area(&self) -> Option<PixelRect> {
+        self.session.composition_area(self.view())
     }
 
     /// 閉じるよう求められた（`WM_CLOSE`）。すぐ閉じてよければ `true`。だめなら尋ねる画面を描き直す（ADR 0026）。
