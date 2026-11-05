@@ -31,19 +31,27 @@ impl RecordLookup for ScanLookup<'_> {
     type Failure = ScanFailure;
 
     fn record(&mut self, number: u64) -> Result<Option<LocatedRecord>, ScanFailure> {
+        Ok(self.records(number, 1)?.into_iter().next())
+    }
+
+    fn records(&mut self, first: u64, count: usize) -> Result<Vec<LocatedRecord>, ScanFailure> {
         let window = read_records(
             self.source,
             self.index,
             self.format,
-            RecordRange::new(number, 1),
+            RecordRange::new(first, count),
         )?;
-        Ok(window.records().first().map(|found| {
-            LocatedRecord::new(
-                found.offset(),
-                found.bytes().to_vec(),
-                found.record().clone(),
-                !found.is_truncated(),
-            )
-        }))
+        Ok(window
+            .records()
+            .iter()
+            .map(|found| {
+                LocatedRecord::new(
+                    found.offset(),
+                    found.bytes().to_vec(),
+                    found.record().clone(),
+                    !found.is_truncated(),
+                )
+            })
+            .collect())
     }
 }
