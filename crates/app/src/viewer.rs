@@ -13,9 +13,13 @@ use nene_ledger_application::job_progress::JobProgress;
 use nene_ledger_application::job_report::JobReport;
 use nene_ledger_application::notice::Notice;
 use nene_ledger_application::palette_layout::PaletteLayout;
+use nene_ledger_application::palette_mode::PaletteMode;
 use nene_ledger_application::palette_outcome::PaletteOutcome;
 use nene_ledger_application::pointer_shape::PointerShape;
+use nene_ledger_application::reading_aspect::ReadingAspect;
 use nene_ledger_application::reading_choice::ReadingChoice;
+use nene_ledger_application::save_problem::SaveProblem;
+use nene_ledger_application::save_target::SaveTarget;
 use nene_ledger_application::selection_totals::SelectionTotals;
 use nene_ledger_application::session::Session;
 use nene_ledger_application::settings_failure::SettingsFailure;
@@ -24,6 +28,8 @@ use nene_ledger_application::ticker::Ticker;
 use nene_ledger_application::totals_request::TotalsRequest;
 use nene_ledger_application::window_view::WindowView;
 use nene_ledger_application::zoom_level::ZoomLevel;
+use std::path::PathBuf;
+
 use nene_ledger_core::frame::Frame;
 use nene_ledger_core::order_run::OrderRun;
 use nene_ledger_core::pixel_point::PixelPoint;
@@ -40,7 +46,11 @@ use crate::open_palette::OpenPalette;
 use crate::preferences::Preferences;
 use crate::reader::Reader;
 use crate::rows::WINDOW_RECORDS;
-use crate::saving::{SavingFailure, describe, problem_of, start_saving};
+#[cfg(not(windows))]
+use crate::saving::suggested_entry;
+#[cfg(windows)]
+use crate::saving::suggested_target;
+use crate::saving::{SavingFailure, describe, problem_of, start_saving, start_saving_as};
 use crate::totals_fold::TotalsFold;
 use crate::warn;
 use crate::workers::Workers;
@@ -59,6 +69,8 @@ pub(crate) struct Viewer {
     trial: Option<Document>,
     /// 裏で回っている保存（ADR 0026 の決定 6）。
     saving: Option<SaveJob>,
+    /// 裏で回っている保存が名前を付けて保存なら、その保存先（終われば窓がそこを指す・ADR 0028 の決定 5）。
+    saving_as: Option<PathBuf>,
 }
 
 impl Viewer {
@@ -80,6 +92,7 @@ impl Viewer {
             totals: None,
             trial: None,
             saving: None,
+            saving_as: None,
         }
     }
 
@@ -97,29 +110,119 @@ impl Viewer {
         }
     }
 
+    /// 名前を付けて保存の保存先を選ばせる（ADR 0028 の決定 4）。Windows は OS の画面（既にあるファイルなら OS の画面が
+    /// 上書きを尋ねる）、X11 はパレットの欄（初めは今のファイルのフォルダ）。
+    fn choose_save_target(&mut self) {
+        #[cfg(windows)]
+        {
+            let (folder, name) = suggested_target(self.reader.path());
+            match nene_ledger_ui_win32::desktop::choose_save_file(folder, &name) {
+                Some(path) => self.start_saving_as(path),
+                None => self.document.save_as_cancelled(),
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            let colors = self.preferences.theme().palette();
+            let initial = suggested_entry(self.reader.path());
+            self.palette = Some(OpenPalette::new(
+                CommandPalette::open_save_as(initial),
+                colors,
+            ));
+        }
+    }
+
+    /// 読み方の面 `aspect` を選ぶ段へ入る（今の読み方を選んだ状態・Issue #52）。
+    fn open_reading(&mut self, aspect: ReadingAspect) {
+        let base = self.trial.as_ref().unwrap_or(&self.document);
+        let current =
+            ReadingChoice::current(aspect, base.format_summary().format(), base.header_record());
+        if let Some(open) = self.palette.as_mut() {
+            open.state_mut().enter_reading(aspect, current);
+        }
+    }
+
+    /// パレットを閉じる。名前を付けて保存の欄なら、保存をやめたことにする（保存して閉じるを選んでいれば閉じない）。
+    fn close_palette(&mut self) {
+        let saving_as = self
+            .palette
+            .as_ref()
+            .is_some_and(|open| matches!(open.state().mode(), PaletteMode::SaveAs { .. }));
+        self.palette = None;
+        if saving_as {
+            self.document.save_as_cancelled();
+        }
+    }
+
+    /// パレットの欄で打った道筋に名前を付けて保存する。既にあるファイルで、まだ上書きを確かめていなければ尋ねる
+    /// （ADR 0028 の決定 5・強制の 3 つ目）。フォルダや読めない道筋なら、欄を開いたまま知らせる。
+    fn save_as_entered(&mut self, overwrite: bool) {
+        let Some(open) = self.palette.as_mut() else {
+            return;
+        };
+        let path = PathBuf::from(open.state().query().trim());
+        match nene_ledger_store::stamping::target_state(&path) {
+            Ok(SaveTarget::Existing(_)) if !overwrite => open.state_mut().ask_overwrite(),
+            Ok(SaveTarget::Existing(_) | SaveTarget::Absent) => {
+                self.palette = None;
+                self.start_saving_as(path);
+            }
+            Err(_kind) => self.document.notify(Notice::SaveFailed(SaveProblem::Other)),
+        }
+    }
+
+    /// `path` へ名前を付けて保存を裏で始める。始められなければ理由を知らせる。
+    fn start_saving_as(&mut self, path: PathBuf) {
+        match start_saving_as(self.document.changes(), &self.reader, &path) {
+            Ok(job) => {
+                self.saving = Some(job);
+                self.saving_as = Some(path);
+                self.document.begin_saving();
+            }
+            Err(failure) => {
+                warn(&describe(&failure));
+                self.document.save_failed(problem_of(&failure));
+            }
+        }
+    }
+
     /// 裏の保存が終わっていれば、結果を画面に取り込む。成功したら置き換えた後のファイルを開き直す。
     fn finish_saving(&mut self) {
         let Some(outcome) = self.saving.as_mut().and_then(SaveJob::take_result) else {
             return;
         };
         self.saving = None;
+        let saved_as = self.saving_as.take();
         if let Err(failure) = outcome {
             let failure = SavingFailure::Save(failure);
             warn(&describe(&failure));
             self.document.save_failed(problem_of(&failure));
             return;
         }
-        // 前の索引の仕事と集計は、置き換える前のファイルのもの。捨ててから開き直す。
+        // 前の索引の仕事と集計は、置き換える前のファイルのもの。捨ててから開き直す。名前を付けて保存したなら、
+        // 窓は保存先を指す（題名も替える・ADR 0028 の決定 5）。
         self.totals = None;
-        match self.reader.reopen_saved() {
+        let title = saved_as.map(|path| {
+            let title = crate::opening::title_of(&path);
+            self.reader.retarget(path);
+            title
+        });
+        let reopened = self.reader.reopen_saved();
+        let reread = match (title, self.reader.line_endings()) {
+            (Some(title), Some(endings)) => self.document.saved_as(title, endings),
+            (Some(title), None) => {
+                let endings = self.document.format_summary().line_endings();
+                self.document.saved_as(title, endings)
+            }
+            (None, _) => self.document.saved(),
+        };
+        match reopened {
             Ok(job) => {
                 self.job = job;
-                let reread = self.document.saved();
                 self.effect(reread);
             }
             Err(failure) => {
                 warn(&format!("保存した後に開き直せなかった: {failure:?}"));
-                let _reread = self.document.saved();
                 self.document.notify(Notice::ReopenFailed);
             }
         }
@@ -194,6 +297,10 @@ impl Viewer {
             }
             DocumentEffect::Save => {
                 self.start_saving();
+                None
+            }
+            DocumentEffect::SaveAs => {
+                self.choose_save_target();
                 None
             }
         }
@@ -308,7 +415,11 @@ impl Viewer {
         match outcome {
             PaletteOutcome::Stay => None,
             PaletteOutcome::Close => {
-                self.palette = None;
+                self.close_palette();
+                None
+            }
+            PaletteOutcome::SaveAs { overwrite } => {
+                self.save_as_entered(overwrite);
                 None
             }
             PaletteOutcome::Run(intent) => {
@@ -330,15 +441,7 @@ impl Viewer {
                 None
             }
             PaletteOutcome::OpenReading(aspect) => {
-                let base = self.trial.as_ref().unwrap_or(&self.document);
-                let current = ReadingChoice::current(
-                    aspect,
-                    base.format_summary().format(),
-                    base.header_record(),
-                );
-                if let Some(open) = self.palette.as_mut() {
-                    open.state_mut().enter_reading(aspect, current);
-                }
+                self.open_reading(aspect);
                 None
             }
             PaletteOutcome::PreviewReading(choice) => {

@@ -29,4 +29,10 @@ pub enum PaletteOutcome {
     RevertReading,
     /// 判別の候補を選ぶ段を開く（合成ルートが今の文字コードで候補を作り `CommandPalette::enter_candidates` を呼ぶ・Issue #3）。
     OpenCandidates,
+    /// 打った道筋に名前を付けて保存する（合成ルートが `CommandPalette::query` を読む）。`overwrite` は、上書きを尋ねて
+    /// もう一度 Enter を受けたか。`false` で道筋のファイルが既にあれば、合成ルートは `CommandPalette::ask_overwrite` を呼ぶ。
+    SaveAs {
+        /// 上書きを確かめたか。
+        overwrite: bool,
+    },
 }

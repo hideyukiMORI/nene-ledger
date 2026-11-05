@@ -75,8 +75,8 @@ pub(crate) fn key_intent(keysym: u32, typed: Option<char>, state: KeyButMask) ->
     if control && keysym == XK_C {
         return Some(Intent::Copy);
     }
-    if control && !state.contains(KeyButMask::SHIFT) && keysym == XK_S {
-        return Some(Intent::Save);
+    if control && let Some(intent) = save_intent(keysym, state.contains(KeyButMask::SHIFT)) {
+        return Some(intent);
     }
     if control && let Some(intent) = undo_intent(keysym, state.contains(KeyButMask::SHIFT)) {
         return Some(intent);
@@ -192,6 +192,16 @@ fn line_intent(keysym: u32, control: bool, shift: bool) -> Option<Intent> {
 }
 
 /// Ctrl と組んで元に戻す・やり直すキー（Ctrl+Z・Ctrl+Y・Ctrl+Shift+Z・UNDO-01）。Shift で `Z` が大文字の keysym になる配列もある。
+/// Ctrl と組んで保存する（Ctrl+S）・名前を付けて保存する（Ctrl+Shift+S・ADR 0028 の決定 4）キー。
+/// Shift を押した keysym は大文字（`S`・0x53）で届くこともある（Ctrl+Shift+Z と同じ）。
+fn save_intent(keysym: u32, shift: bool) -> Option<Intent> {
+    match (keysym, shift) {
+        (XK_S, false) => Some(Intent::Save),
+        (XK_S | 0x53, true) => Some(Intent::SaveAs),
+        _ => None,
+    }
+}
+
 fn undo_intent(keysym: u32, shift: bool) -> Option<Intent> {
     match (keysym, shift) {
         (XK_Z, false) => Some(Intent::Undo),
@@ -591,6 +601,14 @@ mod tests {
         assert_eq!(
             key_intent(XK_S, Some('s'), KeyButMask::CONTROL),
             Some(Intent::Save)
+        );
+        assert_eq!(
+            key_intent(0x53, Some('S'), control_shift),
+            Some(Intent::SaveAs)
+        );
+        assert_eq!(
+            key_intent(XK_S, Some('s'), control_shift),
+            Some(Intent::SaveAs)
         );
         assert_eq!(
             key_intent(XK_Z, Some('z'), plain()),

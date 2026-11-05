@@ -73,6 +73,14 @@ impl Opened {
     }
 }
 
+/// ファイル `path` の窓の題名（`<ファイルの名前> — NeNe Ledger`）。
+pub(crate) fn title_of(path: &Path) -> String {
+    let name = path
+        .file_name()
+        .map_or_else(|| path.to_string_lossy(), |name| name.to_string_lossy());
+    format!("{name} — NeNe Ledger")
+}
+
 /// 新しい表の題名（ADR 0028）。
 pub(crate) const BLANK_TITLE: &str = "無題 — NeNe Ledger";
 
@@ -100,12 +108,9 @@ pub(crate) fn open(path: &Path) -> Result<Opened, OpenFailure> {
         format,
         RecordRange::new(0, WINDOW_RECORDS),
     )?;
-    let name = path
-        .file_name()
-        .map_or_else(|| path.to_string_lossy(), |name| name.to_string_lossy());
     Ok(Opened {
         rows,
-        title: format!("{name} — NeNe Ledger"),
+        title: title_of(path),
         summary: FormatSummary::new(format, guessed.line_endings()),
         header: guessed.header(),
         binary: guessed.looks_binary(),

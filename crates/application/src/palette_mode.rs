@@ -24,6 +24,12 @@ pub enum PaletteMode {
         /// 今の読み方（方言）。
         current: ReadingChoice,
     },
+    /// 名前を付けて保存の保存先の道筋を打つ段（X11・ADR 0028 の決定 4）。`overwrite` は、打った道筋のファイルが既にあり、
+    /// 上書きしてよいかを尋ねている間（もう一度 Enter で上書き・決定 5）。
+    SaveAs {
+        /// 上書きを尋ねているか。
+        overwrite: bool,
+    },
     /// 配色の一覧。`original` は開いたときの配色の、表の中の位置（Esc で戻す先）。
     Themes {
         /// 開いたときの配色の位置。
@@ -37,7 +43,7 @@ impl PaletteMode {
     pub fn tries_the_selection(self) -> bool {
         match self {
             Self::Themes { .. } | Self::Reading { .. } | Self::Candidates { .. } => true,
-            Self::Commands | Self::GoTo | Self::Keys => false,
+            Self::Commands | Self::GoTo | Self::Keys | Self::SaveAs { .. } => false,
         }
     }
 }

@@ -8,6 +8,7 @@ mod saving {
 
     use nene_ledger_application::replace_failure::ReplaceFailure;
     use nene_ledger_application::replacing::Replacing;
+    use nene_ledger_application::save_target::SaveTarget;
     use nene_ledger_application::source_bytes::SourceBytes;
     use nene_ledger_core::save_plan::SavePlan;
     use nene_ledger_core::text_encoding::TextEncoding;
@@ -80,7 +81,7 @@ mod saving {
             (
                 &plan,
                 encoding,
-                stamp_of(target).map_err(SaveFailure::Target)?,
+                SaveTarget::Existing(stamp_of(target).map_err(SaveFailure::Target)?),
             ),
             &mut Bytes(Vec::new()),
             &RenameReplacing,
@@ -97,7 +98,11 @@ mod saving {
         let plan = whole(original.len());
         save(
             &target,
-            (&plan, TextEncoding::Utf8WithBom, stamp_of(&target).unwrap()),
+            (
+                &plan,
+                TextEncoding::Utf8WithBom,
+                SaveTarget::Existing(stamp_of(&target).unwrap()),
+            ),
             &mut source,
             &RenameReplacing,
         )
@@ -120,7 +125,11 @@ mod saving {
         plan.copy(1_500_001, 1_499_999);
         save(
             &target,
-            (&plan, TextEncoding::Utf8, stamp_of(&target).unwrap()),
+            (
+                &plan,
+                TextEncoding::Utf8,
+                SaveTarget::Existing(stamp_of(&target).unwrap()),
+            ),
             &mut Bytes(original.clone()),
             &RenameReplacing,
         )
@@ -143,7 +152,11 @@ mod saving {
         let mut source = Bytes(original);
         save(
             &target,
-            (&plan, TextEncoding::ShiftJis, stamp_of(&target).unwrap()),
+            (
+                &plan,
+                TextEncoding::ShiftJis,
+                SaveTarget::Existing(stamp_of(&target).unwrap()),
+            ),
             &mut source,
             &RenameReplacing,
         )
@@ -176,7 +189,11 @@ mod saving {
         let mut source = Bytes(b"abc".to_vec());
         let failure = save(
             &target,
-            (&whole(6), TextEncoding::Utf8, stamp_of(&target).unwrap()),
+            (
+                &whole(6),
+                TextEncoding::Utf8,
+                SaveTarget::Existing(stamp_of(&target).unwrap()),
+            ),
             &mut source,
             &RenameReplacing,
         );
@@ -195,7 +212,11 @@ mod saving {
         let refusing = Refusing(ReplaceFailure::Locked);
         let failure = save(
             &target,
-            (&plan, TextEncoding::Utf8, stamp_of(&target).unwrap()),
+            (
+                &plan,
+                TextEncoding::Utf8,
+                SaveTarget::Existing(stamp_of(&target).unwrap()),
+            ),
             &mut Bytes(Vec::new()),
             &refusing,
         );
@@ -249,7 +270,11 @@ mod saving {
         let mut source = Bytes(b"a\n".to_vec());
         save(
             &target,
-            (&whole(2), TextEncoding::Utf8, stamp_of(&target).unwrap()),
+            (
+                &whole(2),
+                TextEncoding::Utf8,
+                SaveTarget::Existing(stamp_of(&target).unwrap()),
+            ),
             &mut source,
             &RenameReplacing,
         )
@@ -269,7 +294,7 @@ mod saving {
         plan.text("x\n");
         let failure = save(
             &target,
-            (&plan, TextEncoding::Utf8, opened),
+            (&plan, TextEncoding::Utf8, SaveTarget::Existing(opened)),
             &mut Bytes(Vec::new()),
             &RenameReplacing,
         );
@@ -306,7 +331,7 @@ mod saving {
         };
         let failure = save(
             &target,
-            (&whole(2), TextEncoding::Utf8, opened),
+            (&whole(2), TextEncoding::Utf8, SaveTarget::Existing(opened)),
             &mut source,
             &RenameReplacing,
         );
@@ -338,7 +363,11 @@ mod saving {
         let shared: Arc<dyn nene_ledger_application::wakeup::Wakeup> = wakeup.clone();
         let job = nene_ledger_store::save_job::SaveJob::spawn(
             target.clone(),
-            (plan, TextEncoding::Utf8, stamp_of(&target).unwrap()),
+            (
+                plan,
+                TextEncoding::Utf8,
+                SaveTarget::Existing(stamp_of(&target).unwrap()),
+            ),
             (Bytes(b"a,b\n".to_vec()), RenameReplacing),
             shared,
         )
@@ -362,7 +391,7 @@ mod saving {
         plan.text("x\n");
         let mut job = nene_ledger_store::save_job::SaveJob::spawn(
             target.clone(),
-            (plan, TextEncoding::Utf8, opened),
+            (plan, TextEncoding::Utf8, SaveTarget::Existing(opened)),
             (Bytes(Vec::new()), RenameReplacing),
             Arc::new(Counting(AtomicUsize::new(0))),
         )
@@ -376,5 +405,54 @@ mod saving {
         assert_eq!(outcome, Err(SaveFailure::ChangedOutside));
         assert_eq!(job.take_result(), None);
         assert_eq!(std::fs::read(&target).unwrap(), b"changed\n");
+    }
+
+    /// まだ無いファイルは、置き換えずに作る。元にした原本は変えない（名前を付けて保存・ADR 0028 の決定 5 と強制の 2 つ目）。
+    #[test]
+    fn saving_as_a_new_file_creates_it_and_leaves_the_original_alone() {
+        let dir = folder("absent");
+        let original = b"\xEF\xBB\xBFid,name\r\n1,a\r\n".to_vec();
+        let source_path = dir.join("source.csv");
+        std::fs::write(&source_path, &original).unwrap();
+        let target = dir.join("copy.csv");
+        let mut plan = whole(original.len());
+        plan.text("2,b\r\n");
+        save(
+            &target,
+            (&plan, TextEncoding::Utf8WithBom, SaveTarget::Absent),
+            &mut Bytes(original.clone()),
+            &Refusing(ReplaceFailure::Other),
+        )
+        .unwrap();
+        let mut expected = original.clone();
+        expected.extend_from_slice(b"2,b\r\n");
+        assert_eq!(std::fs::read(&target).unwrap(), expected);
+        assert_eq!(std::fs::read(&source_path).unwrap(), original);
+        assert!(leftovers(&dir).is_empty());
+    }
+
+    /// まだ無いはずのファイルができていれば、書かない（上書きの確認を飛ばさない）。
+    #[test]
+    fn saving_as_a_new_file_refuses_a_file_that_appeared() {
+        let dir = folder("appeared");
+        let target = dir.join("t.csv");
+        std::fs::write(&target, b"theirs").unwrap();
+        let refused = save(
+            &target,
+            (&whole(2), TextEncoding::Utf8, SaveTarget::Absent),
+            &mut Bytes(b"ab".to_vec()),
+            &RenameReplacing,
+        );
+        assert_eq!(refused, Err(SaveFailure::ChangedOutside));
+        assert_eq!(std::fs::read(&target).unwrap(), b"theirs");
+        assert!(leftovers(&dir).is_empty());
+        // 無いフォルダには作れない。
+        let missing = save(
+            &dir.join("no-such-folder").join("t.csv"),
+            (&whole(2), TextEncoding::Utf8, SaveTarget::Absent),
+            &mut Bytes(b"ab".to_vec()),
+            &RenameReplacing,
+        );
+        assert_eq!(missing, Err(SaveFailure::Target(ErrorKind::NotFound)));
     }
 }

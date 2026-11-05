@@ -124,6 +124,7 @@ fn control_intent(key: u16, shift: bool, alt: bool) -> Option<Intent> {
         (VK_NEXT, true) => Some(Intent::MoveColumns(ColumnShift::Right)),
         (VK_A, false) => Some(Intent::SelectAll),
         (VK_S, false) => Some(Intent::Save),
+        (VK_S, true) => Some(Intent::SaveAs),
         (VK_Z, false) => Some(Intent::Undo),
         (VK_Z, true) | (VK_Y, false) => Some(Intent::Redo),
         (VK_G, false) => Some(Intent::OpenGoTo),
@@ -430,6 +431,7 @@ mod tests {
         assert_eq!(key_intent(VK_Y, control()), Some(Intent::Redo));
         assert_eq!(key_intent(VK_Z, control_shift()), Some(Intent::Redo));
         assert_eq!(key_intent(VK_S, control()), Some(Intent::Save));
+        assert_eq!(key_intent(VK_S, control_shift()), Some(Intent::SaveAs));
         assert_eq!(key_intent(VK_Z, plain()), None);
     }
 }

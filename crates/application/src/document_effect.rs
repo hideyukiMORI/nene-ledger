@@ -13,6 +13,10 @@ pub enum DocumentEffect {
     /// 書き換え（`Document::edits`）を保存する（Ctrl+S）。始めたら `Document::begin_saving`、終わったら
     /// `Document::saved` か `Document::save_failed` を呼ぶ。
     Save,
+    /// 保存先を選ばせてから保存する（名前を付けて保存・ADR 0028 の決定 4）。合成ルートが OS の画面かパレットの欄で道筋を
+    /// 受け取り、保存を始めたら `Document::begin_saving`、終わったら `Document::saved_as` か `Document::save_failed`、
+    /// やめたら `Document::save_as_cancelled` を呼ぶ。
+    SaveAs,
     /// 裏の集計を止める（Esc）。
     StopTotals,
     /// 行の並びの位置 `first_line` から `count` 行を読んで `Document::copy_text` に渡す（コピー）。
