@@ -60,13 +60,17 @@ pub enum CommandId {
     Copy,
     /// 書き換えを保存する（ADR 0026 の決定 6）。
     Save,
+    /// 1 手元に戻す（UNDO-01）。
+    Undo,
+    /// 戻した 1 手をやり直す。
+    Redo,
     /// キーの一覧を見る（2 段目・Issue #63）。
     ShowKeys,
 }
 
 impl CommandId {
     /// すべての操作（何も打たないときの順）。
-    pub const ALL: [Self; 25] = [
+    pub const ALL: [Self; 27] = [
         Self::Top,
         Self::Bottom,
         Self::GoTo,
@@ -91,6 +95,8 @@ impl CommandId {
         Self::UnfreezeColumns,
         Self::Copy,
         Self::Save,
+        Self::Undo,
+        Self::Redo,
         Self::ShowKeys,
     ];
 
@@ -126,6 +132,8 @@ impl CommandId {
             Self::UnfreezeColumns => "列の固定を外す",
             Self::Copy => "選んだ範囲をコピーする",
             Self::Save => "直したセルを保存する",
+            Self::Undo => "元に戻す",
+            Self::Redo => "やり直す",
             Self::ShowKeys => "キーの一覧を見る…",
         }
     }
@@ -158,6 +166,8 @@ impl CommandId {
             Self::UnfreezeColumns => "れつのこていをはずす",
             Self::Copy => "えらんだはんいをこぴーする",
             Self::Save => "なおしたせるをほぞんする",
+            Self::Undo => "もとにもどす",
+            Self::Redo => "やりなおす",
             Self::ShowKeys => "きーのいちらんをみる",
         }
     }
@@ -197,6 +207,8 @@ impl CommandId {
             Self::UnfreezeColumns => &["unfreeze", "unpin", "unlock columns"],
             Self::Copy => &["copy", "clipboard"],
             Self::Save => &["save", "write"],
+            Self::Undo => &["undo"],
+            Self::Redo => &["redo"],
             Self::ShowKeys => &["keys", "shortcuts", "keyboard", "help"],
         }
     }
@@ -230,6 +242,8 @@ impl CommandId {
             | Self::ShowKeys => None,
             Self::Copy => Some("Ctrl+C"),
             Self::Save => Some("Ctrl+S"),
+            Self::Undo => Some("Ctrl+Z"),
+            Self::Redo => Some("Ctrl+Y / Ctrl+Shift+Z"),
         }
     }
 
@@ -261,6 +275,8 @@ impl CommandId {
             | Self::UnfreezeColumns
             | Self::Copy
             | Self::Save
+            | Self::Undo
+            | Self::Redo
             | Self::ShowKeys => None,
         }
     }
@@ -298,6 +314,8 @@ impl CommandId {
             Self::UnfreezeColumns => Some(Intent::UnfreezeColumns),
             Self::Copy => Some(Intent::Copy),
             Self::Save => Some(Intent::Save),
+            Self::Undo => Some(Intent::Undo),
+            Self::Redo => Some(Intent::Redo),
         }
     }
 }

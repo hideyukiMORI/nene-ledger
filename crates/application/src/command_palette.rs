@@ -145,7 +145,9 @@ impl CommandPalette {
             | Intent::Delete
             | Intent::BreakLine
             | Intent::Advance(_)
-            | Intent::Save => PaletteOutcome::Stay,
+            | Intent::Save
+            | Intent::Undo
+            | Intent::Redo => PaletteOutcome::Stay,
         }
     }
 

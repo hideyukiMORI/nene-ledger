@@ -73,6 +73,18 @@ impl CellEditor {
         self.column
     }
 
+    /// 編集に入ったときに見えていた値。
+    #[must_use]
+    pub fn shown(&self) -> &str {
+        &self.shown
+    }
+
+    /// 原本のセルの値（原本にセルが無ければ `None`）。
+    #[must_use]
+    pub fn source(&self) -> Option<&str> {
+        self.source.as_deref()
+    }
+
     /// 今の状態。
     #[must_use]
     pub const fn mode(&self) -> EditMode {

@@ -43,6 +43,14 @@ pub enum Notice {
     },
     /// 保存した。
     Saved,
+    /// 1 手元に戻した（書き換えたセルの数）。
+    Undone(usize),
+    /// 1 手やり直した（書き換えたセルの数）。
+    Redone(usize),
+    /// 戻すものが無い。
+    NothingToUndo,
+    /// やり直すものが無い。
+    NothingToRedo,
     /// 書き換えが無いので保存しなかった。
     NothingToSave,
     /// 保存の途中なので、直すことと保存を受けない。

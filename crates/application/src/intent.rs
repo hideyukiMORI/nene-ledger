@@ -85,4 +85,8 @@ pub enum Intent {
     Advance(CursorStep),
     /// 書き換えを保存する（Ctrl+S・ADR 0026 の決定 6）。
     Save,
+    /// 1 手元に戻す（Ctrl+Z・UNDO-01）。編集中なら編集をやめる。
+    Undo,
+    /// 戻した 1 手をやり直す（Ctrl+Y・Ctrl+Shift+Z）。
+    Redo,
 }
