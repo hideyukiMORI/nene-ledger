@@ -34,6 +34,7 @@ mod detail_place;
 pub mod document;
 pub mod document_effect;
 pub mod edit_commit;
+pub mod edit_history;
 pub mod edit_mode;
 mod editing_cell;
 pub mod file_stamp;

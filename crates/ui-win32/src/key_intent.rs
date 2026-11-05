@@ -36,6 +36,8 @@ const VK_C: u16 = 0x43;
 const VK_G: u16 = 0x47;
 const VK_P: u16 = 0x50;
 const VK_S: u16 = 0x53;
+const VK_Y: u16 = 0x59;
+const VK_Z: u16 = 0x5A;
 const VK_T: u16 = 0x54;
 const VK_U: u16 = 0x55;
 const VK_NUMPAD0: u16 = 0x60;
@@ -123,6 +125,8 @@ fn control_intent(key: u16, shift: bool, alt: bool) -> Option<Intent> {
         (VK_NEXT, true) => Some(Intent::MoveColumns(ColumnShift::Right)),
         (VK_A, false) => Some(Intent::SelectAll),
         (VK_S, false) => Some(Intent::Save),
+        (VK_Z, false) => Some(Intent::Undo),
+        (VK_Z, true) | (VK_Y, false) => Some(Intent::Redo),
         (VK_G, false) => Some(Intent::OpenGoTo),
         (VK_P, true) => Some(Intent::OpenPalette),
         (VK_U, true) => Some(Intent::ToggleDetail),
@@ -415,5 +419,14 @@ mod tests {
             }))
         );
         assert_eq!(wheel_intent(0, plain()), None);
+    }
+
+    #[test]
+    fn control_z_and_y_undo_and_redo() {
+        assert_eq!(key_intent(VK_Z, control()), Some(Intent::Undo));
+        assert_eq!(key_intent(VK_Y, control()), Some(Intent::Redo));
+        assert_eq!(key_intent(VK_Z, control_shift()), Some(Intent::Redo));
+        assert_eq!(key_intent(VK_S, control()), Some(Intent::Save));
+        assert_eq!(key_intent(VK_Z, plain()), None);
     }
 }

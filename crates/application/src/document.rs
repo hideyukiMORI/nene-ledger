@@ -9,7 +9,7 @@ use core::ops::RangeInclusive;
 
 use crate::bar_hit::BarHit;
 use crate::bar_marks::BarMarks;
-use crate::body_mapping::{body_count, record_of};
+use crate::body_mapping::{body_count, body_of, record_of};
 use crate::cell_display::single_line;
 use crate::cell_editor::CellEditor;
 use crate::cell_position::CellPosition;
@@ -30,6 +30,7 @@ use crate::detail_pane::DetailPane;
 use crate::detail_place::DetailPlace;
 use crate::document_effect::DocumentEffect;
 use crate::edit_commit::EditCommit;
+use crate::edit_history::EditHistory;
 use crate::edit_mode::EditMode;
 use crate::editing_cell::EditingCell;
 use crate::fixed_parts::FixedParts;
@@ -69,6 +70,7 @@ use crate::track_side::TrackSide;
 use crate::tsv::tsv;
 use crate::view_row::ViewRow;
 use crate::window_view::WindowView;
+use nene_ledger_core::cell_change::CellChange;
 use nene_ledger_core::cell_edits::CellEdits;
 use nene_ledger_core::cell_value::CellValue;
 use nene_ledger_core::column_id::ColumnId;
@@ -122,6 +124,8 @@ pub struct Document {
     saving: bool,
     /// 閉じる手順（ADR 0026 の決定 7）。
     closing: CloseState,
+    /// 元に戻す・やり直すの履歴（UNDO-01）。保存の後も残す。
+    history: EditHistory,
 }
 
 /// 状態の行の右端に出すパレットの案内。
@@ -201,6 +205,7 @@ impl Document {
             editor: None,
             saving: false,
             closing: CloseState::Open,
+            history: EditHistory::empty(),
         }
     }
 
@@ -283,7 +288,9 @@ impl Document {
             | Intent::Delete
             | Intent::BreakLine
             | Intent::Advance(_)
-            | Intent::Save => None,
+            | Intent::Save
+            | Intent::Undo
+            | Intent::Redo => None,
         };
         Some(choice.map_or(DocumentEffect::Stay, |choice| self.choose_close(choice)))
     }
@@ -320,6 +327,8 @@ impl Document {
     /// カーソルと表示の位置は保ち、今の位置から読み直させる。
     pub fn saved(&mut self) -> DocumentEffect {
         self.saving = false;
+        // 履歴は残し、触ったセルのファイルの値を保存した値に進める（保存の後も元に戻せる）。
+        self.history.saved(&self.edits);
         self.edits = CellEdits::empty();
         self.editor = None;
         self.index = JobState::Waiting;
@@ -456,7 +465,13 @@ impl Document {
         if self.saving
             && matches!(
                 intent,
-                Intent::Type(_) | Intent::Edit | Intent::Delete | Intent::BreakLine | Intent::Save
+                Intent::Type(_)
+                    | Intent::Edit
+                    | Intent::Delete
+                    | Intent::BreakLine
+                    | Intent::Save
+                    | Intent::Undo
+                    | Intent::Redo
             )
         {
             self.notice = Some(Notice::StillSaving);
@@ -464,6 +479,9 @@ impl Document {
         }
         if intent == Intent::Save {
             return self.save_request();
+        }
+        if let Intent::Undo | Intent::Redo = intent {
+            return self.undo_or_redo(intent == Intent::Redo, window);
         }
         match self.edit_intent(intent) {
             Some(intent) => self.apply_to_table(intent, window),
@@ -508,7 +526,9 @@ impl Document {
             | Intent::Delete
             | Intent::BreakLine
             | Intent::Advance(_)
-            | Intent::Save => current,
+            | Intent::Save
+            | Intent::Undo
+            | Intent::Redo => current,
             Intent::SelectAll
             | Intent::SelectRows
             | Intent::SelectColumns
@@ -570,8 +590,10 @@ impl Document {
                     mode: SelectionMode::Collapse,
                 });
             }
-            // 別のセル・別の行への移動と、表の並びを変える操作は、確定してから（保存は `apply` が先に受ける）。
+            // 別のセル・別の行への移動と、表の並びを変える操作は、確定してから（保存と元に戻すは `apply` が先に受ける）。
             Intent::Save
+            | Intent::Undo
+            | Intent::Redo
             | Intent::Point { .. }
             | Intent::GoTo(_)
             | Intent::OpenGoTo
@@ -651,7 +673,9 @@ impl Document {
             | Intent::OpenPalette
             | Intent::Erase
             | Intent::Cancel
-            | Intent::Save => Some(intent),
+            | Intent::Save
+            | Intent::Undo
+            | Intent::Redo => Some(intent),
         }
     }
 
@@ -693,9 +717,65 @@ impl Document {
         };
         match editor.commit() {
             EditCommit::Keep => {}
-            EditCommit::Restore { row, column } => drop(self.edits.clear(row, column)),
-            EditCommit::Set { row, column, value } => drop(self.edits.set(row, column, value)),
+            // 差分に入れるか消すかは履歴が決める（ファイルの値と同じなら消す）。どちらも 1 手として積む。
+            EditCommit::Restore { row, column } | EditCommit::Set { row, column, .. } => {
+                let change = CellChange::new(
+                    row,
+                    column,
+                    String::from(editor.shown()),
+                    String::from(editor.field().text()),
+                );
+                let source = editor.source().unwrap_or_default();
+                self.history.record(change, source, &mut self.edits);
+            }
         }
+    }
+
+    /// Ctrl+Z / Ctrl+Y。編集中の Ctrl+Z は編集をやめるだけ。戻した・やり直したセルへカーソルを動かす。
+    fn undo_or_redo(&mut self, redo: bool, window: WindowView) -> DocumentEffect {
+        if !redo && self.editor.take().is_some() {
+            return DocumentEffect::Stay;
+        }
+        self.commit_edit();
+        let changes = if redo {
+            self.history.redo(&mut self.edits)
+        } else {
+            self.history.undo(&mut self.edits)
+        };
+        let Some(first) = changes.as_ref().and_then(|changes| changes.first()) else {
+            self.notice = Some(if redo {
+                Notice::NothingToRedo
+            } else {
+                Notice::NothingToUndo
+            });
+            return DocumentEffect::Stay;
+        };
+        let effect = self.reveal_cell(first.row(), first.column(), window);
+        let cells = changes.as_ref().map_or(0, Vec::len);
+        self.notice = Some(if redo {
+            Notice::Redone(cells)
+        } else {
+            Notice::Undone(cells)
+        });
+        effect
+    }
+
+    /// 原本のセル（`row`・`column`）へカーソルを動かし、見えるように表示を動かす。足した行・列はまだ無い。
+    fn reveal_cell(&mut self, row: RowId, column: ColumnId, window: WindowView) -> DocumentEffect {
+        let (RowId::Source(record), ColumnId::Source(source)) = (row, column) else {
+            return DocumentEffect::Stay;
+        };
+        let body = body_of(record, self.header_record());
+        let display = self
+            .order
+            .iter()
+            .position(|&shown| shown == source)
+            .unwrap_or(source);
+        let page = self.page_rows(window);
+        let current = self.view.first_body();
+        self.select(CellPosition::new(body, display), SelectionMode::Collapse);
+        self.first_column = self.reveal_column(display, window);
+        self.go_to(reveal_row(current, body, page), page)
     }
 
     /// 本体の `body` 番目の行（見えていなければ `None`）。
@@ -780,7 +860,9 @@ impl Document {
             | Intent::Delete
             | Intent::BreakLine
             | Intent::Advance(_)
-            | Intent::Save => {}
+            | Intent::Save
+            | Intent::Undo
+            | Intent::Redo => {}
         }
     }
 
@@ -979,7 +1061,9 @@ impl Document {
             | Intent::Delete
             | Intent::BreakLine
             | Intent::Advance(_)
-            | Intent::Save => None,
+            | Intent::Save
+            | Intent::Undo
+            | Intent::Redo => None,
         }
     }
 
@@ -4903,5 +4987,75 @@ mod tests {
         assert_eq!(document.close_state(), CloseState::AfterSave);
         document.saved();
         assert_eq!(document.close_state(), CloseState::Finished);
+    }
+
+    #[test]
+    fn undo_and_redo_move_to_the_cell_and_back_to_the_file_value_removes_the_edit() {
+        let mut document = editable();
+        typed(&mut document, "x");
+        document.apply(Intent::Advance(CursorStep::Right), normal());
+        typed(&mut document, "y");
+        document.apply(Intent::Confirm, normal());
+        assert_eq!(document.selection().cursor(), CellPosition::new(1, 1));
+        document.apply(Intent::Undo, normal());
+        assert_eq!(document.selection().cursor(), CellPosition::new(0, 1));
+        assert_eq!(edited(&document, 0, 1), None);
+        text_at(
+            &document.frame(normal(), palette()),
+            "元に戻しました（1 セル）",
+        );
+        document.apply(Intent::Undo, normal());
+        assert!(document.edits().is_empty());
+        assert_eq!(document.selection().cursor(), CellPosition::new(0, 0));
+        document.apply(Intent::Undo, normal());
+        text_at(
+            &document.frame(normal(), palette()),
+            "元に戻すものがありません",
+        );
+        document.apply(Intent::Redo, normal());
+        document.apply(Intent::Redo, normal());
+        assert_eq!(
+            edited(&document, 0, 1),
+            Some(&CellValue::Text(String::from("y")))
+        );
+    }
+
+    #[test]
+    fn undo_while_editing_only_drops_the_edit() {
+        let mut document = editable();
+        typed(&mut document, "x");
+        document.apply(Intent::Confirm, normal());
+        typed(&mut document, "z");
+        document.apply(Intent::Undo, normal());
+        assert_eq!(document.editor(), None);
+        assert_eq!(
+            edited(&document, 0, 0),
+            Some(&CellValue::Text(String::from("x")))
+        );
+    }
+
+    #[test]
+    fn undo_still_works_after_saving() {
+        let mut document = editable();
+        typed(&mut document, "x");
+        document.apply(Intent::Save, normal());
+        document.begin_saving();
+        document.saved();
+        assert!(document.edits().is_empty());
+        // 開き直した後の表示（保存した値）。
+        document.show(
+            0,
+            &[
+                vec![String::from("x"), String::from("東京")],
+                vec![String::from("b1"), String::from("b2")],
+            ],
+        );
+        document.apply(Intent::Undo, normal());
+        assert_eq!(
+            edited(&document, 0, 0),
+            Some(&CellValue::Text(String::from("0012")))
+        );
+        document.apply(Intent::Redo, normal());
+        assert!(document.edits().is_empty());
     }
 }

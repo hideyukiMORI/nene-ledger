@@ -128,6 +128,10 @@ pub fn notice_status(notice: Notice) -> String {
             format!("左の {columns} 列を固定しました（横に動いても残ります）")
         }
         Notice::Saved => String::from("保存しました"),
+        Notice::Undone(cells) => format!("元に戻しました（{cells} セル）"),
+        Notice::Redone(cells) => format!("やり直しました（{cells} セル）"),
+        Notice::NothingToUndo => String::from("元に戻すものがありません"),
+        Notice::NothingToRedo => String::from("やり直すものがありません"),
         Notice::NothingToSave => String::from("変えたセルが無いので保存しませんでした"),
         Notice::StillSaving => String::from("保存しています。終わるまで直せません"),
         Notice::SaveFailed(problem) => save_problem_status(problem),

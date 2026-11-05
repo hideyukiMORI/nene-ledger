@@ -12,6 +12,7 @@ pub mod binary_sniff;
 pub mod boundary;
 pub mod byte_range;
 pub mod caret_move;
+pub mod cell_change;
 pub mod cell_edits;
 pub mod cell_kind;
 pub mod cell_value;

@@ -28,6 +28,8 @@ const XK_SPACE: u32 = 0x20;
 const XK_A: u32 = 0x61;
 const XK_C: u32 = 0x63;
 const XK_S: u32 = 0x73;
+const XK_Y: u32 = 0x79;
+const XK_Z: u32 = 0x7a;
 const XK_G: u32 = 0x67;
 const XK_U: u32 = 0x75;
 const XK_T: u32 = 0x74;
@@ -76,6 +78,9 @@ pub(crate) fn key_intent(keysym: u32, typed: Option<char>, state: KeyButMask) ->
     }
     if control && !state.contains(KeyButMask::SHIFT) && keysym == XK_S {
         return Some(Intent::Save);
+    }
+    if control && let Some(intent) = undo_intent(keysym, state.contains(KeyButMask::SHIFT)) {
+        return Some(intent);
     }
     if control && !state.contains(KeyButMask::SHIFT) && keysym == XK_A {
         return Some(Intent::SelectAll);
@@ -183,6 +188,15 @@ fn line_intent(keysym: u32, control: bool, shift: bool) -> Option<Intent> {
         (XK_SPACE, true, false) => Some(Intent::SelectColumns),
         (XK_PAGE_UP, true, true) => Some(Intent::MoveColumns(ColumnShift::Left)),
         (XK_PAGE_DOWN, true, true) => Some(Intent::MoveColumns(ColumnShift::Right)),
+        _ => None,
+    }
+}
+
+/// Ctrl と組んで元に戻す・やり直すキー（Ctrl+Z・Ctrl+Y・Ctrl+Shift+Z・UNDO-01）。Shift で `Z` が大文字の keysym になる配列もある。
+fn undo_intent(keysym: u32, shift: bool) -> Option<Intent> {
+    match (keysym, shift) {
+        (XK_Z, false) => Some(Intent::Undo),
+        (XK_Z | 0x5a, true) | (XK_Y, false) => Some(Intent::Redo),
         _ => None,
     }
 }
@@ -561,6 +575,32 @@ mod tests {
         assert_eq!(
             add(KeyButMask::CONTROL | KeyButMask::SHIFT),
             Some(SelectionMode::Extend)
+        );
+    }
+
+    #[test]
+    fn control_z_and_y_undo_and_redo() {
+        let control_shift =
+            KeyButMask::from(u16::from(KeyButMask::CONTROL) | u16::from(KeyButMask::SHIFT));
+        assert_eq!(
+            key_intent(XK_Z, Some('z'), KeyButMask::CONTROL),
+            Some(Intent::Undo)
+        );
+        assert_eq!(
+            key_intent(XK_Y, Some('y'), KeyButMask::CONTROL),
+            Some(Intent::Redo)
+        );
+        assert_eq!(
+            key_intent(0x5a, Some('Z'), control_shift),
+            Some(Intent::Redo)
+        );
+        assert_eq!(
+            key_intent(XK_S, Some('s'), KeyButMask::CONTROL),
+            Some(Intent::Save)
+        );
+        assert_eq!(
+            key_intent(XK_Z, Some('z'), plain()),
+            Some(Intent::Type('z'))
         );
     }
 }
