@@ -27,7 +27,7 @@ impl DecimalSum {
         overflowed: false,
     };
 
-    /// `number` を足す。整数部が i128 を越えるか、小数点以下が [`MAX_SCALE`] 桁を越えれば、以後は桁あふれ。
+    /// `number` を足す。整数部が i128 を越えるか、小数点以下が 37 桁を越えれば、以後は桁あふれ。
     pub fn add(&mut self, number: Decimal) {
         if self.overflowed {
             return;
