@@ -138,7 +138,8 @@ Issue / 規則 ID:
 
 ## 6. いまの状況
 
-現在のタスクは [docs/todo/current.md](docs/todo/current.md)。GitHub Issue と PR が正で、そこは要約。
+現在のタスクは GitHub Issue と PR が正。
+運用ログ（`docs/todo`・`docs/daily`・field-trials 相当）は private `nene-origin/internal-docs/ledger/` に移設済み（日報規約 v3 §11・2026-11-05）。最新の作業状況・申し送り（`todo/current.md`・`todo/handoff-*.md`）と日報（`daily/`）はそちらを読むこと。
 
 2026-10-22〜11-02 にリモートの無いローカルの git で 68 の Issue を進め、M0（仕様・規範文書・機械・機能の一覧・ロードマップ）と M1 の大半を置いた:
 8 クレート（core / scan / application / ui-x11 / adapters-x11 / ui-win32 / adapters-windows / app）、X11 と Windows の窓（自前のタイトルバー・125 配色・6 言語の土台・倍率）、

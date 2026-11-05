@@ -158,7 +158,7 @@ Closes #N
 
 - 長生きする不変条件 → 正本ドキュメント
 - 判断とトレードオフ → ADR
-- いまのタスク状態 → Issue / PR（`docs/todo/current.md` は要約）
+- いまのタスク状態 → Issue / PR（要約は private の `nene-origin/internal-docs/ledger/todo/current.md`）
 - コードのコメント → その場の非自明な理由（方針そのものは書かない）
 
 設定ファイルとドキュメントが食い違ったら、**ドキュメントが決定の記録**である。ただし両方がそろうまで merge は止める。
