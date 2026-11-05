@@ -10,6 +10,7 @@ use nene_ledger_core::text_encoding::TextEncoding;
 use crate::format_summary::FormatSummary;
 use crate::job_state::JobState;
 use crate::notice::Notice;
+use crate::rows_notice::RowsNotice;
 use crate::save_problem::SaveProblem;
 use crate::selection_stats::SelectionStats;
 use crate::selection_totals::SelectionTotals;
@@ -144,12 +145,28 @@ pub fn notice_status(notice: Notice) -> String {
         Notice::EditCut => String::from(
             "1 MiB で切り詰めた行のセルは直せません（行の全体を読めないので、保存で元に戻せない）",
         ),
+        Notice::Rows(rows) => rows_status(rows),
         Notice::EditMissingCell => String::from("この行には、この列のセルがありません"),
         Notice::DialectUnsure { top, second } => format!(
             "判別に確信なし（1 位 {}%・2 位 {}%）· 候補は Ctrl+Shift+P → candidates",
             top / 10,
             second / 10
         ),
+    }
+}
+
+/// 行の足し消しの知らせの文言。
+fn rows_status(notice: RowsNotice) -> String {
+    match notice {
+        RowsNotice::Inserted(rows) => format!("{} 行を足しました", group_digits(rows)),
+        RowsNotice::Removed(rows) => {
+            format!("{} 行を消しました（Ctrl+Z で戻す）", group_digits(rows))
+        }
+        RowsNotice::Undone(rows) => format!("元に戻しました（{} 行）", group_digits(rows)),
+        RowsNotice::Redone(rows) => format!("やり直しました（{} 行）", group_digits(rows)),
+        RowsNotice::AwaitIndex => {
+            String::from("表の末尾は、行の数が分かってから扱えます（索引を作っています）")
+        }
     }
 }
 

@@ -660,6 +660,20 @@ PR の枝の debug の exe を Xvfb（1024×640）に出し、`xdotool` で打�
 
 🔴 **正直に:** 区切りがタブの表と、引用の要る値（区切りを含む値）を足すことは core と application のテストだけ（`row_writing`・`save_planning`）。
 
+## 63. 行を足す・消す・戻す（GitHub Issue #95・ADR 0027）— 仮想の X サーバでの確認（QLT-013）
+
+PR の枝の debug の exe を Xvfb（1024×640）に出し、`xdotool` で操作して Ctrl+S で保存し、ファイルを `od -c` で見た（2026-11-05）。
+元のファイルは `id,name\r\n1,"Sato"\r\n2,Suzuki\r\n3,Tanaka`（最後の行に終わり方が無い）。
+
+| # | 操作 | 見え・ファイル |
+| --- | --- | --- |
+| 1 | ↓（`2,Suzuki`）→ パレットで `insert row below` → `9` Tab `Kato` Enter | `2,Suzuki` の下に行が入り、番号は 1〜5 の通し番号。足した行の番号は強調の色 |
+| 2 | パレットで `append row` → `10` Enter | 表の末尾に行が入る |
+| 3 | Ctrl+Home → パレットで `delete row` | `1,"Sato"` の行が消え、状態の行に `1 行を消しました（Ctrl+Z で戻す）` |
+| 4 | Ctrl+S | `id,name\r\n2,Suzuki\r\n9,Kato\r\n3,Tanaka\r\n,10\r\n`。触っていない行はバイト列のまま。終わり方の無かった最後の行の後ろに CRLF を補ってから足した行を書いた（`,10` はカーソルが 2 列目にあったため） |
+
+🔴 **正直に:** キー（ADR 0027 の Ctrl++ と Ctrl+-）はまだ割り当てていない（文字の大きさの Ctrl++ / Ctrl+- とぶつかる・施主に諮る）。Windows の実機ではまだ。Undo / Redo は application のテストだけ。
+
 ## 7. active の規則と、その証明
 
 CNF-009 は active の規則ごとに `| ID |` で始まる行がここにあることを要求する。

@@ -5,6 +5,7 @@ use crate::cursor_step::CursorStep;
 use crate::detail_pane::DetailPane;
 use crate::intent::Intent;
 use crate::reading_aspect::ReadingAspect;
+use crate::row_place::RowPlace;
 use crate::selection_mode::SelectionMode;
 use crate::zoom_step::ZoomStep;
 
@@ -64,13 +65,21 @@ pub enum CommandId {
     Undo,
     /// 戻した 1 手をやり直す。
     Redo,
+    /// カーソルの行（選んだ行）の上に空の行を足す（ADR 0027）。
+    InsertRowsAbove,
+    /// 選んだ行の下に空の行を足す。
+    InsertRowsBelow,
+    /// 表の末尾に空の行を足す。
+    AppendRow,
+    /// 選んだ範囲にかかる行を消す。
+    RemoveRows,
     /// キーの一覧を見る（2 段目・Issue #63）。
     ShowKeys,
 }
 
 impl CommandId {
     /// すべての操作（何も打たないときの順）。
-    pub const ALL: [Self; 27] = [
+    pub const ALL: [Self; 31] = [
         Self::Top,
         Self::Bottom,
         Self::GoTo,
@@ -97,6 +106,10 @@ impl CommandId {
         Self::Save,
         Self::Undo,
         Self::Redo,
+        Self::InsertRowsAbove,
+        Self::InsertRowsBelow,
+        Self::AppendRow,
+        Self::RemoveRows,
         Self::ShowKeys,
     ];
 
@@ -134,6 +147,10 @@ impl CommandId {
             Self::Save => "直したセルを保存する",
             Self::Undo => "元に戻す",
             Self::Redo => "やり直す",
+            Self::InsertRowsAbove => "上に行を足す",
+            Self::InsertRowsBelow => "下に行を足す",
+            Self::AppendRow => "末尾に行を足す",
+            Self::RemoveRows => "行を消す",
             Self::ShowKeys => "キーの一覧を見る…",
         }
     }
@@ -168,6 +185,10 @@ impl CommandId {
             Self::Save => "なおしたせるをほぞんする",
             Self::Undo => "もとにもどす",
             Self::Redo => "やりなおす",
+            Self::InsertRowsAbove => "うえにぎょうをたす",
+            Self::InsertRowsBelow => "したにぎょうをたす",
+            Self::AppendRow => "まつびにぎょうをたす",
+            Self::RemoveRows => "ぎょうをけす",
             Self::ShowKeys => "きーのいちらんをみる",
         }
     }
@@ -209,6 +230,10 @@ impl CommandId {
             Self::Save => &["save", "write"],
             Self::Undo => &["undo"],
             Self::Redo => &["redo"],
+            Self::InsertRowsAbove => &["insert row above", "add row", "new row"],
+            Self::InsertRowsBelow => &["insert row below", "add row", "new row"],
+            Self::AppendRow => &["append row", "add row at end", "new row"],
+            Self::RemoveRows => &["delete row", "remove row"],
             Self::ShowKeys => &["keys", "shortcuts", "keyboard", "help"],
         }
     }
@@ -240,6 +265,10 @@ impl CommandId {
             | Self::FreezeColumns
             | Self::UnfreezeColumns
             | Self::ShowKeys => None,
+            // 🔴 ADR 0027 の Ctrl++ と Ctrl+- は文字の大きさ（ADR 0020）とぶつかるので、キーは施主に諮ってから。
+            Self::InsertRowsAbove | Self::InsertRowsBelow | Self::AppendRow | Self::RemoveRows => {
+                None
+            }
             Self::Copy => Some("Ctrl+C"),
             Self::Save => Some("Ctrl+S"),
             Self::Undo => Some("Ctrl+Z"),
@@ -277,6 +306,10 @@ impl CommandId {
             | Self::Save
             | Self::Undo
             | Self::Redo
+            | Self::InsertRowsAbove
+            | Self::InsertRowsBelow
+            | Self::AppendRow
+            | Self::RemoveRows
             | Self::ShowKeys => None,
         }
     }
@@ -316,6 +349,10 @@ impl CommandId {
             Self::Save => Some(Intent::Save),
             Self::Undo => Some(Intent::Undo),
             Self::Redo => Some(Intent::Redo),
+            Self::InsertRowsAbove => Some(Intent::InsertRows(RowPlace::Above)),
+            Self::InsertRowsBelow => Some(Intent::InsertRows(RowPlace::Below)),
+            Self::AppendRow => Some(Intent::InsertRows(RowPlace::End)),
+            Self::RemoveRows => Some(Intent::RemoveRows),
         }
     }
 }
