@@ -314,7 +314,10 @@ mod tests {
     }
 
     fn group_sizes(spans: &[RecordSpan], limit: u64) -> Vec<usize> {
-        batches(spans, limit).iter().map(|group| group.len()).collect()
+        batches(spans, limit)
+            .iter()
+            .map(|group| group.len())
+            .collect()
     }
 
     #[test]
