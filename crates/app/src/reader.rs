@@ -22,7 +22,6 @@ use nene_ledger_store::stamping::stamp_of;
 
 use crate::opening::detect;
 use crate::rows::{Rows, WINDOW_RECORDS, read_rows};
-use crate::scan_lookup::ScanLookup;
 
 /// 動いた先の範囲を読む材料。画面のスレッドが持つ原本と読み方と、作り終えた索引（まだなら作り始める前の索引）と、
 /// 裏の仕事が画面のスレッドを起こす口。
@@ -90,9 +89,9 @@ impl Reader {
         self.source.try_clone()
     }
 
-    /// 保存の計画のために、原本のレコードを今の索引と読み方で引く口。
-    pub(crate) fn lookup(&self) -> ScanLookup<'_> {
-        ScanLookup::new(&self.source, &self.index, self.format)
+    /// 今の索引の写し（裏の保存が計画を作るときに使う・GitHub Issue #130）。
+    pub(crate) fn index_copy(&self) -> SparseIndex {
+        self.index.clone()
     }
 
     /// 保存して置き換えた後のファイルを、同じ読み方で開き直して索引を作り直す（ADR 0026 の決定 6）。

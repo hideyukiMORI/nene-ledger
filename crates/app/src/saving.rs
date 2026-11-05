@@ -8,14 +8,17 @@ use nene_ledger_application::added_row_shape::AddedRowShape;
 use nene_ledger_application::file_stamp::FileStamp;
 use nene_ledger_application::replace_failure::ReplaceFailure;
 use nene_ledger_application::save_plan_failure::SavePlanFailure;
-use nene_ledger_application::save_planning::save_plan;
+use nene_ledger_application::save_planning::{save_plan, write_plan};
 use nene_ledger_application::save_problem::SaveProblem;
 use nene_ledger_application::save_target::SaveTarget;
 use nene_ledger_application::table_changes::TableChanges;
 use nene_ledger_core::cell_edits::CellEdits;
+use nene_ledger_core::cell_value::CellValue;
 use nene_ledger_core::column_order::ColumnOrder;
 use nene_ledger_core::line_ending::LineEnding;
+use nene_ledger_core::plan_sink::PlanSink;
 use nene_ledger_core::row_order::RowOrder;
+use nene_ledger_core::text_encoding::TextEncoding;
 use nene_ledger_core::text_format::TextFormat;
 use nene_ledger_scan::block_size::BlockSize;
 use nene_ledger_scan::index_outcome::IndexOutcome;
@@ -23,6 +26,7 @@ use nene_ledger_scan::indexing::build_index;
 use nene_ledger_scan::scan_failure::ScanFailure;
 use nene_ledger_scan::source::Source;
 use nene_ledger_scan::sparse_index::SparseIndex;
+use nene_ledger_store::encoding::encoded;
 use nene_ledger_store::save_failure::SaveFailure;
 use nene_ledger_store::save_job::SaveJob;
 use nene_ledger_store::saving::{discard, save};
@@ -139,7 +143,9 @@ fn source_unchanged(reader: &Reader) -> Result<Option<FileStamp>, SavingFailure>
     Ok(Some(opened))
 }
 
-/// 計画を作り、裏で `target` へ書く仕事を始める（`expected` は保存先の書く前の様子）。
+/// 裏で、計画を作りながら `target` へ書く仕事を始める（`expected` は保存先の書く前の様子）。計画は記憶に持たず、
+/// 一時ファイルに直に書く（GitHub Issue #130・列を足し消しした巨大な表でも記憶が増えず、画面も止まらない）。
+/// 差分（行と列の並び・セルの書き換え）と索引は写して裏へ渡す。表せない字は、書く前に書き換えた値で確かめる（SAVE-04）。
 fn spawn_saving(
     changes: TableChanges<'_>,
     reader: &Reader,
@@ -147,27 +153,52 @@ fn spawn_saving(
     bytes: ScanBytes,
 ) -> Result<SaveJob, SavingFailure> {
     let format = reader.format();
-    let plan = {
-        let mut lookup = reader.lookup();
-        save_plan(
-            changes,
-            &mut lookup,
-            reader.source_length(),
-            format.dialect(),
-        )
-        .map_err(SavingFailure::Plan)?
+    representable(changes.edits(), format.encoding())?;
+    let (rows, columns, edits, shape) = (
+        changes.order().clone(),
+        changes.columns().clone(),
+        changes.edits().clone(),
+        changes.shape(),
+    );
+    let (source, index, length) = (
+        reader.source_copy().map_err(OpenFailure::from)?,
+        reader.index_copy(),
+        reader.source_length(),
+    );
+    let produce = move |sink: &mut dyn PlanSink| {
+        let mut lookup = ScanLookup::new(&source, &index, format);
+        let owned = TableChanges::new((&rows, &columns), &edits, shape);
+        write_plan(owned, &mut lookup, (length, format.dialect()), sink)
+            .map_err(|failure| SaveFailure::Unplannable(format!("{failure:?}")))
     };
     #[cfg(windows)]
     let replacing = nene_ledger_adapters_windows::file_replacing::FileReplacing;
     #[cfg(not(windows))]
     let replacing = nene_ledger_store::rename_replacing::RenameReplacing;
-    SaveJob::spawn(
+    SaveJob::spawn_streamed(
         target.to_path_buf(),
-        (plan, format.encoding(), expected),
-        (bytes, replacing),
+        (format.encoding(), expected),
+        (bytes, replacing, produce),
         reader.wakeup(),
     )
     .map_err(SavingFailure::Save)
+}
+
+/// 書き換えた値が、すべて文字コード `encoding` で表せるか（書く前に止める・ADR 0025・SAVE-04）。写す区間は原本の
+/// バイト列のままで、区切りと引用符と改行は ASCII なので、確かめるのは書き換えた値だけでよい。
+fn representable(edits: &CellEdits, encoding: TextEncoding) -> Result<(), SavingFailure> {
+    for (_, cells) in edits.rows() {
+        for (_, value) in cells {
+            if let CellValue::Text(text) = value
+                && encoded(text, encoding).is_none()
+            {
+                return Err(SavingFailure::Save(SaveFailure::Unrepresentable(
+                    text.clone(),
+                )));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// 名前を付けて保存の画面の初め（Windows）：今のファイルのフォルダと名前。新しい表はフォルダ無しと `無題.csv`。
@@ -201,7 +232,9 @@ const UNTITLED_FILE: &str = "無題.csv";
 /// 保存できなかった理由のうち、状態の行で示すもの。
 pub(crate) fn problem_of(failure: &SavingFailure) -> SaveProblem {
     match failure {
-        SavingFailure::Open(_) | SavingFailure::Plan(_) => SaveProblem::Unplannable,
+        SavingFailure::Open(_)
+        | SavingFailure::Plan(_)
+        | SavingFailure::Save(SaveFailure::Unplannable(_)) => SaveProblem::Unplannable,
         SavingFailure::Untitled => SaveProblem::Untitled,
         SavingFailure::Save(SaveFailure::ChangedOutside | SaveFailure::SourceShrank) => {
             SaveProblem::ChangedOutside
@@ -237,6 +270,9 @@ pub(crate) fn describe(failure: &SavingFailure) -> String {
         SavingFailure::Open(OpenFailure::Scan(scan)) => format!("原本を読めなかった: {scan:?}"),
         SavingFailure::Open(OpenFailure::Write(error)) => format!("書き出せなかった: {error}"),
         SavingFailure::Plan(plan) => format!("保存の中身を作れなかった: {plan:?}"),
+        SavingFailure::Save(SaveFailure::Unplannable(plan)) => {
+            format!("保存の中身を作れなかった: {plan}")
+        }
         SavingFailure::Untitled => String::from("新しい表にはまだファイルが無い"),
         SavingFailure::Save(SaveFailure::Unrepresentable(text)) => {
             format!("ファイルの文字コードで表せない字がある: {text}")

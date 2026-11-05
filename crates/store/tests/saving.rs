@@ -10,11 +10,12 @@ mod saving {
     use nene_ledger_application::replacing::Replacing;
     use nene_ledger_application::save_target::SaveTarget;
     use nene_ledger_application::source_bytes::SourceBytes;
+    use nene_ledger_core::plan_sink::PlanSink;
     use nene_ledger_core::save_plan::SavePlan;
     use nene_ledger_core::text_encoding::TextEncoding;
     use nene_ledger_store::rename_replacing::RenameReplacing;
     use nene_ledger_store::save_failure::SaveFailure;
-    use nene_ledger_store::saving::{discard, retry_replace, save};
+    use nene_ledger_store::saving::{discard, retry_replace, save, save_streamed};
     use nene_ledger_store::stamping::stamp_of;
 
     /// テストごとに別のフォルダ（テストは並列に走る）。
@@ -497,6 +498,107 @@ mod saving {
         );
         assert_eq!(kept, Err(SaveFailure::ChangedOutside));
         assert_eq!(std::fs::read(&existing).unwrap(), b"theirs");
+        assert!(leftovers(&dir).is_empty());
+    }
+
+    /// 計画を記憶に持たずに書く経路は、小さな写す区間がばらばらに続いても（列を足し消しした表の形）、記憶に持つ計画と
+    /// 同じバイト列を書く（GitHub Issue #130）。
+    #[test]
+    fn a_streamed_plan_writes_the_same_bytes_as_a_stored_one() {
+        let dir = folder("streamed");
+        let original: Vec<u8> = (0..3_000_000_u32)
+            .map(|n| b"abcdefgh,\n"[usize::try_from(n % 10).unwrap()])
+            .collect();
+        let target = dir.join("t.csv");
+        std::fs::write(&target, &original).unwrap();
+        // 3 バイトずつ写し、間に区切りを足す（塊の境目もまたぐ）。最後に 1 つ前へ戻って写す。
+        let mut plan = SavePlan::empty();
+        let mut offset = 0_u64;
+        while offset + 3 <= 2_500_000 {
+            plan.copy(offset, 3);
+            plan.text(";");
+            offset += 7;
+        }
+        plan.copy(10, 5);
+        let stored = dir.join("stored.csv");
+        std::fs::write(&stored, b"").unwrap();
+        save(
+            &stored,
+            (
+                &plan,
+                TextEncoding::Utf8,
+                SaveTarget::Existing(stamp_of(&stored).unwrap()),
+            ),
+            &mut Bytes(original.clone()),
+            &RenameReplacing,
+        )
+        .unwrap();
+        save_streamed(
+            &target,
+            (
+                TextEncoding::Utf8,
+                SaveTarget::Existing(stamp_of(&target).unwrap()),
+            ),
+            (&mut Bytes(original.clone()), &RenameReplacing),
+            |sink: &mut dyn PlanSink| {
+                plan.replay(sink);
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            std::fs::read(&target).unwrap(),
+            std::fs::read(&stored).unwrap()
+        );
+        assert!(leftovers(&dir).is_empty());
+    }
+
+    /// 計画を作れなかった・原本が短かった・表せない字は、何も置き換えず一時ファイルを残さない。
+    #[test]
+    fn a_failing_stream_replaces_nothing() {
+        let dir = folder("streamed-failures");
+        let target = dir.join("t.csv");
+        std::fs::write(&target, b"keep").unwrap();
+        let stamp = || SaveTarget::Existing(stamp_of(&target).unwrap());
+        let unplannable = save_streamed(
+            &target,
+            (TextEncoding::Utf8, stamp()),
+            (&mut Bytes(b"keep".to_vec()), &RenameReplacing),
+            |sink: &mut dyn PlanSink| {
+                sink.text("partial");
+                Err(SaveFailure::Unplannable(String::from("TooLong(3)")))
+            },
+        );
+        assert_eq!(
+            unplannable,
+            Err(SaveFailure::Unplannable(String::from("TooLong(3)")))
+        );
+        let shrank = save_streamed(
+            &target,
+            (TextEncoding::Utf8, stamp()),
+            (&mut Bytes(b"ke".to_vec()), &RenameReplacing),
+            |sink: &mut dyn PlanSink| {
+                sink.copy(0, 4);
+                Ok(())
+            },
+        );
+        assert_eq!(shrank, Err(SaveFailure::SourceShrank));
+        let unrepresentable = save_streamed(
+            &target,
+            (TextEncoding::ShiftJis, stamp()),
+            (&mut Bytes(Vec::new()), &RenameReplacing),
+            |sink: &mut dyn PlanSink| {
+                sink.text("a");
+                sink.text("😀");
+                assert!(sink.stopped());
+                Ok(())
+            },
+        );
+        assert_eq!(
+            unrepresentable,
+            Err(SaveFailure::Unrepresentable(String::from("😀")))
+        );
+        assert_eq!(std::fs::read(&target).unwrap(), b"keep");
         assert!(leftovers(&dir).is_empty());
     }
 }

@@ -30,4 +30,6 @@ pub enum SavePlanFailure<F> {
     },
     /// この版ではまだ保存できない書き換え（足した行と列・「セルが無い」への書き換え。ADR 0024 の層 1）。
     Unsupported,
+    /// 書き先が書けなくなったので、計画を途中でやめた（理由は書き先が持つ・GitHub Issue #130）。
+    Stopped,
 }

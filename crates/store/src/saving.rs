@@ -1,7 +1,7 @@
 //! 保存の手順（ADR 0025 の決定 1）。
 
 use std::fs::File;
-use std::io::{ErrorKind, Write};
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 use nene_ledger_application::file_stamp::FileStamp;
@@ -9,20 +9,19 @@ use nene_ledger_application::replace_failure::ReplaceFailure;
 use nene_ledger_application::replacing::Replacing;
 use nene_ledger_application::save_target::SaveTarget;
 use nene_ledger_application::source_bytes::SourceBytes;
+use nene_ledger_core::plan_sink::PlanSink;
 use nene_ledger_core::save_plan::SavePlan;
 use nene_ledger_core::save_step::SaveStep;
 use nene_ledger_core::text_encoding::TextEncoding;
 
 use crate::encoding::encoded;
+use crate::file_sink::FileSink;
 use crate::save_failure::SaveFailure;
 use crate::stamping::stamp_of;
 use crate::temporary_file::create_beside;
 
-/// 原本を写すときに一度に読む量。
-const COPY_CHUNK: usize = 1 << 20;
-
 /// 保存の計画 `plan`（書き換えた文字列は原本の文字コード `encoding` で書く）を、`target` と同じフォルダの一時ファイルに書き、同期してから `replacing` で置き換える。
-/// 保存先がまだ無い（[`SaveTarget::Absent`]・名前を付けて保存）なら、置き換えずに一時ファイルの名前を変えて作る（[`save_absent`]）。
+/// 保存先がまだ無い（[`SaveTarget::Absent`]・名前を付けて保存）なら、置き換えずに一時ファイルの名前を変えて作る（`save_absent`）。
 ///
 /// - 原本の印が、開く前に取った印（[`SaveTarget::Existing`]・[`stamp_of`]）と違えば、書かない。書き終えて置き換える直前にも確かめる
 /// - Windows では、書く前に置き換えられるか（ほかのアプリのロック）を確かめる
@@ -44,9 +43,39 @@ where
     S: SourceBytes<Failure = ErrorKind>,
     R: Replacing<Location = Path>,
 {
+    encodable(plan, encoding)?;
+    save_streamed(
+        target,
+        (encoding, expected),
+        (source, replacing),
+        |sink: &mut dyn PlanSink| {
+            plan.replay(sink);
+            Ok(())
+        },
+    )
+}
+
+/// [`save`] と同じ手順で、計画を記憶に持たずに書く（GitHub Issue #130）。`produce` が計画の歩を書き先へ順に渡し、
+/// 書き先が一時ファイルに直に書く。`produce` が失敗すれば（`SaveFailure::Plan`）書いた一時ファイルを消す。
+/// 表せない字は書きながら見つける（呼ぶ側が書き換えた値を先に [`encoded`] で確かめておけば、書く前に止められる）。
+///
+/// # Errors
+///
+/// [`SaveFailure`] のとおり。
+pub fn save_streamed<S, R, P>(
+    target: &Path,
+    (encoding, expected): (TextEncoding, SaveTarget),
+    (source, replacing): (&mut S, &R),
+    produce: P,
+) -> Result<(), SaveFailure>
+where
+    S: SourceBytes<Failure = ErrorKind>,
+    R: Replacing<Location = Path>,
+    P: FnOnce(&mut dyn PlanSink) -> Result<(), SaveFailure>,
+{
     let opened = match expected {
         SaveTarget::Existing(opened) => opened,
-        SaveTarget::Absent => return save_absent(target, (plan, encoding), source),
+        SaveTarget::Absent => return save_absent(target, encoding, source, produce),
     };
     let target =
         std::fs::canonicalize(target).map_err(|error| SaveFailure::Target(error.kind()))?;
@@ -56,9 +85,8 @@ where
     // Unix では、開いているほかのプロセスがあっても `rename` で置き換えられる（確かめることは無い）。
     #[cfg(windows)]
     crate::lock_probe::probe(&target).map_err(SaveFailure::Blocked)?;
-    let texts = encoded_texts(plan, encoding)?;
     let (file, temporary) = create_beside(&target).map_err(SaveFailure::Write)?;
-    if let Err(failure) = write_plan(file, plan, &texts, source)
+    if let Err(failure) = write_streamed(file, encoding, source, produce)
         .and_then(|()| unchanged_since(&target, opened))
         .and_then(|()| source_unchanged(source))
     {
@@ -80,11 +108,16 @@ where
 /// # Errors
 ///
 /// [`SaveFailure`] のとおり。
-pub fn save_absent<S: SourceBytes<Failure = ErrorKind>>(
+fn save_absent<S, P>(
     target: &Path,
-    (plan, encoding): (&SavePlan, TextEncoding),
+    encoding: TextEncoding,
     source: &mut S,
-) -> Result<(), SaveFailure> {
+    produce: P,
+) -> Result<(), SaveFailure>
+where
+    S: SourceBytes<Failure = ErrorKind>,
+    P: FnOnce(&mut dyn PlanSink) -> Result<(), SaveFailure>,
+{
     let name = target
         .file_name()
         .ok_or(SaveFailure::Target(ErrorKind::InvalidInput))?;
@@ -96,9 +129,8 @@ pub fn save_absent<S: SourceBytes<Failure = ErrorKind>>(
         std::fs::canonicalize(folder).map_err(|error| SaveFailure::Target(error.kind()))?;
     let created = folder.join(name);
     still_absent(&created)?;
-    let texts = encoded_texts(plan, encoding)?;
     let (file, temporary) = create_beside(&created).map_err(SaveFailure::Write)?;
-    if let Err(failure) = write_plan(file, plan, &texts, source)
+    if let Err(failure) = write_streamed(file, encoding, source, produce)
         .and_then(|()| still_absent(&created))
         .and_then(|()| source_unchanged(source))
     {
@@ -204,69 +236,32 @@ fn hard_links(_metadata: &std::fs::Metadata) -> u64 {
     1
 }
 
-/// 計画の文字列を、書き始める前に全部符号化する。
-fn encoded_texts(plan: &SavePlan, encoding: TextEncoding) -> Result<Vec<Vec<u8>>, SaveFailure> {
-    plan.steps()
-        .iter()
-        .filter_map(|step| match step {
-            SaveStep::Text(text) => Some(
-                encoded(text, encoding).ok_or_else(|| SaveFailure::Unrepresentable(text.clone())),
-            ),
-            SaveStep::Copy { .. } => None,
-        })
-        .collect()
-}
-
-/// 計画どおりに一時ファイルへ書き、同期する。
-fn write_plan<S: SourceBytes<Failure = ErrorKind>>(
-    mut file: File,
-    plan: &SavePlan,
-    texts: &[Vec<u8>],
-    source: &mut S,
-) -> Result<(), SaveFailure> {
-    let mut buffer = vec![0_u8; COPY_CHUNK];
-    let mut texts = texts.iter();
+/// 計画の文字列が、すべて文字コード `encoding` で表せるか（書き始める前に止める・SAVE-04）。
+fn encodable(plan: &SavePlan, encoding: TextEncoding) -> Result<(), SaveFailure> {
     for step in plan.steps() {
-        match step {
-            SaveStep::Copy { offset, length } => {
-                copy_range(&mut file, source, &mut buffer, (*offset, *length))?;
-            }
-            SaveStep::Text(_) => {
-                let bytes = texts
-                    .next()
-                    .ok_or(SaveFailure::Write(ErrorKind::InvalidData))?;
-                file.write_all(bytes)
-                    .map_err(|error| SaveFailure::Write(error.kind()))?;
-            }
+        if let SaveStep::Text(text) = step
+            && encoded(text, encoding).is_none()
+        {
+            return Err(SaveFailure::Unrepresentable(text.clone()));
         }
     }
-    file.sync_all()
-        .map_err(|error| SaveFailure::Write(error.kind()))
+    Ok(())
 }
 
-/// 原本の `offset` から `length` バイトを写す。
-fn copy_range<S: SourceBytes<Failure = ErrorKind>>(
-    file: &mut File,
+/// `produce` の渡す歩を一時ファイル `file` に書き、同期する。
+fn write_streamed<S, P>(
+    file: File,
+    encoding: TextEncoding,
     source: &mut S,
-    buffer: &mut [u8],
-    (offset, length): (u64, u64),
-) -> Result<(), SaveFailure> {
-    let mut done = 0_u64;
-    while done < length {
-        let wanted = usize::try_from(length.saturating_sub(done)).unwrap_or(usize::MAX);
-        let chunk = buffer.get_mut(..wanted.min(COPY_CHUNK)).unwrap_or_default();
-        let read = match source.read_at(offset.saturating_add(done), chunk) {
-            Ok(0) => return Err(SaveFailure::SourceShrank),
-            Ok(read) => read,
-            Err(ErrorKind::Interrupted) => continue,
-            Err(kind) => return Err(SaveFailure::Read(kind)),
-        };
-        let written = chunk.get(..read).unwrap_or_default();
-        file.write_all(written)
-            .map_err(|error| SaveFailure::Write(error.kind()))?;
-        done = done.saturating_add(u64::try_from(read).unwrap_or(u64::MAX));
-    }
-    Ok(())
+    produce: P,
+) -> Result<(), SaveFailure>
+where
+    S: SourceBytes<Failure = ErrorKind>,
+    P: FnOnce(&mut dyn PlanSink) -> Result<(), SaveFailure>,
+{
+    let mut sink = FileSink::new(file, encoding, source);
+    let planned = produce(&mut sink);
+    sink.finish(planned)
 }
 
 /// 原本の権限（Unix の mode）を一時ファイルに写す。写せなくても保存は続ける（所有者が違うときなど）。
