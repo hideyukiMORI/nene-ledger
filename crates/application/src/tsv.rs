@@ -224,9 +224,9 @@ mod tests {
         const PIECES: [&str; 10] = ["a", "\t", "\r", "\n", "\r\n", "\"", "", "東", "0012", " "];
         let mut state = 0x2545_F491_4F6C_DD1D_u64;
         let mut next = |bound: usize| {
-            state ^= state << 13;
-            state ^= state >> 7;
-            state ^= state << 17;
+            state ^= state << 13_u32;
+            state ^= state >> 7_u32;
+            state ^= state << 17_u32;
             usize::try_from(state % u64::try_from(bound).unwrap()).unwrap()
         };
         for _ in 0..2_000_u32 {
