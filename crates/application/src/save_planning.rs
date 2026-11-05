@@ -80,19 +80,15 @@ fn row_pieces<F>(
         let (ColumnId::Source(column), CellValue::Text(text)) = (column, value) else {
             return Err(SavePlanFailure::Unsupported);
         };
-        let field = record
+        // 原本の行に無いセルは足す（間は空のセル・ADR 0024 の施主の判断 4・5）。引用は要るときだけ。
+        let was_quoted = record
             .fields()
             .get(column)
-            .ok_or(SavePlanFailure::NoSuchCell {
-                row: number,
-                column,
-            })?;
-        // 🔴 セルが 1 つの行を空にすると、空の行になる。前の行が `\r` で終わっていれば `\r\n` につながって行が
-        // 1 つ消え、空の行を読み飛ばす読み手もある。引用の方言では `""` と書く（ランダムの往復のテストで見つけた）。
+            .is_some_and(|field| field.quoted());
         let lone_empty = text.is_empty() && record.fields().len() == 1;
         let cell = written_cell(
             text,
-            field.quoted() || lone_empty,
+            was_quoted || lone_empty,
             &dialect,
             record.terminator(),
         )
@@ -104,13 +100,12 @@ fn row_pieces<F>(
         })?;
         written.push((column, cell));
     }
-    edited_row(record, written).map_err(|failure| match failure {
-        RowWriteFailure::NoSuchCell(column) | RowWriteFailure::Unordered(column) => {
-            SavePlanFailure::NoSuchCell {
-                row: number,
-                column,
-            }
-        }
+    let delimiter = char::from(dialect.delimiter().byte());
+    edited_row(record, written, delimiter).map_err(|failure| match failure {
+        RowWriteFailure::Unordered(column) => SavePlanFailure::Unordered {
+            row: number,
+            column,
+        },
     })
 }
 
@@ -257,12 +252,22 @@ mod tests {
         let mut missing = CellEdits::empty();
         missing.set(RowId::Source(4), ColumnId::Source(0), text("x"));
         assert_eq!(plan(&missing), Err(SavePlanFailure::Missing(4)));
-        let mut narrow = CellEdits::empty();
-        narrow.set(RowId::Source(0), ColumnId::Source(2), text("x"));
+    }
+
+    #[test]
+    fn cells_beyond_a_short_row_are_appended_after_empty_cells() {
+        // 1 行目は 2 列、2 行目は 1 列。2 行目の 3 列目に書くと、間の 2 列目は空のセルになる。
+        let input = b"a,b,c\r\n\"d\"\r\ne,f,g\r\n";
+        let mut edits = CellEdits::empty();
+        edits.set(RowId::Source(1), ColumnId::Source(2), text("x,y"));
         assert_eq!(
-            plan(&narrow),
-            Err(SavePlanFailure::NoSuchCell { row: 0, column: 2 })
+            saved(input, &edits),
+            b"a,b,c\r\n\"d\",,\"x,y\"\r\ne,f,g\r\n"
         );
+        // すぐ後ろの列は区切り 1 つ。終わり方の無い最後の行。
+        let mut next = CellEdits::empty();
+        next.set(RowId::Source(0), ColumnId::Source(1), text("2"));
+        assert_eq!(saved(b"1", &next), b"1,2");
     }
 
     /// 決まった種から作る疑似乱数（テストの決定性）。
@@ -338,6 +343,10 @@ mod tests {
             .collect();
         let mut want = values(input, old);
         for &(column, value) in &edited {
+            // 原本の行に無いセルは足す。間の列は空のセル。
+            if want.len() <= column {
+                want.resize(column + 1, Vec::new());
+            }
             want[column] = expected_value(value, old);
         }
         assert_eq!(values(output, new), want, "{input:?} -> {output:?}");
@@ -360,7 +369,8 @@ mod tests {
             let mut expected: Vec<(usize, usize, &str)> = Vec::new();
             for _ in 0..rng.below(4) {
                 let row = rng.below(before.len());
-                let column = rng.below(before[row].fields().len());
+                // 行のセルの数より 2 つ先まで（列の数が足りない行への書き込み・GitHub Issue #83）。
+                let column = rng.below(before[row].fields().len() + 2);
                 let value = rng.pick(&VALUES);
                 let row_id = RowId::Source(u64::try_from(row).unwrap());
                 edits.set(row_id, ColumnId::Source(column), text(value));

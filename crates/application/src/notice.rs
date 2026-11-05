@@ -63,7 +63,7 @@ pub enum Notice {
     ReadingNeedsSave,
     /// 1 MiB で切り詰めたレコードのセルは直せない（保存の計画と同じ・ADR 0026 の決定 1）。
     EditCut,
-    /// この行には、この列のセルが無い（列の数が足りない行・KEEP-05）。セルを足すのは列の操作（EDIT-03）。
+    /// このセルは差分で消した（`Absent`・KEEP-05）ので直せない。列の数が足りない行のセルは足して直せる（GitHub Issue #83）。
     EditMissingCell,
     /// 方言の判別に確信が無い（FR-023・Issue #3）。黙って 1 位で開いたことを知らせ、候補から選ぶ入口を示す。
     DialectUnsure {

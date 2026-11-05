@@ -696,9 +696,12 @@ impl Document {
             return false;
         }
         let cell = (RowId::Source(record), ColumnId::Source(column));
+        // 原本の行に無いセル（列の数が足りない行）は空として入る。保存では間の列を空のセルで埋めて足す
+        // （ADR 0024 の施主の判断 4・5）。差分で消したセル（`Absent`）は直さない。
         let shown = match (self.edits.get(cell.0, cell.1), &source) {
             (Some(CellValue::Text(value)), _) | (None, Some(value)) => value.clone(),
-            (Some(CellValue::Absent), _) | (None, None) => {
+            (None, None) => String::new(),
+            (Some(CellValue::Absent), _) => {
                 self.notice = Some(Notice::EditMissingCell);
                 return false;
             }
@@ -2174,13 +2177,16 @@ impl Document {
     /// レコード `first_record` から読んだ行 `rows` のうち、見出しのレコードを除いたもの。
     /// レコード `first_record` から読んだ行 `rows` に、書き換えたセルを重ねた写し。「セルが無い」にしたセルは空にする。
     fn overlaid(&self, first_record: u64, rows: &[Vec<String>]) -> Vec<Vec<String>> {
+        // 列の数が足りない行にも、足したセルの値を出す（欠けたセルはコピーで空になるので、空で埋めても同じ）。
+        let width = self.widths.columns().len();
         rows.iter()
             .zip(first_record..)
             .map(|(cells, record)| {
-                cells
-                    .iter()
-                    .enumerate()
-                    .map(|(column, cell)| self.overlaid_cell(record, column, cell))
+                (0..cells.len().max(width))
+                    .map(|column| {
+                        let cell = cells.get(column).map_or("", String::as_str);
+                        self.overlaid_cell(record, column, cell)
+                    })
                     .collect()
             })
             .collect()
@@ -4918,22 +4924,45 @@ mod tests {
     }
 
     #[test]
-    fn a_missing_cell_and_a_cut_record_are_not_edited() {
+    fn a_missing_cell_is_written_and_a_cut_record_is_not_edited() {
         let mut document = editable();
         document.apply(
             GoToTarget::parse("3,2").map_or(Intent::Cancel, Intent::GoTo),
             normal(),
         );
         assert_eq!(document.selection().cursor(), CellPosition::new(2, 1));
-        typed(&mut document, "x");
-        assert_eq!(document.editor(), None);
-        let frame = document.frame(normal(), palette());
-        text_at(&frame, "この行には、この列のセルがありません");
+        // 空のまま確定しても差分にしない（ファイルの値と同じ）。
+        document.apply(Intent::Edit, normal());
+        assert_eq!(document.editor().map(CellEditor::shown), Some(""));
+        document.apply(Intent::Cancel, normal());
+        typed(&mut document, "");
+        document.apply(Intent::Delete, normal());
+        assert!(document.edits().is_empty());
+        // 原本の行に無いセルにも書ける（GitHub Issue #83）。表・コピーに重なる。
+        typed(&mut document, "c2");
+        document.apply(Intent::Confirm, normal());
+        assert_eq!(
+            edited(&document, 2, 1),
+            Some(&CellValue::Text(String::from("c2")))
+        );
+        text_at(&document.frame(normal(), palette()), "c2");
+        document.apply(
+            GoToTarget::parse("3,1").map_or(Intent::Cancel, Intent::GoTo),
+            normal(),
+        );
+        document.apply(Intent::SelectRows, normal());
+        let rows = vec![vec![String::from("c1")]];
+        assert_eq!(
+            document
+                .copy_text(2, &rows, &[])
+                .map(|text| String::from(text.as_str())),
+            Some(String::from("c1\tc2\r\n"))
+        );
         document.mark_cut(vec![CutRecord::new(1, None)]);
         document.apply(moving(CursorStep::Up), normal());
         document.apply(Intent::Edit, normal());
         assert_eq!(document.editor(), None);
-        assert!(document.edits().is_empty());
+        assert_eq!(edited(&document, 1, 0), None);
     }
 
     #[test]
