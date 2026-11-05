@@ -566,6 +566,22 @@ Shift_JIS・縦棒区切りの見本（`crates/app/fixtures/shift-jis-pipe.csv`�
 
 コピーは、切り詰めた値の行を含めば `… をコピーしました（うち N 行は 1 MiB で切り詰めた値）`（application の `a_cut_row_says_so_in_the_detail_pane_and_in_the_copy_notice`）。窓では撮っていない。索引を作り終える前は全体の大きさが分からず `1 MiB で切り詰め（行は 1 MiB を超える）`（app の `records_cut_at_the_limit_are_listed_with_their_whole_size`）。Windows の実機での確認はまだ。
 
+## 57. 表の上でセルを直す（GitHub Issue #69・ADR 0026）— 仮想の X サーバでの確認（QLT-013）
+
+`id,name,city` の 3 行（CRLF・2 行目の `name` は引用の `"Sato, Hanako"`）を、debug の窓（1024×640）で開き、xdotool でキーを送って撮った（2026-11-05）。
+
+| 操作 | 画面 |
+| --- | --- |
+| → で `name` へ、`Kato` と打つ | セルが地の色の欄になり `Kato` とカーソルの棒。詳細ペインも `Kato`。状態の行の右端が `入力中 · Enter 確定 · Esc やめる · F2 編集へ` |
+| Enter → ↑ → F2 → ← ← → `Z` | Enter で確定して下へ動き、題名が `● t.csv — NeNe Ledger`。F2 で `Kato` の末尾から、← で欄の中を動き `KaZto`（状態の行は `編集中 …`） |
+| Enter → ↓ → Delete | 3 行目の `name` が空になり、詳細ペインが `〈空のセル〉` |
+| （開き直して）→ F2 → Alt+Enter → `x` → Tab → Ctrl+C | 欄の中で改行し、詳細ペインに 2 行（`Sato, Hanako` と `x`）。Tab で確定して右へ動く。Ctrl+C の知らせが出る |
+| （開き直して）→ F2 → ` Tanaka` | 欄より長い値は頭を飛ばして描き、カーソルの棒が右端に見えたまま（`nako Tanaka▏`） |
+
+確定の 3 通り（見えていた値のまま・原本の値に戻した・それ以外）と、直せない所（列の足りない行・1 MiB で切り詰めた行）は application のテスト（`typing_the_source_value_back_removes_the_edit`・`a_missing_cell_and_a_cut_record_are_not_edited` など）。キーの割り当ては両方の OS のキーのテスト（`every_key_in_the_list_is_bound_as_written`）。
+
+🔴 **正直に:** 画面からの保存（Ctrl+S）はまだ無いので、直した値はファイルに残らない（次の Issue）。Windows の実機・IME の確定前の見え・ダブルクリックでの編集はまだ。選んだ集計（VIEW-14）は原本の値で数える（書き換えを重ねていない）。
+
 ## 7. active の規則と、その証明
 
 CNF-009 は active の規則ごとに `| ID |` で始まる行がここにあることを要求する。

@@ -10,6 +10,8 @@ use core::ops::RangeInclusive;
 use crate::bar_hit::BarHit;
 use crate::bar_marks::BarMarks;
 use crate::body_mapping::{body_count, record_of};
+use crate::cell_display::single_line;
+use crate::cell_editor::CellEditor;
 use crate::cell_position::CellPosition;
 use crate::cell_restore::CellRestore;
 use crate::chrome_painter::ChromePainter;
@@ -17,12 +19,16 @@ use crate::client_bands::ClientBands;
 use crate::clipboard_text::ClipboardText;
 use crate::column_shift::ColumnShift;
 use crate::cursor_moves::step_cursor;
+use crate::cursor_step::CursorStep;
 use crate::cut_record::CutRecord;
 use crate::detail_content::DetailContent;
 use crate::detail_painter::DetailPainter;
 use crate::detail_pane::DetailPane;
 use crate::detail_place::DetailPlace;
 use crate::document_effect::DocumentEffect;
+use crate::edit_commit::EditCommit;
+use crate::edit_mode::EditMode;
+use crate::editing_cell::EditingCell;
 use crate::fixed_parts::FixedParts;
 use crate::format_summary::FormatSummary;
 use crate::frame_painter::FramePainter;
@@ -59,6 +65,9 @@ use crate::track_side::TrackSide;
 use crate::tsv::tsv;
 use crate::view_row::ViewRow;
 use crate::window_view::WindowView;
+use nene_ledger_core::cell_edits::CellEdits;
+use nene_ledger_core::cell_value::CellValue;
+use nene_ledger_core::column_id::ColumnId;
 use nene_ledger_core::column_widths::{ColumnWidths, MAX_RESIZED_COLUMNS, MIN_COLUMN_COLUMNS};
 use nene_ledger_core::display_width::display_columns;
 use nene_ledger_core::draw_command::DrawCommand;
@@ -69,6 +78,7 @@ use nene_ledger_core::pixel_point::PixelPoint;
 use nene_ledger_core::pixel_rect::PixelRect;
 use nene_ledger_core::pixel_size::PixelSize;
 use nene_ledger_core::pointer_point::PointerPoint;
+use nene_ledger_core::row_id::RowId;
 use nene_ledger_core::scroll_axis::ScrollAxis;
 use nene_ledger_core::table_layout::{GRID_LINE, TableLayout};
 use nene_ledger_core::text_role::TextRole;
@@ -100,10 +110,20 @@ pub struct Document {
     custom: BTreeMap<usize, u32>,
     /// 指が見出しの列の境目の上にあるか（カーソルの形）。
     grip: bool,
+    /// 書き換えたセル（ADR 0024 の層 2）。画面の表は原本 ＋ これから作る派生値。
+    edits: CellEdits,
+    /// 編集中のセル（ADR 0026）。
+    editor: Option<CellEditor>,
 }
 
 /// 状態の行の右端に出すパレットの案内。
 const PALETTE_HINT: &str = "Ctrl+Shift+P でコマンド";
+
+/// 入力の状態の案内（ADR 0026 の決定 2）。
+const EDITING_HINT_ENTERING: &str = "入力中 · Enter 確定 · Esc やめる · F2 編集へ";
+
+/// 編集の状態の案内。
+const EDITING_HINT_EDITING: &str = "編集中 · Enter 確定 · Esc やめる · F2 入力へ";
 
 /// 一度にコピーする行の上限。
 pub const MAX_COPY_ROWS: u64 = 100_000;
@@ -169,7 +189,21 @@ impl Document {
             index: JobState::Waiting,
             custom: BTreeMap::new(),
             grip: false,
+            edits: CellEdits::empty(),
+            editor: None,
         }
+    }
+
+    /// 書き換えたセル（保存で store に渡す・ADR 0025）。
+    #[must_use]
+    pub const fn edits(&self) -> &CellEdits {
+        &self.edits
+    }
+
+    /// 編集中のセル。
+    #[must_use]
+    pub const fn editor(&self) -> Option<&CellEditor> {
+        self.editor.as_ref()
     }
 
     /// 題名（タイトルバーに書く）。
@@ -270,6 +304,14 @@ impl Document {
     /// コピーなら選択の行を読ませる（大きすぎれば知らせるだけ）。前の知らせは消す。
     pub fn apply(&mut self, intent: Intent, window: WindowView) -> DocumentEffect {
         self.notice = None;
+        match self.edit_intent(intent) {
+            Some(intent) => self.apply_to_table(intent, window),
+            None => DocumentEffect::Stay,
+        }
+    }
+
+    /// 編集の欄が受けなかった意図を、表に取り込む。
+    fn apply_to_table(&mut self, intent: Intent, window: WindowView) -> DocumentEffect {
         if intent == Intent::Cancel
             && let Some(effect) = self.cancel_drag(window)
         {
@@ -300,7 +342,11 @@ impl Document {
             | Intent::Cancel
             | Intent::Drag { .. }
             | Intent::Release
-            | Intent::OpenGoTo => current,
+            | Intent::OpenGoTo
+            | Intent::Edit
+            | Intent::Delete
+            | Intent::BreakLine
+            | Intent::Advance(_) => current,
             Intent::SelectAll
             | Intent::SelectRows
             | Intent::SelectColumns
@@ -328,6 +374,194 @@ impl Document {
             }
         };
         self.go_to(target, page)
+    }
+
+    /// 編集の意図（ADR 0026 の決定 1・2）。欄で受けたら `None`。表の意図として続けるなら、その意図を返す
+    /// （確定して動くときは、確定してから動きの意図を返す）。
+    fn edit_intent(&mut self, intent: Intent) -> Option<Intent> {
+        let Some(editor) = self.editor.as_mut() else {
+            return self.start_edit(intent);
+        };
+        match intent {
+            Intent::Type(character) => editor.type_character(character),
+            Intent::Erase => editor.erase_before(),
+            Intent::Delete => editor.erase_after(),
+            Intent::BreakLine => editor.break_line(),
+            Intent::Edit => editor.toggle_mode(),
+            Intent::SelectAll => editor.select_all(),
+            Intent::Cancel => self.editor = None,
+            // 🔴 欄の中の字のコピーはまだ（OS のクリップボードへ渡す経路を、貼り付けの Issue で足す）。
+            Intent::Copy => {}
+            Intent::Move { step, mode } => {
+                if editor.arrow(step, mode == SelectionMode::Extend) {
+                    return None;
+                }
+                self.commit_edit();
+                return Some(intent);
+            }
+            Intent::Confirm => {
+                self.commit_edit();
+                return Some(Intent::Move {
+                    step: CursorStep::Down,
+                    mode: SelectionMode::Collapse,
+                });
+            }
+            Intent::Advance(step) => {
+                self.commit_edit();
+                return Some(Intent::Move {
+                    step,
+                    mode: SelectionMode::Collapse,
+                });
+            }
+            // 別のセル・別の行への移動と、表の並びを変える操作は、確定してから。
+            Intent::Point { .. }
+            | Intent::GoTo(_)
+            | Intent::OpenGoTo
+            | Intent::OpenPalette
+            | Intent::SelectRows
+            | Intent::SelectColumns
+            | Intent::MoveColumns(_)
+            | Intent::ResetColumns
+            | Intent::ResetWidths
+            | Intent::FreezeColumns
+            | Intent::UnfreezeColumns => {
+                self.commit_edit();
+                return Some(intent);
+            }
+            // 表示だけを動かすものは、編集を続けたまま。
+            Intent::Scroll(_)
+            | Intent::Drag { .. }
+            | Intent::Release
+            | Intent::ToggleDetail
+            | Intent::Theme(_)
+            | Intent::Zoom(_) => return Some(intent),
+        }
+        None
+    }
+
+    /// 編集していないときの編集の意図。打ち始め・F2 で編集に入り、Delete でカーソルのセルを空にする。
+    /// Enter・Tab などは動くだけ。
+    fn start_edit(&mut self, intent: Intent) -> Option<Intent> {
+        match intent {
+            Intent::Type(character) => {
+                if self.begin_edit(EditMode::Entering)
+                    && let Some(editor) = self.editor.as_mut()
+                {
+                    editor.type_character(character);
+                }
+                None
+            }
+            Intent::Edit => {
+                self.begin_edit(EditMode::Editing);
+                None
+            }
+            Intent::Delete => {
+                // 🔴 選んだ範囲の全部を空にするのは一括の入力（EDIT-02）の Issue で。今はカーソルのセルだけ。
+                if self.begin_edit(EditMode::Entering) {
+                    self.commit_edit();
+                }
+                None
+            }
+            Intent::BreakLine => None,
+            Intent::Confirm => Some(Intent::Move {
+                step: CursorStep::Down,
+                mode: SelectionMode::Collapse,
+            }),
+            Intent::Advance(step) => Some(Intent::Move {
+                step,
+                mode: SelectionMode::Collapse,
+            }),
+            Intent::Scroll(_)
+            | Intent::Move { .. }
+            | Intent::Point { .. }
+            | Intent::Drag { .. }
+            | Intent::Release
+            | Intent::GoTo(_)
+            | Intent::OpenGoTo
+            | Intent::SelectAll
+            | Intent::SelectRows
+            | Intent::SelectColumns
+            | Intent::MoveColumns(_)
+            | Intent::ResetColumns
+            | Intent::ResetWidths
+            | Intent::FreezeColumns
+            | Intent::UnfreezeColumns
+            | Intent::Copy
+            | Intent::ToggleDetail
+            | Intent::Theme(_)
+            | Intent::Zoom(_)
+            | Intent::OpenPalette
+            | Intent::Erase
+            | Intent::Cancel => Some(intent),
+        }
+    }
+
+    /// カーソルのセルの編集を始める。見えていない行・切り詰めたレコード・セルの無い所なら始めない（知らせる）。
+    /// 始めたら `true`。
+    fn begin_edit(&mut self, mode: EditMode) -> bool {
+        let cursor = self.selection.cursor();
+        let column = self.source_column(cursor.column());
+        let Some((record, source)) = self
+            .view_row(cursor.body())
+            .map(|row| (row.record(), row.values().get(column).cloned()))
+        else {
+            return false;
+        };
+        if self.cuts.iter().any(|cut| cut.record() == record) {
+            self.notice = Some(Notice::EditCut);
+            return false;
+        }
+        let cell = (RowId::Source(record), ColumnId::Source(column));
+        let shown = match (self.edits.get(cell.0, cell.1), &source) {
+            (Some(CellValue::Text(value)), _) | (None, Some(value)) => value.clone(),
+            (Some(CellValue::Absent), _) | (None, None) => {
+                self.notice = Some(Notice::EditMissingCell);
+                return false;
+            }
+        };
+        let editor = match mode {
+            EditMode::Entering => CellEditor::entering(cell, &shown, source.as_deref()),
+            EditMode::Editing => CellEditor::editing(cell, &shown, source.as_deref()),
+        };
+        self.editor = Some(editor);
+        true
+    }
+
+    /// 編集を確定して、差分に入れる（見えていた値のままなら何もしない・原本の値に戻ったら差分を消す）。
+    fn commit_edit(&mut self) {
+        let Some(editor) = self.editor.take() else {
+            return;
+        };
+        match editor.commit() {
+            EditCommit::Keep => {}
+            EditCommit::Restore { row, column } => drop(self.edits.clear(row, column)),
+            EditCommit::Set { row, column, value } => drop(self.edits.set(row, column, value)),
+        }
+    }
+
+    /// 本体の `body` 番目の行（見えていなければ `None`）。
+    fn view_row(&self, body: u64) -> Option<&ViewRow> {
+        body.checked_sub(self.view.first_body())
+            .and_then(|index| usize::try_from(index).ok())
+            .and_then(|index| self.view.rows().get(index))
+    }
+
+    /// 編集中のセルの描き方（表示の字数に直す）。
+    fn editing_cell(&self) -> Option<EditingCell> {
+        let editor = self.editor.as_ref()?;
+        let (text, caret) = editor.field().display();
+        let columns = |index: usize| {
+            let head: String = text.chars().take(index).collect();
+            display_columns(&single_line(&head))
+        };
+        let underline = caret
+            .underline()
+            .map(|(start, end)| (columns(start), columns(end)));
+        Some(EditingCell::new(
+            single_line(&text),
+            columns(caret.cursor()),
+            underline,
+        ))
     }
 
     /// ホイール。横はその場で動かし、縦は動いた先の本体の先頭を返す。ドラッグ中なら、動いた後の指の下まで選択を広げる。
@@ -368,7 +602,11 @@ impl Document {
             | Intent::Type(_)
             | Intent::Erase
             | Intent::Confirm
-            | Intent::Cancel => {}
+            | Intent::Cancel
+            | Intent::Edit
+            | Intent::Delete
+            | Intent::BreakLine
+            | Intent::Advance(_) => {}
         }
     }
 
@@ -562,7 +800,11 @@ impl Document {
             | Intent::FreezeColumns
             | Intent::UnfreezeColumns
             | Intent::GoTo(_)
-            | Intent::OpenGoTo => None,
+            | Intent::OpenGoTo
+            | Intent::Edit
+            | Intent::Delete
+            | Intent::BreakLine
+            | Intent::Advance(_) => None,
         }
     }
 
@@ -1473,6 +1715,14 @@ impl Document {
     ) -> Option<ClipboardText> {
         let shape = self.ranges().copy_shape()?;
         let (top, _) = self.ranges().row_span();
+        // 書き換えたセルは、書き換えた値でコピーする（画面と同じ）。
+        let overlaid;
+        let rows = if self.edits.is_empty() {
+            rows
+        } else {
+            overlaid = self.overlaid(first_record, rows);
+            overlaid.as_slice()
+        };
         let kept: Vec<(&[String], u64)> = self
             .body_cells(first_record, rows)
             .into_iter()
@@ -1606,6 +1856,32 @@ impl Document {
     }
 
     /// レコード `first_record` から読んだ行 `rows` のうち、見出しのレコードを除いたもの。
+    /// レコード `first_record` から読んだ行 `rows` に、書き換えたセルを重ねた写し。「セルが無い」にしたセルは空にする。
+    fn overlaid(&self, first_record: u64, rows: &[Vec<String>]) -> Vec<Vec<String>> {
+        rows.iter()
+            .zip(first_record..)
+            .map(|(cells, record)| {
+                cells
+                    .iter()
+                    .enumerate()
+                    .map(|(column, cell)| self.overlaid_cell(record, column, cell))
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// レコード `record` の列 `column` の、書き換えを重ねた値。
+    fn overlaid_cell(&self, record: u64, column: usize, cell: &str) -> String {
+        match self
+            .edits
+            .get(RowId::Source(record), ColumnId::Source(column))
+        {
+            Some(CellValue::Text(value)) => value.clone(),
+            Some(CellValue::Absent) => String::new(),
+            None => String::from(cell),
+        }
+    }
+
     fn body_cells<'rows>(
         &self,
         first_record: u64,
@@ -1798,7 +2074,13 @@ impl Document {
             .into_iter()
             .map(|command| command.offset(dx, dy))
             .collect();
-        commands.extend(ChromePainter::new(view, palette).title_bar(&self.title));
+        // 未保存の書き換えがあれば、題名の頭に印を付ける（WIN-01・ADR 0026 の決定 7）。
+        let title = if self.edits.is_empty() {
+            self.title.clone()
+        } else {
+            format!("● {}", self.title)
+        };
+        commands.extend(ChromePainter::new(view, palette).title_bar(&title));
         commands.extend(ChromePainter::new(view, palette).border());
         Frame::new(view.size(), commands)
     }
@@ -1841,6 +2123,10 @@ impl Document {
     /// カーソルのセルの、詳細ペインに出す中身。
     fn detail_content(&self) -> DetailContent<'_> {
         let cursor = self.selection.cursor();
+        if let Some(editor) = &self.editor {
+            // 編集中は欄の確定した字（確定前の文字列はセルの中だけに出す）。
+            return DetailContent::Value(editor.field().text());
+        }
         let row = cursor
             .body()
             .checked_sub(self.view.first_body())
@@ -1854,8 +2140,17 @@ impl Document {
             .iter()
             .find(|cut| cut.record() == row.record())
             .copied();
+        let column = self.source_column(cursor.column());
+        match self
+            .edits
+            .get(RowId::Source(row.record()), ColumnId::Source(column))
+        {
+            Some(CellValue::Text(value)) => return DetailContent::Value(value),
+            Some(CellValue::Absent) => return DetailContent::Missing,
+            None => {}
+        }
         row.values()
-            .get(self.source_column(cursor.column()))
+            .get(column)
             .map_or(DetailContent::Missing, |value| match cut {
                 Some(cut) => DetailContent::Cut { value, cut },
                 None => DetailContent::Value(value),
@@ -1989,6 +2284,12 @@ impl Document {
         if let Some(notice) = self.notice {
             return notice_status(notice);
         }
+        if let Some(editor) = &self.editor {
+            return String::from(match editor.mode() {
+                EditMode::Entering => EDITING_HINT_ENTERING,
+                EditMode::Editing => EDITING_HINT_EDITING,
+            });
+        }
         totals_status(self.totals).unwrap_or_else(|| String::from(PALETTE_HINT))
     }
 
@@ -2000,9 +2301,12 @@ impl Document {
         palette: Palette,
     ) -> Vec<DrawCommand> {
         let layout = self.layout(self.first_column, metrics);
+        let editing = self.editing_cell();
         FramePainter::new(&layout, metrics, palette, size)
             .with_ranges(self.ranges())
             .with_order(&self.order)
+            .with_edits(&self.edits)
+            .with_editing(editing.as_ref())
             .paint(self.header(), self.column_numbers().as_ref(), &self.view)
     }
 
@@ -4071,5 +4375,182 @@ mod tests {
         document.apply(Intent::Release, window);
         document.apply(Intent::GoTo(GoToTarget::parse("2,3").unwrap()), window);
         assert_eq!(document.selection().cursor(), CellPosition::new(0, 0));
+    }
+
+    /// 見出しの無い 3 行 × 2 列の表（レコード 0〜2）。
+    fn editable() -> Document {
+        let rows: Vec<Vec<String>> = vec![
+            vec![String::from("0012"), String::from("東京")],
+            vec![String::from("b1"), String::from("b2")],
+            vec![String::from("c1")],
+        ];
+        closed(Document::open(
+            String::from("e.csv — NeNe Ledger"),
+            summary(),
+            None,
+            &rows,
+        ))
+    }
+
+    fn typed(document: &mut Document, text: &str) {
+        for character in text.chars() {
+            document.apply(Intent::Type(character), normal());
+        }
+    }
+
+    fn edited(document: &Document, record: u64, column: usize) -> Option<&CellValue> {
+        document
+            .edits()
+            .get(RowId::Source(record), ColumnId::Source(column))
+    }
+
+    #[test]
+    fn typing_on_a_cell_replaces_its_value_and_enter_commits_and_moves_down() {
+        let mut document = editable();
+        typed(&mut document, "13");
+        assert_eq!(
+            document.editor().map(CellEditor::mode),
+            Some(EditMode::Entering)
+        );
+        assert!(document.edits().is_empty());
+        document.apply(Intent::Confirm, normal());
+        assert_eq!(document.editor(), None);
+        assert_eq!(
+            edited(&document, 0, 0),
+            Some(&CellValue::Text(String::from("13")))
+        );
+        assert_eq!(document.selection().cursor(), CellPosition::new(1, 0));
+        // 原本の表示は原本のまま（派生値は描くときに重ねる）。
+        assert_eq!(document.view().rows()[0].values()[0], "0012");
+        let frame = document.frame(normal(), palette());
+        text_at(&frame, "13");
+        text_at(&frame, "● e.csv — NeNe Ledger");
+    }
+
+    #[test]
+    fn escape_cancels_without_an_edit_and_enter_alone_only_moves() {
+        let mut document = editable();
+        typed(&mut document, "x");
+        document.apply(Intent::Cancel, normal());
+        assert_eq!(document.editor(), None);
+        assert!(document.edits().is_empty());
+        document.apply(Intent::Confirm, normal());
+        assert_eq!(document.selection().cursor(), CellPosition::new(1, 0));
+        document.apply(Intent::Advance(CursorStep::Right), normal());
+        assert_eq!(document.selection().cursor(), CellPosition::new(1, 1));
+        assert!(document.edits().is_empty());
+    }
+
+    #[test]
+    fn f2_continues_and_arrows_stay_inside_while_editing() {
+        let mut document = editable();
+        document.apply(Intent::Edit, normal());
+        assert_eq!(
+            document.editor().map(CellEditor::mode),
+            Some(EditMode::Editing)
+        );
+        document.apply(moving(CursorStep::RowStart), normal());
+        typed(&mut document, "A-");
+        document.apply(Intent::Advance(CursorStep::Right), normal());
+        assert_eq!(
+            edited(&document, 0, 0),
+            Some(&CellValue::Text(String::from("A-0012")))
+        );
+        assert_eq!(document.selection().cursor(), CellPosition::new(0, 1));
+    }
+
+    #[test]
+    fn arrows_commit_and_move_while_entering() {
+        let mut document = editable();
+        typed(&mut document, "z");
+        document.apply(moving(CursorStep::Right), normal());
+        assert_eq!(document.editor(), None);
+        assert_eq!(
+            edited(&document, 0, 0),
+            Some(&CellValue::Text(String::from("z")))
+        );
+        assert_eq!(document.selection().cursor(), CellPosition::new(0, 1));
+    }
+
+    #[test]
+    fn typing_the_source_value_back_removes_the_edit() {
+        let mut document = editable();
+        typed(&mut document, "x");
+        document.apply(Intent::Confirm, normal());
+        document.apply(moving(CursorStep::Up), normal());
+        typed(&mut document, "0012");
+        document.apply(Intent::Confirm, normal());
+        assert!(document.edits().is_empty());
+        let frame = document.frame(normal(), palette());
+        text_at(&frame, "e.csv — NeNe Ledger");
+    }
+
+    #[test]
+    fn delete_empties_the_cursor_cell_and_alt_enter_breaks_the_line() {
+        let mut document = editable();
+        document.apply(Intent::Delete, normal());
+        assert_eq!(
+            edited(&document, 0, 0),
+            Some(&CellValue::Text(String::new()))
+        );
+        document.apply(moving(CursorStep::Right), normal());
+        document.apply(Intent::Edit, normal());
+        document.apply(Intent::BreakLine, normal());
+        typed(&mut document, "区");
+        document.apply(Intent::Confirm, normal());
+        assert_eq!(
+            edited(&document, 0, 1),
+            Some(&CellValue::Text(String::from("東京\n区")))
+        );
+    }
+
+    #[test]
+    fn a_missing_cell_and_a_cut_record_are_not_edited() {
+        let mut document = editable();
+        document.apply(
+            GoToTarget::parse("3,2").map_or(Intent::Cancel, Intent::GoTo),
+            normal(),
+        );
+        assert_eq!(document.selection().cursor(), CellPosition::new(2, 1));
+        typed(&mut document, "x");
+        assert_eq!(document.editor(), None);
+        let frame = document.frame(normal(), palette());
+        text_at(&frame, "この行には、この列のセルがありません");
+        document.mark_cut(vec![CutRecord::new(1, None)]);
+        document.apply(moving(CursorStep::Up), normal());
+        document.apply(Intent::Edit, normal());
+        assert_eq!(document.editor(), None);
+        assert!(document.edits().is_empty());
+    }
+
+    #[test]
+    fn copying_takes_the_edited_values() {
+        let mut document = editable();
+        typed(&mut document, "新");
+        document.apply(Intent::Confirm, normal());
+        document.apply(moving(CursorStep::Up), normal());
+        let rows: Vec<Vec<String>> = vec![vec![String::from("0012"), String::from("東京")]];
+        let copied = copy_from(&mut document, &rows);
+        assert_eq!(copied.as_ref().map(ClipboardText::as_str), Some("新\r\n"));
+    }
+
+    #[test]
+    fn the_editing_cell_draws_its_field_and_a_caret() {
+        let mut document = editable();
+        typed(&mut document, "ab");
+        let frame = document.frame(normal(), palette());
+        text_at(&frame, "ab");
+        assert!(
+            document
+                .editing_cell()
+                .is_some_and(|cell| cell.caret() == 2)
+        );
+        document.apply(Intent::Edit, normal());
+        document.apply(moving(CursorStep::Left), normal());
+        assert!(
+            document
+                .editing_cell()
+                .is_some_and(|cell| cell.caret() == 1)
+        );
     }
 }

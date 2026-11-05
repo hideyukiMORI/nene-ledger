@@ -75,4 +75,12 @@ pub enum Intent {
     Confirm,
     /// やめる（Esc）。
     Cancel,
+    /// カーソルのセルを、見えていた値の続きから直す（F2）。編集中なら入力と編集の状態を替える（ADR 0026）。
+    Edit,
+    /// 右の 1 字を消す（Delete）。編集していなければ、カーソルのセルを空にする。
+    Delete,
+    /// セルの中の改行（Alt+Enter・EDIT-10）。
+    BreakLine,
+    /// 確定してその向きへ動く（Tab・Shift+Tab・Shift+Enter）。編集していなければ動くだけ。
+    Advance(CursorStep),
 }

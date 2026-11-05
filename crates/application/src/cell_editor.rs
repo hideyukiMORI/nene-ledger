@@ -115,6 +115,11 @@ impl CellEditor {
         self.field = self.field.deleted();
     }
 
+    /// Ctrl+A。欄の字をすべて選ぶ。
+    pub fn select_all(&mut self) {
+        self.field = self.field.selected_all();
+    }
+
     /// F2。入力と編集の状態を替える。欄の中身はそのまま。
     pub fn toggle_mode(&mut self) {
         self.mode = match self.mode {
@@ -282,6 +287,8 @@ mod tests {
         assert_eq!(editor.field().text(), "一\n二\t三\n");
         editor.erase_before();
         editor.erase_after();
+        editor.select_all();
+        assert_eq!(editor.field().caret().start(), 0);
         assert_eq!(editor.field().text(), "一\n二\t三");
     }
 

@@ -16,6 +16,9 @@ const WHEEL_ROWS: u64 = 3;
 const WHEEL_COLUMNS: usize = 1;
 
 const VK_BACK: u16 = 0x08;
+const VK_TAB: u16 = 0x09;
+const VK_DELETE: u16 = 0x2E;
+const VK_F2: u16 = 0x71;
 const VK_RETURN: u16 = 0x0D;
 const VK_ESCAPE: u16 = 0x1B;
 const VK_SPACE: u16 = 0x20;
@@ -72,9 +75,16 @@ pub(crate) fn key_intent(key: u16, modifiers: Modifiers) -> Option<Intent> {
     } = modifiers;
     match key {
         VK_F1 => return Some(Intent::OpenPalette),
+        VK_F2 => return Some(Intent::Edit),
         VK_ESCAPE => return Some(Intent::Cancel),
+        // Alt+Enter は `WM_SYSKEYDOWN` で届く（ui の側で同じ関数に渡す）。
+        VK_RETURN if alt => return Some(Intent::BreakLine),
+        VK_RETURN if shift => return Some(Intent::Advance(CursorStep::Up)),
         VK_RETURN => return Some(Intent::Confirm),
+        VK_TAB if shift => return Some(Intent::Advance(CursorStep::Left)),
+        VK_TAB => return Some(Intent::Advance(CursorStep::Right)),
         VK_BACK => return Some(Intent::Erase),
+        VK_DELETE => return Some(Intent::Delete),
         // 行全体（Issue #62）。続く `WM_CHAR` の空白は表では何もしない。
         VK_SPACE if shift && !control => return Some(Intent::SelectRows),
         _ => {}
@@ -126,11 +136,11 @@ fn control_intent(key: u16, shift: bool, alt: bool) -> Option<Intent> {
     }
 }
 
-/// `WM_CHAR` の字 `character` の意図。半角の英数字と記号だけを字にする（日本語の入力は FR-020）。Ctrl と組めば打たない。
+/// `WM_CHAR` の字 `character` の意図。制御文字でない字を打つ。Ctrl と組めば打たない。
+/// IME の確定も `WM_CHAR` で 1 字ずつ届くので、日本語もここで打てる（確定前の文字列を見せるのは IMM32 の Issue・ADR 0026）。
+/// 🔴 BMP の外の字（絵文字など）はサロゲートの対で届き、1 つずつでは `char` にならないので、今は捨てる。
 pub(crate) fn typed_intent(character: char, control: bool) -> Option<Intent> {
-    let printable =
-        u8::try_from(u32::from(character)).is_ok_and(|byte| (0x20..=0x7E).contains(&byte));
-    (printable && !control).then_some(Intent::Type(character))
+    (!character.is_control() && !control).then_some(Intent::Type(character))
 }
 
 /// 左のボタンを窓の中の `(x, y)` で押した意図。Shift で広げ、Ctrl で範囲を足す（両方なら広げる）。
@@ -222,6 +232,36 @@ mod tests {
         );
     }
 
+    /// 編集のキーの一覧の行（ADR 0026）が、書いたとおりに割り当てられている。
+    fn editing_bound(guide: nene_ledger_application::key_guide::KeyGuide) -> bool {
+        use nene_ledger_application::key_guide::KeyGuide;
+        let shift = Modifiers::new(true, false, false);
+        match guide {
+            KeyGuide::EditCell => key_intent(VK_F2, plain()) == Some(Intent::Edit),
+            KeyGuide::ClearCell => key_intent(VK_DELETE, plain()) == Some(Intent::Delete),
+            KeyGuide::BreakLine => {
+                key_intent(VK_RETURN, Modifiers::new(false, false, true)) == Some(Intent::BreakLine)
+            }
+            KeyGuide::Advance => {
+                key_intent(VK_TAB, plain()) == Some(Intent::Advance(CursorStep::Right))
+                    && key_intent(VK_TAB, shift) == Some(Intent::Advance(CursorStep::Left))
+                    && key_intent(VK_RETURN, shift) == Some(Intent::Advance(CursorStep::Up))
+            }
+            KeyGuide::MoveCursor
+            | KeyGuide::ExtendSelection
+            | KeyGuide::Page
+            | KeyGuide::RowEnds
+            | KeyGuide::ExtendClick
+            | KeyGuide::AddRange
+            | KeyGuide::Sideways
+            | KeyGuide::WheelZoom
+            | KeyGuide::NextTheme
+            | KeyGuide::PreviousTheme
+            | KeyGuide::Palette
+            | KeyGuide::Cancel => false,
+        }
+    }
+
     /// キーの一覧（Issue #63）の各行が、書いたとおりに割り当てられている。行を足せばここの `match` が落ちる。
     #[test]
     fn every_key_in_the_list_is_bound_as_written() {
@@ -274,6 +314,10 @@ mod tests {
                         && key_intent(VK_F1, plain()) == Some(Intent::OpenPalette)
                 }
                 KeyGuide::Cancel => key_intent(VK_ESCAPE, plain()) == Some(Intent::Cancel),
+                KeyGuide::EditCell
+                | KeyGuide::ClearCell
+                | KeyGuide::BreakLine
+                | KeyGuide::Advance => editing_bound(guide),
             };
             assert!(bound, "{guide:?}");
         }
@@ -330,11 +374,12 @@ mod tests {
     }
 
     #[test]
-    fn only_half_width_printable_characters_are_typed() {
+    fn printable_characters_are_typed_including_japanese() {
         assert_eq!(typed_intent('a', false), Some(Intent::Type('a')));
         assert_eq!(typed_intent('a', true), None);
         assert_eq!(typed_intent('\r', false), None);
-        assert_eq!(typed_intent('あ', false), None);
+        assert_eq!(typed_intent('\t', false), None);
+        assert_eq!(typed_intent('あ', false), Some(Intent::Type('あ')));
     }
 
     #[test]
