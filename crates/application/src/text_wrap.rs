@@ -3,7 +3,7 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use nene_ledger_core::display_width::char_columns;
+use nene_ledger_core::display_width::{char_columns, extends_previous};
 
 use crate::cell_display::single_line;
 
@@ -48,14 +48,19 @@ pub fn wrap(text: &str, max_columns: u32, max_lines: usize) -> WrappedText {
     }
 }
 
-/// 改行を含まない 1 行を、`max_columns` で折り返す。空の行も 1 行と数える。
+/// 改行を含まない 1 行を、`max_columns` で折り返す。空の行も 1 行と数える。前の字に重なる字（結合文字・異体字の
+/// 選択子など）は、前の字から離さない（GitHub Issue #42）。ゼロ幅の結合子などの見えない字は、`single_line` が見える印に
+/// 替えてあるので、ふつうの字として折り返す。
 fn wrap_line(line: &str, max_columns: u32) -> Vec<String> {
     let mut wrapped = Vec::new();
     let mut current = String::new();
     let mut width = 0_u32;
     for character in line.chars() {
         let columns = char_columns(character);
-        if !current.is_empty() && width.saturating_add(columns) > max_columns {
+        if !extends_previous(character)
+            && !current.is_empty()
+            && width.saturating_add(columns) > max_columns
+        {
             wrapped.push(core::mem::take(&mut current));
             width = 0;
         }
@@ -100,6 +105,17 @@ mod tests {
         assert_eq!(lines(&wrapped), vec!["1", "2"]);
         assert_eq!(wrapped.hidden(), 3);
         assert_eq!(wrap("", 10, 2).lines(), &[String::new()]);
+    }
+
+    /// 結合文字は前の字と同じ行に残す（GitHub Issue #42。前は `["ab", "\u{301}"]` に分けた）。
+    #[test]
+    fn combining_characters_stay_with_their_base() {
+        assert_eq!(lines(&wrap("ab\u{301}", 2, 10)), vec!["ab\u{301}"]);
+        assert_eq!(
+            lines(&wrap("aか\u{3099}b", 3, 10)),
+            vec!["aか\u{3099}", "b"]
+        );
+        assert_eq!(lines(&wrap("a👍\u{FE0F}", 3, 10)), vec!["a👍\u{FE0F}"]);
     }
 
     #[test]

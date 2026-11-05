@@ -168,14 +168,47 @@ const WIDE: [(u32, u32); 158] = [
     (0x1_F300, 0x3_FFFD),
 ];
 
-/// 1 字の表示の幅（半角 1・全角 2）。
+/// 前の字に重なって描かれ、幅を持たない字（始まりの順・重ならない）。結合文字・濁点と半濁点の結合形・異体字の選択子・
+/// 肌の色の修飾・ゼロ幅の字と結合子・BOM。🔴 近似の表（書記素の規則の全部ではない・GitHub Issue #42）。
+const EXTENDING: [(u32, u32); 13] = [
+    (0x300, 0x36F),
+    (0x1AB0, 0x1AFF),
+    (0x1DC0, 0x1DFF),
+    (0x200B, 0x200F),
+    (0x2060, 0x2064),
+    (0x20D0, 0x20FF),
+    (0x3099, 0x309A),
+    (0xFE00, 0xFE0F),
+    (0xFE20, 0xFE2F),
+    (0xFEFF, 0xFEFF),
+    (0x1_F3FB, 0x1_F3FF),
+    (0xE_0020, 0xE_007F),
+    (0xE_0100, 0xE_01EF),
+];
+
+/// 前の字に重なって描かれ、幅を持たない字か（折り返しで前の字から離さない・GitHub Issue #42）。
+#[must_use]
+pub fn extends_previous(character: char) -> bool {
+    in_ranges(&EXTENDING, u32::from(character))
+}
+
+/// `code` が範囲の表 `ranges`（始まりの順・重ならない）のどれかに入るか。
+fn in_ranges(ranges: &[(u32, u32)], code: u32) -> bool {
+    let after = ranges.partition_point(|&(_, last)| last < code);
+    ranges.get(after).is_some_and(|&(first, _)| first <= code)
+}
+
+/// 1 字の表示の幅（半角 1・全角 2・前の字に重なる字は 0）。
 #[must_use]
 pub fn char_columns(character: char) -> u32 {
-    let code = u32::from(character);
-    // 終わりが  より前の範囲を飛ばし、次の範囲が  を含むか。
-    let after = WIDE.partition_point(|&(_, last)| last < code);
-    let wide = WIDE.get(after).is_some_and(|&(first, _)| first <= code);
-    if wide { 2 } else { 1 }
+    if extends_previous(character) {
+        return 0;
+    }
+    if in_ranges(&WIDE, u32::from(character)) {
+        2
+    } else {
+        1
+    }
 }
 
 /// 文字列の表示の幅（半角 1・全角 2 の合計）。
@@ -235,5 +268,18 @@ mod tests {
             // 範囲のすぐ後ろは、次の範囲が続いていなければ 1（ここでの範囲は隣り合わない）。
             assert_eq!(columns_at(last + 1), Some(1));
         }
+    }
+
+    /// 結合文字・濁点の結合形・異体字の選択子・ゼロ幅の字は幅 0（GitHub Issue #42。前は 1 か 2 と数えた）。
+    #[test]
+    fn combining_and_zero_width_characters_take_no_room() {
+        assert_eq!(display_columns("e\u{301}"), 1);
+        assert_eq!(display_columns("か\u{3099}"), 2);
+        assert_eq!(display_columns("\u{2764}\u{FE0F}"), 1);
+        assert_eq!(display_columns("a\u{200B}b"), 2);
+        assert_eq!(display_columns("\u{FEFF}"), 0);
+        assert!(extends_previous('\u{1F3FB}'));
+        assert!(!extends_previous('a'));
+        assert!(extends_previous('\u{200D}'));
     }
 }
