@@ -216,4 +216,30 @@ mod tests {
         let text = tsv(&slices(&rows), core::slice::from_ref(&(0..=2)));
         assert_eq!(parse_tsv(&text), rows);
     }
+
+    /// 無作為の表（タブ・CR・LF・引用符・空のセル・日本語）を書いて戻すと元の行になる（貼り付けの読み方の往復・
+    /// 1 列の空のセルの行も、空の行から空のセル 1 つに戻る）。
+    #[test]
+    fn random_tables_round_trip() {
+        const PIECES: [&str; 10] = ["a", "\t", "\r", "\n", "\r\n", "\"", "", "東", "0012", " "];
+        let mut state = 0x2545_F491_4F6C_DD1D_u64;
+        let mut next = |bound: usize| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            usize::try_from(state % u64::try_from(bound).unwrap()).unwrap()
+        };
+        for _ in 0..2_000_u32 {
+            let columns = 1 + next(4);
+            let rows: Vec<Vec<String>> = (0..1 + next(4))
+                .map(|_| {
+                    (0..columns)
+                        .map(|_| (0..next(4)).map(|_| PIECES[next(PIECES.len())]).collect())
+                        .collect()
+                })
+                .collect();
+            let text = tsv(&slices(&rows), core::slice::from_ref(&(0..=columns - 1)));
+            assert_eq!(parse_tsv(&text), rows, "{text:?}");
+        }
+    }
 }
