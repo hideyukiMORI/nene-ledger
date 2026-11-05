@@ -656,7 +656,9 @@ PR の枝の debug の exe を Xvfb（1024×640）に出し、`xdotool` で打�
 | 1 | `id,name,city\r\n1,"Sato"\r\n2,Suzuki,Osaka\r\n` | 2 行目の 3 列目（セルが無い）で `Tokyo` → Enter → Ctrl+S | `id,name,city\r\n1,"Sato",Tokyo\r\n2,Suzuki,Osaka\r\n`（`"Sato"` の引用と CRLF は元のまま・ほかの行はバイト列のまま・状態の行に `保存しました`） |
 | 2 | `a,b,c\r\n1\r\n2,x,y\r\n` | 2 行目の 3 列目で `z` → Enter → Ctrl+S | `a,b,c\r\n1,,z\r\n2,x,y\r\n`（間の 2 列目は空のセル。開き直した画面では「セルが無い」の色ではなく空のセル） |
 
-🔴 **正直に:** Windows の実機ではまだ。区切りがタブの表と、引用の要る値（区切りを含む値）を足すことは core と application のテストだけ（`row_writing`・`save_planning`）。
+施主の Windows の実機（PR の枝 `8c36482` の exe・作業用のフォルダ）でも確かめた（2026-11-05）。`short.csv`（`id,name,city,memo\r\n1,"Sato"\r\n2\r\n3,Suzuki,Osaka,ok\r\n`）の 2 行目の city と memo、3 行目の memo に施主の手で書いて Ctrl+S。施主の報告は「いいと思う」〔伝聞〕。ファイルは WSL から `od -c` で元の写しと比べた：`1,"Sato",123,123\r\n`・`2,,,1\r\n`。1 行目と 4 行目・`"Sato"` の引用・CRLF は元のまま、一時ファイルは残っていない〔実測〕。
+
+🔴 **正直に:** 区切りがタブの表と、引用の要る値（区切りを含む値）を足すことは core と application のテストだけ（`row_writing`・`save_planning`）。
 
 ## 7. active の規則と、その証明
 
