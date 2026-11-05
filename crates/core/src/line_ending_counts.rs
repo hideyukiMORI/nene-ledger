@@ -11,6 +11,12 @@ pub struct LineEndingCounts {
 }
 
 impl LineEndingCounts {
+    /// `\r\n`・`\n`・`\r` の数から作る（索引を作る仕事がファイル全体で数えたもの・OPEN-08）。
+    #[must_use]
+    pub fn new(crlf: usize, lf: usize, cr: usize) -> Self {
+        Self { crlf, lf, cr }
+    }
+
     /// 改行の列から数える（入力の終わりは数えない）。
     pub fn tally<I: Iterator<Item = LineEnding>>(endings: I) -> Self {
         endings.fold(
