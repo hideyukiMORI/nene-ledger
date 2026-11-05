@@ -151,6 +151,7 @@ fn first_document(opened: &opening::Opened) -> nene_ledger_application::document
 fn describe(failure: &OpenFailure) -> String {
     match failure {
         OpenFailure::Scan(scan) => format!("ファイルを読めなかった: {scan:?}"),
+        OpenFailure::Write(error) => format!("書き出せなかった: {error}"),
     }
 }
 

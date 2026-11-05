@@ -7,6 +7,8 @@ use nene_ledger_scan::scan_failure::ScanFailure;
 pub(crate) enum OpenFailure {
     /// 読めなかった。
     Scan(ScanFailure),
+    /// 書き出せなかった（`--dump` の標準出力）。
+    Write(std::io::Error),
 }
 
 impl From<ScanFailure> for OpenFailure {
