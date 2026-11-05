@@ -42,6 +42,7 @@ ADR は「なぜそう決めたか」「何を却下したか」を書く。
 | [0024](0024-edit-layer-over-the-source.md) | 差分は「行の並び」と「セルの書き換え」の 2 つの層で、原本のレコードの番号に重ねて持つ（型と規則は core、持ち主と Undo は application） | 受理 |
 | [0025](0025-save-by-replacement-and-windows-locks.md) | 保存は store クレートが一時ファイルに書いて置き換える。原本は application のポート越しに読み、Windows の置き換えは adapters-windows に置く | 受理 |
 | [0026](0026-cell-editing-entry-and-japanese-input.md) | セルの編集は Excel と同じ入り方にする。欄の規則は core、日本語は Windows を IMM32 で先に、X11 は当面の貼り付けから | 受理 |
+| [0027](0027-row-and-column-insert-delete.md) | 行と列の挿入と削除は Excel と同じ見え方と操作にする。行の番号は上から通し番号、消すときは尋ねずに Undo で戻す | 受理 |
 
 ## これから書くもの（Issue が立ったら）
 
