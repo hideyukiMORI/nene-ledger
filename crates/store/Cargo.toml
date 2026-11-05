@@ -1,0 +1,18 @@
+[package]
+name = "nene-ledger-store"
+description = "NeNe Ledger の書き出し。保存の計画を一時ファイルに書いて置き換える（ADR 0025）"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+# 依存は表に書いたものだけ（CNF-013・PROJECT_LAYOUT 第 2 節・ADR 0025 の決定 4）。scan には依存しない（原本はポート越し）。
+[dependencies]
+nene-ledger-application = { path = "../application" }
+nene-ledger-core = { path = "../core" }
+# 書き換えた値の符号化（ADR 0015・scan と同じ版）。既定の機能は alloc だけ。
+encoding_rs = { version = "0.8.42", default-features = false, features = ["alloc"] }

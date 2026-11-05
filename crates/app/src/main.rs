@@ -14,6 +14,9 @@ mod opening;
 mod preferences;
 mod reader;
 mod rows;
+mod saving;
+mod scan_bytes;
+mod scan_lookup;
 mod totals_fold;
 mod viewer;
 mod workers;
@@ -45,6 +48,21 @@ fn main() -> ExitCode {
             }
             Err(failure) => {
                 report(&describe(&failure));
+                ExitCode::FAILURE
+            }
+        };
+    }
+    // 測定用: 開いて何も変えずに保存する（KEEP-02 の往復の実測・BIG-14・GitHub Issue #58）。
+    if let [flag, file] = arguments.as_slice()
+        && flag == "--resave"
+    {
+        return match saving::save_edited(
+            &PathBuf::from(file),
+            &nene_ledger_core::cell_edits::CellEdits::empty(),
+        ) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(failure) => {
+                report(&saving::describe(&failure));
                 ExitCode::FAILURE
             }
         };
