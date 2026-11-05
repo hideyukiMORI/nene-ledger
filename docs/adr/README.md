@@ -41,10 +41,10 @@ ADR は「なぜそう決めたか」「何を却下したか」を書く。
 | [0023](0023-real-world-corpus-measurement.md) | 実データの突き合わせを、出どころと正解の表をリポジトリに置いて再現できる測定にする（道具は `tools/corpus/` の Python・`make bench-corpus`） | 受理 |
 | [0024](0024-edit-layer-over-the-source.md) | 差分は「行の並び」と「セルの書き換え」の 2 つの層で、原本のレコードの番号に重ねて持つ（型と規則は core、持ち主と Undo は application） | 受理 |
 | [0025](0025-save-by-replacement-and-windows-locks.md) | 保存は store クレートが一時ファイルに書いて置き換える。原本は application のポート越しに読み、Windows の置き換えは adapters-windows に置く | 受理 |
+| [0026](0026-cell-editing-entry-and-japanese-input.md) | セルの編集は Excel と同じ入り方にする。欄の規則は core、日本語は Windows を IMM32 で先に、X11 は当面の貼り付けから | 提案 |
 
 ## これから書くもの（Issue が立ったら）
 
-- 文字入力（IME）の方式（FR-020・NeNeDocket ADR 0020 を出発点に）
 - 外部の変更の検出の方式（FR-019）
 - 印刷と PDF の方式の細部（FR-017・ADR 0008 の 7）
 - 正規表現・xlsx・Parquet の依存か自前か（ADR 0008 の 5）
