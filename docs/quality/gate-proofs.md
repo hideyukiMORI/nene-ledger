@@ -615,7 +615,7 @@ Shift_JIS・縦棒区切りの見本（`crates/app/fixtures/shift-jis-pipe.csv`�
 
 ## 60. セルの編集・保存・閉じる・元に戻す — 施主の Windows の実機での確認（GitHub Issue #77・QLT-013）
 
-main `da1f474` の exe（`make build-windows`）を施主の Windows 11 の `C:\Users\info\Temp\nene-ledger\` に置き、`edit-test.csv`（UTF-8・CRLF・見出し ＋ 3 行・2 行目の氏名は `"佐藤, 花子"`）を開いた（2026-11-05）。操作は施主の手、ファイルの中身は WSL から元の写しと `diff` で比べた。
+main `da1f474` の exe（`make build-windows`）を施主の Windows 11 の作業用のフォルダ（OneDrive の同期の外）に置き、`edit-test.csv`（UTF-8・CRLF・見出し ＋ 3 行・2 行目の氏名は `"佐藤, 花子"`）を開いた（2026-11-05）。操作は施主の手、ファイルの中身は WSL から元の写しと `diff` で比べた。
 
 | # | 操作 | 施主の報告と、ファイルの確かめ |
 | --- | --- | --- |
