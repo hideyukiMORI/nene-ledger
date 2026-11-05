@@ -10,4 +10,5 @@ pub mod adapter_failure;
 pub mod appearance;
 mod config_directory;
 pub mod file_replacing;
+pub mod new_window;
 pub mod saved_settings;

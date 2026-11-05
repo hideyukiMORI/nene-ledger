@@ -59,7 +59,7 @@
   - 名前を付けて保存は、元のファイルのバイト列を変えない（store のテスト `saving_as_a_new_file_creates_it_and_leaves_the_original_alone`）
   - 上書きの確認を出さずに、既にあるファイルを置き換えない（application のテスト `saving_as_needs_a_second_enter_to_overwrite`・store のテスト `saving_as_a_new_file_refuses_a_file_that_appeared`。Windows は OS の画面の `OFN_OVERWRITEPROMPT` が尋ねる）
 - **planned**:
-  - Ctrl+N とパレットの「新しい表を作る」で自分の exe を `--new` で起こし直す（決定 1。今は `--new` を付けて起動する）
+  - 引数が無いときの起動の入口に「新しい表を作る」を足す（決定 1 の 3 つ目。Ctrl+N とパレットは GitHub Issue #113 で入れた）
 - **不能（レビュー事項）**:
   - プロセスを起こす経路が adapters の外に無いか（ARC-007・CNF-012 で見られるかは実装の Issue で確かめる）
 

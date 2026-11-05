@@ -64,6 +64,8 @@ pub enum CommandId {
     Save,
     /// 名前を付けて保存する。
     SaveAs,
+    /// 新しい表を新しい窓で作る（ADR 0028 の決定 1）。
+    NewTable,
     /// 1 手元に戻す（UNDO-01）。
     Undo,
     /// 戻した 1 手をやり直す。
@@ -88,7 +90,7 @@ pub enum CommandId {
 
 impl CommandId {
     /// すべての操作（何も打たないときの順）。
-    pub const ALL: [Self; 35] = [
+    pub const ALL: [Self; 36] = [
         Self::Top,
         Self::Bottom,
         Self::GoTo,
@@ -114,6 +116,7 @@ impl CommandId {
         Self::Copy,
         Self::Save,
         Self::SaveAs,
+        Self::NewTable,
         Self::Undo,
         Self::Redo,
         Self::InsertRowsAbove,
@@ -159,6 +162,7 @@ impl CommandId {
             Self::Copy => "選んだ範囲をコピーする",
             Self::Save => "変えた所を保存する",
             Self::SaveAs => "名前を付けて保存する",
+            Self::NewTable => "新しい表を作る",
             Self::Undo => "元に戻す",
             Self::Redo => "やり直す",
             Self::InsertRowsAbove => "上に行を足す",
@@ -201,6 +205,7 @@ impl CommandId {
             Self::Copy => "えらんだはんいをこぴーする",
             Self::Save => "かえたところをほぞんする",
             Self::SaveAs => "なまえをつけてほぞんする",
+            Self::NewTable => "あたらしいひょうをつくる",
             Self::Undo => "もとにもどす",
             Self::Redo => "やりなおす",
             Self::InsertRowsAbove => "うえにぎょうをたす",
@@ -250,6 +255,7 @@ impl CommandId {
             Self::Copy => &["copy", "clipboard"],
             Self::Save => &["save", "write"],
             Self::SaveAs => &["saveas", "save as", "export"],
+            Self::NewTable => &["new", "create", "blank"],
             Self::Undo => &["undo"],
             Self::Redo => &["redo"],
             Self::InsertRowsAbove => &["insert row above", "add row", "new row"],
@@ -300,6 +306,7 @@ impl CommandId {
             Self::Copy => Some("Ctrl+C"),
             Self::Save => Some("Ctrl+S"),
             Self::SaveAs => Some("Ctrl+Shift+S"),
+            Self::NewTable => Some("Ctrl+N"),
             Self::Undo => Some("Ctrl+Z"),
             Self::Redo => Some("Ctrl+Y / Ctrl+Shift+Z"),
         }
@@ -334,6 +341,7 @@ impl CommandId {
             | Self::Copy
             | Self::Save
             | Self::SaveAs
+            | Self::NewTable
             | Self::Undo
             | Self::Redo
             | Self::InsertRowsAbove
@@ -381,6 +389,7 @@ impl CommandId {
             Self::Copy => Some(Intent::Copy),
             Self::Save => Some(Intent::Save),
             Self::SaveAs => Some(Intent::SaveAs),
+            Self::NewTable => Some(Intent::NewTable),
             Self::Undo => Some(Intent::Undo),
             Self::Redo => Some(Intent::Redo),
             Self::InsertRowsAbove => Some(Intent::InsertRows(RowPlace::Above)),

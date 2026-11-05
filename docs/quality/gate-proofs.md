@@ -740,6 +740,17 @@ PR の枝の debug の exe を Xvfb に出し、`xdotool` のキーを送った�
 
 🔴 **正直に:** Windows の OS の保存の画面（`GetSaveFileNameW`・`OFN_OVERWRITEPROMPT`）は `make lint-windows` で組み立てを確かめただけで、実機ではまだ開いていない（QLT-013）。
 
+## 69. Ctrl+N で新しい表を新しい窓で開く（GitHub Issue #113・ADR 0028 の決定 1）— 仮想の X サーバでの確認（QLT-013）
+
+PR の枝の debug の exe で `rows.csv` を Xvfb に出し、Ctrl+N を送った（2026-11-06）。
+
+| # | 操作 | 見え・結果 |
+| --- | --- | --- |
+| 1 | Ctrl+N | 子のプロセス `nene-ledger --new` が起き、`無題 — NeNe Ledger` の窓（1 行 × 3 列）が前に出る。元の窓とプロセスは残る |
+| 2 | 子を止める | 親の子の一覧に残らない（`ps --ppid` が空・裏のスレッドが待って引き取った） |
+
+🔴 **正直に:** Windows の実機（`CreateProcessW`・新しい窓が前に出るか）はまだ。
+
 ## 7. active の規則と、その証明
 
 CNF-009 は active の規則ごとに `| ID |` で始まる行がここにあることを要求する。
