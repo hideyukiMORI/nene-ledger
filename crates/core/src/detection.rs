@@ -10,10 +10,12 @@ use crate::dialect::Dialect;
 use crate::dialect_candidate::DialectCandidate;
 use crate::header_guess::HeaderGuess;
 use crate::line_ending_counts::LineEndingCounts;
+use crate::quoting::Quoting;
 use crate::text_units::TextUnits;
 
-/// 確信ありとする最低の点数（千分率）。
-const CONFIDENT_SCORE: u32 = 300;
+/// 確信ありとする最低の点数（千分率）。🔴 300 では、空のセル・`-`・段の見出しの多い統計の表（e-Stat）で選んだ方言が
+/// 正しくても確信なしになった（実データ 392 で 78。200 で 33・誤りは増えない・GitHub Issue #24）。
+const CONFIDENT_SCORE: u32 = 200;
 
 /// 確信ありとする、2 番目との最低の差（千分率）。
 const CONFIDENT_MARGIN: u32 = 100;
@@ -75,11 +77,21 @@ impl Detection {
         }
     }
 
-    /// 1 位が十分に高く、2 位と十分に離れているか。
+    /// 1 位が十分に高く、競う相手（`rival`）と十分に離れているか。
     fn is_confident(candidates: &[DialectCandidate]) -> bool {
         let top = candidates.first().map_or(0, |c| c.score());
-        let second = candidates.get(1).map_or(0, |c| c.score());
+        let second = rival_of(candidates).map_or(0, DialectCandidate::score);
         top >= CONFIDENT_SCORE && top.saturating_sub(second) >= CONFIDENT_MARGIN
+    }
+
+    /// 1 位と競う候補: 1 位と区切りか引用符の字が違う候補のうち、いちばん点の高いもの（無ければ `None`）。
+    ///
+    /// 🔴 区切りと引用符が同じで、引用の中の引用符の逃がし方（`""` か `\"` か）だけが違う候補は競わない。表の形（列と行）は
+    /// ほぼ同じで、違うのは逃がした引用符を含む少数のセルだけ。Pollock の確信なし 883 のうち 880 がこの組で、
+    /// 表を正しく読めていても知らせが出ていた（GitHub Issue #24）。逃がし方は候補の一覧（パレット）で選び直せる。
+    #[must_use]
+    pub fn rival(&self) -> Option<DialectCandidate> {
+        rival_of(&self.candidates)
     }
 
     /// いちばんもっともらしい方言。候補が全部 0 点なら RFC 4180 の CSV（確信なし）。
@@ -121,6 +133,31 @@ impl Detection {
     pub fn preamble_rows(&self) -> usize {
         self.preamble
     }
+}
+
+/// 引用符で包んだセルを読む流儀か（`Doubled`・`QuotedBackslash`）。
+fn quoted(quoting: Quoting) -> bool {
+    match quoting {
+        Quoting::Doubled | Quoting::QuotedBackslash => true,
+        Quoting::Backslash | Quoting::Plain => false,
+    }
+}
+
+/// 1 位と競う候補（`Detection::rival`）。
+fn rival_of(candidates: &[DialectCandidate]) -> Option<DialectCandidate> {
+    let (top, rest) = candidates.split_first()?;
+    rest.iter()
+        .copied()
+        .find(|candidate| !escapes_differently(top.dialect(), candidate.dialect()))
+}
+
+/// 区切りと引用符が同じで、引用の中の引用符の逃がし方（`Doubled` と `QuotedBackslash`）だけが違うか。
+fn escapes_differently(one: Dialect, other: Dialect) -> bool {
+    quoted(one.quoting())
+        && quoted(other.quoting())
+        && one.delimiter() == other.delimiter()
+        && one.quote() == other.quote()
+        && one.quoting() != other.quoting()
 }
 
 #[cfg(test)]
@@ -248,6 +285,26 @@ mod tests {
         let detection = Detection::of(b"alpha\nbeta\ngamma\n");
         assert!(!detection.confident());
         assert_eq!(detection.best(), Dialect::rfc4180());
+    }
+
+    /// 引用の中の引用符の逃がし方だけが違う候補（`""` と `\"`）は競わず、区切りか引用符の違う候補と比べる
+    /// （GitHub Issue #24）。
+    #[test]
+    fn a_rival_differs_in_the_delimiter_or_the_quote_not_only_in_the_escape() {
+        use core::fmt::Write as _;
+        let mut input = String::from("id,name,note\n");
+        for row in 0..20_u32 {
+            writeln!(input, "{row},\"a, b\",\"say \"\"hi\"\"\"").unwrap();
+        }
+        let detection = Detection::of(input.as_bytes());
+        let best = detection.best();
+        assert_eq!(
+            (best.delimiter().byte(), best.quoting()),
+            (b',', Quoting::Doubled)
+        );
+        let rival = detection.rival().unwrap().dialect();
+        assert!(rival.delimiter() != best.delimiter() || rival.quote() != best.quote());
+        assert!(detection.confident());
     }
 
     #[test]

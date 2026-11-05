@@ -244,23 +244,26 @@ mod tests {
     }
 
     #[test]
-    fn the_screenshot_sample_is_opened_with_a_doubt_that_names_the_top_two_scores() {
+    fn the_screenshot_sample_is_opened_without_a_doubt_about_the_escape_alone() {
         // 見本は 7 行で、引用の中の改行・欠けたセルがあり、カンマの 2 つの流儀（`""` と `\"`）の差が 100 に満たない。
-        // 判別は確信を持たず、開いたときに 1 位と 2 位の点数を知らせる。
+        // 2 つは引用の中の引用符の逃がし方だけが違う（表の形は同じ）ので競わず、確信ありで開く（GitHub Issue #24。
+        // 直す前は「判別に確信なし」を知らせた）。逃がし方は候補の一覧で選び直せる。
         let path = fixture("screenshot.csv");
         let detection = detect(&Source::open(&path).unwrap(), TextEncoding::Utf8WithBom).unwrap();
-        assert!(!detection.confident());
         let (best, second) = (detection.candidates()[0], detection.candidates()[1]);
         assert_eq!(best.dialect().delimiter().byte(), b',');
         assert_eq!(best.dialect().quoting(), Quoting::Doubled);
         assert_eq!(best.columns(), 6);
         assert_eq!(second.dialect().quoting(), Quoting::QuotedBackslash);
-        let doubt = open(&path).unwrap().doubt().unwrap();
-        assert_eq!(
-            (doubt.top(), doubt.second()),
-            (best.score(), second.score())
+        assert!(best.score().saturating_sub(second.score()) < 100);
+        assert!(detection.confident());
+        assert_ne!(
+            detection
+                .rival()
+                .map(nene_ledger_core::dialect_candidate::DialectCandidate::dialect),
+            Some(second.dialect())
         );
-        assert!(doubt.top().saturating_sub(doubt.second()) < 100);
+        assert_eq!(open(&path).unwrap().doubt(), None);
     }
 
     #[test]
