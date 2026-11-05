@@ -1,9 +1,11 @@
 //! 書き換えた行を、原本のバイト列の区間と、書き換えたセルの文字列とで組み立てる規則（ADR 0024 の決定 4）。
 
+use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;
 
 use crate::byte_range::ByteRange;
+use crate::column_id::ColumnId;
 use crate::record::Record;
 use crate::row_piece::RowPiece;
 use crate::row_write_failure::RowWriteFailure;
@@ -66,6 +68,65 @@ fn appended((width, column): (usize, usize), text: &str, delimiter: char) -> Str
     out
 }
 
+/// 列の構造が変わった行（列を足し消しした表・ADR 0027 の決定 5）。`columns` は表の列の順の同一性、`values` は
+/// 書いた文字列（書き換えたセルと足した列のセル。`cell_writing::written_cell` で書いたもの）。
+///
+/// 原本のセルは原本のバイト列（引用符を含む）のまま写し、`values` にあるセルはその文字列、足した列で書いていない
+/// セルは空のセルにする。区切りは `delimiter`、終わり方は原本のまま。書くのは、原本にあるセル・足した列・書いた
+/// セルのうち最後の列まで（原本の行より後ろの、何も無い原本の列は書かない）。空の行になるとき（1 つのセルだけで
+/// 空・セルが 1 つも残らない）は、`lone_empty`（引用の方言なら `""`）と書く（空の行にしない・ADR 0024 の決定 4）。
+#[must_use]
+pub fn restructured_row(
+    record: &Record,
+    columns: &[ColumnId],
+    values: &BTreeMap<ColumnId, String>,
+    (delimiter, lone_empty): (char, &str),
+) -> Vec<RowPiece> {
+    let present = |column: &ColumnId| match column {
+        ColumnId::Source(source) => *source < record.fields().len() || values.contains_key(column),
+        ColumnId::Added(_) => true,
+    };
+    let last = columns.iter().rposition(present);
+    let mut pieces = Vec::new();
+    let mut empty = true;
+    for (index, column) in columns
+        .iter()
+        .enumerate()
+        .take(last.map_or(0, |last| last + 1))
+    {
+        if index > 0 {
+            pieces.push(RowPiece::Text(String::from(delimiter)));
+        }
+        let field = match column {
+            ColumnId::Source(source) => record.fields().get(*source),
+            ColumnId::Added(_) => None,
+        };
+        match (values.get(column), field) {
+            (Some(text), _) => {
+                empty &= text.is_empty();
+                pieces.push(RowPiece::Text(text.clone()));
+            }
+            (None, Some(field)) => {
+                empty &= field.raw().is_empty();
+                push_source(&mut pieces, field.raw().start(), field.raw().end());
+            }
+            (None, None) => {}
+        }
+    }
+    // セルが 1 つも残らない行も、空の行にしない（行が消えたように読まれる）。
+    if empty && last.is_none_or(|last| last == 0) {
+        pieces.clear();
+        pieces.push(RowPiece::Text(String::from(lone_empty)));
+    }
+    let end = record.raw().end();
+    push_source(
+        &mut pieces,
+        end,
+        end.saturating_add(record.terminator().len()),
+    );
+    pieces
+}
+
 /// `start..end` が空でなければ、写す区間として足す。
 fn push_source(pieces: &mut Vec<RowPiece>, start: usize, end: usize) {
     if let Some(range) = ByteRange::new(start, end).filter(|range| !range.is_empty()) {
@@ -114,6 +175,36 @@ mod tests {
         let edits = vec![(0, String::from("\"A\"")), (2, String::from("C"))];
         let pieces = edited_row(&record, edits, ',').unwrap();
         assert_eq!(assembled(input, &pieces), b"\"A\",b,C");
+    }
+
+    #[test]
+    fn restructured_rows_copy_source_cells_and_fill_added_columns() {
+        let input = b"a,\"b,c\",d\r\nnext";
+        let record = first_record(input);
+        // 原本の列 0・足した列・原本の列 2（原本の列 1 は消した）。
+        let columns = [ColumnId::Source(0), ColumnId::Added(0), ColumnId::Source(2)];
+        let none = BTreeMap::new();
+        let blank = restructured_row(&record, &columns, &none, (',', "\"\""));
+        assert_eq!(assembled(input, &blank), b"a,,d\r\n");
+        let mut values = BTreeMap::new();
+        values.insert(ColumnId::Added(0), String::from("\"x,y\""));
+        let filled = restructured_row(&record, &columns, &values, (',', "\"\""));
+        assert_eq!(assembled(input, &filled), b"a,\"x,y\",d\r\n");
+        // 原本の行より後ろの原本の列は書かない。足した列は書く。
+        let short = first_record(b"1\n");
+        let wide = [ColumnId::Source(0), ColumnId::Source(1), ColumnId::Added(3)];
+        let widened = restructured_row(&short, &wide, &none, (',', "\"\""));
+        assert_eq!(assembled(b"1\n", &widened), b"1,,\n");
+        let narrow = [ColumnId::Source(0), ColumnId::Source(1)];
+        let kept = restructured_row(&short, &narrow, &none, (',', "\"\""));
+        assert_eq!(assembled(b"1\n", &kept), b"1\n");
+        // 1 つのセルだけの空の行にはしない。
+        let lone = [ColumnId::Added(0)];
+        let quoted = restructured_row(&short, &lone, &none, (',', "\"\""));
+        assert_eq!(assembled(b"1\n", &quoted), b"\"\"\n");
+        let gone = [ColumnId::Source(1)];
+        let emptied = restructured_row(&short, &gone, &none, (',', "\"\""));
+        assert_eq!(assembled(b"1\n", &emptied), b"\"\"\n");
     }
 
     #[test]

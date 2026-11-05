@@ -12,6 +12,7 @@ use nene_ledger_application::save_planning::save_plan;
 use nene_ledger_application::save_problem::SaveProblem;
 use nene_ledger_application::table_changes::TableChanges;
 use nene_ledger_core::cell_edits::CellEdits;
+use nene_ledger_core::column_order::ColumnOrder;
 use nene_ledger_core::line_ending::LineEnding;
 use nene_ledger_core::row_order::RowOrder;
 use nene_ledger_core::text_format::TextFormat;
@@ -66,7 +67,12 @@ pub(crate) fn save_edited(path: &Path, edits: &CellEdits) -> Result<(), SavingFa
     };
     let mut lookup = ScanLookup::new(&source, &index, format);
     // 端末からの保存は行を足し消ししないので、足した行の書き方は使わない。
-    let changes = TableChanges::new(&rows, edits, AddedRowShape::new(1, LineEnding::CrLf));
+    let columns = ColumnOrder::whole();
+    let changes = TableChanges::new(
+        (&rows, &columns),
+        edits,
+        AddedRowShape::new(1, LineEnding::CrLf),
+    );
     let plan = save_plan(changes, &mut lookup, source.len(), format.dialect())
         .map_err(SavingFailure::Plan)?;
     let mut bytes = ScanBytes::new(source.try_clone().map_err(OpenFailure::from)?);

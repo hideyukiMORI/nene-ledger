@@ -21,6 +21,7 @@ pub mod chrome_button;
 pub mod chrome_hit;
 pub mod color;
 pub mod column_id;
+pub mod column_order;
 pub mod column_widths;
 pub mod contrast;
 pub mod csv_writing;

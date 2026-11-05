@@ -81,6 +81,7 @@ use nene_ledger_core::cell_change::CellChange;
 use nene_ledger_core::cell_edits::CellEdits;
 use nene_ledger_core::cell_value::CellValue;
 use nene_ledger_core::column_id::ColumnId;
+use nene_ledger_core::column_order::ColumnOrder;
 use nene_ledger_core::column_widths::{ColumnWidths, MAX_RESIZED_COLUMNS, MIN_COLUMN_COLUMNS};
 use nene_ledger_core::display_width::display_columns;
 use nene_ledger_core::draw_command::DrawCommand;
@@ -129,6 +130,8 @@ pub struct Document {
     grip: bool,
     /// 行の並び（ADR 0024 の層 1・ADR 0027）。
     rows: RowOrder,
+    /// 列の並び（ADR 0024 の層 1・ADR 0027）。
+    columns: ColumnOrder,
     /// 書き換えたセル（ADR 0024 の層 2）。画面の表は原本 ＋ これから作る派生値。
     edits: CellEdits,
     /// 編集中のセル（ADR 0026）。
@@ -215,6 +218,7 @@ impl Document {
             custom: BTreeMap::new(),
             grip: false,
             rows: RowOrder::whole(),
+            columns: ColumnOrder::whole(),
             edits: CellEdits::empty(),
             editor: None,
             saving: false,
@@ -238,7 +242,7 @@ impl Document {
             .dominant()
             .unwrap_or(LineEnding::CrLf);
         let shape = AddedRowShape::new(self.widths.columns().len(), ending);
-        TableChanges::new(&self.rows, &self.edits, shape)
+        TableChanges::new((&self.rows, &self.columns), &self.edits, shape)
     }
 
     /// 編集中のセル。
@@ -357,13 +361,14 @@ impl Document {
         self.saving = false;
         // 履歴は残し、触ったセルのファイルの値を保存した値に進める（保存の後も元に戻せる）。
         // 行を足し消しした手があれば、保存の後は原本のレコードの番号が変わるので、履歴を残せない（ADR 0027）。
-        if self.history.has_row_steps() || !self.rows.is_whole() {
+        if self.history.has_row_steps() || !self.rows.is_whole() || !self.columns.is_whole() {
             self.history = EditHistory::empty();
         } else {
             self.history.saved(&self.edits);
         }
         self.edits = CellEdits::empty();
         self.rows = RowOrder::whole();
+        self.columns = ColumnOrder::whole();
         self.editor = None;
         self.index = JobState::Waiting;
         self.notice = Some(Notice::Saved);

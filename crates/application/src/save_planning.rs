@@ -1,5 +1,6 @@
 //! 原本 ＋ 差分から、保存の計画を作る（ADR 0024 の決定 4・ADR 0025 の決定 1・ADR 0027 の決定 5）。
 
+use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;
 
@@ -14,7 +15,7 @@ use nene_ledger_core::record::Record;
 use nene_ledger_core::row_id::RowId;
 use nene_ledger_core::row_piece::RowPiece;
 use nene_ledger_core::row_write_failure::RowWriteFailure;
-use nene_ledger_core::row_writing::edited_row;
+use nene_ledger_core::row_writing::{edited_row, restructured_row};
 use nene_ledger_core::save_plan::SavePlan;
 
 use crate::added_row_shape::AddedRowShape;
@@ -26,10 +27,14 @@ use crate::table_changes::TableChanges;
 /// 書き換えた行ごとの、列と値の列（`CellEdits::rows` の形）。
 type EditedRows<'edits> = Vec<(RowId, Vec<(ColumnId, &'edits CellValue)>)>;
 
+/// 列を足し消しした表で、続いた原本の行をまとめて読む数。
+const CHUNK_RECORDS: usize = 4_096;
+
 /// 原本（長さ `source_length`）に差分 `changes` を重ねた内容を書く、保存の計画。
 ///
 /// 行の並びの区間を頭から辿る。原本の区間は、書き換えていない行を原本の区間として写し、書き換えた行は
 /// `edited_row` で組み立てる。足した行は方言どおりに書く。並びに無い行（消した行）の書き換えは使わない。
+/// 列を足し消ししていれば、原本の行は全部を列の並びどおりに組み立て直す（触っていないセルのバイト列は写す）。
 /// 最初のレコードより前のバイト列（BOM）は、最初のレコードを消しても残す。
 /// 🔴 並びも書き換えも触っていなければ、原本の全体を写す 1 歩になり、原本は引かない（KEEP-02）。
 ///
@@ -43,6 +48,8 @@ pub fn save_plan<L: RecordLookup>(
     dialect: Dialect,
 ) -> Result<SavePlan, SavePlanFailure<L::Failure>> {
     let edited = changes.edits().rows();
+    let width = changes.shape().columns();
+    let restructured = (!changes.columns().is_whole()).then(|| changes.columns().columns(width));
     let mut planner = Planner {
         lookup,
         source_length,
@@ -51,13 +58,17 @@ pub fn save_plan<L: RecordLookup>(
         unterminated: false,
         after_cr: false,
         body_start: 0,
+        restructured,
     };
-    if !changes.order().is_whole() {
+    if !changes.order().is_whole() || planner.restructured.is_some() {
         planner.body_start = planner.offset_of(0)?.unwrap_or(source_length);
         planner.plan.copy(0, planner.body_start);
     }
     for run in changes.order().runs() {
         match run {
+            OrderRun::Source { first, count } if planner.restructured.is_some() => {
+                planner.restructured_run((*first, *count), &edited)?;
+            }
             OrderRun::Source { first, count } => planner.source_run((*first, *count), &edited)?,
             OrderRun::Added(rows) => planner.added_rows(rows, changes.edits(), changes.shape())?,
         }
@@ -75,6 +86,8 @@ struct Planner<'lookup, L> {
     unterminated: bool,
     after_cr: bool,
     body_start: u64,
+    /// 列を足し消ししていれば、表の列の順の同一性（原本の行を全部組み立て直す）。
+    restructured: Option<Vec<ColumnId>>,
 }
 
 impl<L: RecordLookup> Planner<'_, L> {
@@ -133,6 +146,104 @@ impl<L: RecordLookup> Planner<'_, L> {
         let ending = last.map(|located| located.record().terminator());
         self.unterminated = ending == Some(LineEnding::EndOfInput);
         self.after_cr = ending == Some(LineEnding::Cr);
+        Ok(())
+    }
+
+    /// 列を足し消しした表の、原本のレコード `first` から `count` 行（`None` は終わりまで）。続いた行をまとめて読み、
+    /// 1 行ずつ列の並びどおりに組み立て直す。
+    fn restructured_run(
+        &mut self,
+        (first, count): (u64, Option<u64>),
+        edited: &EditedRows<'_>,
+    ) -> Result<(), SavePlanFailure<L::Failure>> {
+        let cells: BTreeMap<RowId, &[(ColumnId, &CellValue)]> = edited
+            .iter()
+            .map(|(row, cells)| (*row, cells.as_slice()))
+            .collect();
+        let end = count.map(|count| first.saturating_add(count));
+        let mut number = first;
+        let mut ending = None;
+        loop {
+            let left = end.map_or(CHUNK_RECORDS, |end| {
+                usize::try_from(end.saturating_sub(number))
+                    .unwrap_or(usize::MAX)
+                    .min(CHUNK_RECORDS)
+            });
+            if left == 0 {
+                break;
+            }
+            let records = self
+                .lookup
+                .records(number, left)
+                .map_err(SavePlanFailure::Lookup)?;
+            let read = records.len();
+            for located in records {
+                let row = cells
+                    .get(&RowId::Source(number))
+                    .copied()
+                    .unwrap_or_default();
+                self.restructured_record(number, &located, row)?;
+                ending = Some(located.record().terminator());
+                number = number.saturating_add(1);
+            }
+            if read < left {
+                break;
+            }
+        }
+        self.unterminated = ending == Some(LineEnding::EndOfInput);
+        self.after_cr = false;
+        Ok(())
+    }
+
+    /// 列を足し消しした表の 1 行（原本のレコード `number`・書き換え `cells`）を組み立て直して書く。
+    fn restructured_record(
+        &mut self,
+        number: u64,
+        located: &LocatedRecord,
+        cells: &[(ColumnId, &CellValue)],
+    ) -> Result<(), SavePlanFailure<L::Failure>> {
+        if !located.is_whole() {
+            return Err(SavePlanFailure::TooLong(number));
+        }
+        let record = located.record();
+        let mut values = BTreeMap::new();
+        for &(column, value) in cells {
+            let CellValue::Text(text) = value else {
+                continue;
+            };
+            let quoted = match column {
+                ColumnId::Source(source) => record
+                    .fields()
+                    .get(source)
+                    .is_some_and(|field| field.quoted()),
+                ColumnId::Added(_) => false,
+            };
+            let cell = written_cell(text, quoted, &self.dialect, record.terminator()).map_err(
+                |failure| match failure {
+                    CellWriteFailure::NeedsQuoting => SavePlanFailure::Unwritable {
+                        row: number,
+                        column: match column {
+                            ColumnId::Source(source) => source,
+                            ColumnId::Added(_) => usize::MAX,
+                        },
+                    },
+                },
+            )?;
+            values.insert(column, cell);
+        }
+        let lone = written_cell("", true, &self.dialect, record.terminator()).unwrap_or_default();
+        let delimiter = char::from(self.dialect.delimiter().byte());
+        let columns = self.restructured.as_deref().unwrap_or_default();
+        let pieces = restructured_row(record, columns, &values, (delimiter, &lone));
+        for piece in pieces {
+            match piece {
+                RowPiece::Source(range) => {
+                    let start = located.offset().saturating_add(widen(range.start()));
+                    self.plan.copy(start, widen(range.len()));
+                }
+                RowPiece::Text(text) => self.plan.text(&text),
+            }
+        }
         Ok(())
     }
 
@@ -197,8 +308,12 @@ impl<L: RecordLookup> Planner<'_, L> {
             self.plan.text(line_break);
             self.unterminated = false;
         }
+        let columns: Vec<ColumnId> = self
+            .restructured
+            .clone()
+            .unwrap_or_else(|| (0..shape.columns()).map(ColumnId::Source).collect());
         for &added in rows {
-            let line = added_line(added, edits, shape, self.dialect)?;
+            let line = added_line((added, &columns), edits, shape, self.dialect)?;
             self.plan.text(&line);
             self.plan.text(line_break);
         }
@@ -207,24 +322,25 @@ impl<L: RecordLookup> Planner<'_, L> {
     }
 }
 
-/// 足した行 `added` の 1 行（終わり方を除く）。書いていないセルは空のセル。列が 1 つで空なら、空の行にしない。
+/// 足した行 `added` の 1 行（終わり方を除く）。セルは表の列の順 `columns`。書いていないセルは空のセル。
+/// 列が 1 つで空なら、空の行にしない。
 fn added_line<F>(
-    added: u64,
+    (added, columns): (u64, &[ColumnId]),
     edits: &CellEdits,
     shape: AddedRowShape,
     dialect: Dialect,
 ) -> Result<String, SavePlanFailure<F>> {
     let delimiter = char::from(dialect.delimiter().byte());
     let mut line = String::new();
-    for column in 0..shape.columns() {
+    for (column, &id) in columns.iter().enumerate() {
         if column > 0 {
             line.push(delimiter);
         }
-        let value = match edits.get(RowId::Added(added), ColumnId::Source(column)) {
+        let value = match edits.get(RowId::Added(added), id) {
             Some(CellValue::Text(text)) => text.as_str(),
             Some(CellValue::Absent) | None => "",
         };
-        let lone_empty = value.is_empty() && shape.columns() == 1;
+        let lone_empty = value.is_empty() && columns.len() == 1;
         let cell =
             written_cell(value, lone_empty, &dialect, shape.line_ending()).map_err(|failure| {
                 match failure {
@@ -301,6 +417,7 @@ fn widen(value: usize) -> u64 {
 mod tests {
     use super::*;
     use alloc::vec;
+    use nene_ledger_core::column_order::ColumnOrder;
     use nene_ledger_core::records::Records;
     use nene_ledger_core::row_order::RowOrder;
     use nene_ledger_core::save_step::SaveStep;
@@ -360,9 +477,17 @@ mod tests {
         input: &[u8],
         (order, edits, shape): (&RowOrder, &CellEdits, AddedRowShape),
     ) -> Result<SavePlan, SavePlanFailure<()>> {
+        plan_with_columns(input, (order, &ColumnOrder::whole()), (edits, shape))
+    }
+
+    fn plan_with_columns(
+        input: &[u8],
+        (order, columns): (&RowOrder, &ColumnOrder),
+        (edits, shape): (&CellEdits, AddedRowShape),
+    ) -> Result<SavePlan, SavePlanFailure<()>> {
         let mut lookup = InMemory { input, lookups: 0 };
         let length = u64::try_from(input.len()).unwrap_or(u64::MAX);
-        let changes = TableChanges::new(order, edits, shape);
+        let changes = TableChanges::new((order, columns), edits, shape);
         save_plan(changes, &mut lookup, length, Dialect::rfc4180())
     }
 
@@ -383,8 +508,9 @@ mod tests {
         let input = b"\xEF\xBB\xBFa,\"b\"\r\n0012,1-2\n";
         let mut lookup = InMemory { input, lookups: 0 };
         let order = RowOrder::whole();
+        let columns = ColumnOrder::whole();
         let edits = CellEdits::empty();
-        let changes = TableChanges::new(&order, &edits, shape());
+        let changes = TableChanges::new((&order, &columns), &edits, shape());
         let plan = save_plan(changes, &mut lookup, 22, Dialect::rfc4180()).unwrap();
         assert_eq!(
             plan.steps(),
@@ -489,6 +615,48 @@ mod tests {
         let _gone = order.remove(1, 1);
         let edits = CellEdits::empty();
         assert_eq!(saved_with(input, (&order, &edits, shape())), b"a\r\"\"\nc");
+    }
+
+    #[test]
+    fn columns_added_and_removed_rebuild_every_row_and_keep_untouched_cells() {
+        let input = b"\xEF\xBB\xBFid,name\r\n1,\"Sato\"\r\n2\r\n";
+        let order = RowOrder::whole();
+        let mut columns = ColumnOrder::whole();
+        let added = columns.insert(1, 1);
+        let mut edits = CellEdits::empty();
+        edits.set(RowId::Source(0), added[0], text("age"));
+        edits.set(RowId::Source(1), added[0], text("4,0"));
+        let shape = AddedRowShape::new(3, LineEnding::CrLf);
+        let plan = plan_with_columns(input, (&order, &columns), (&edits, shape)).unwrap();
+        assert_eq!(
+            apply(input, &plan),
+            b"\xEF\xBB\xBFid,age,name\r\n1,\"4,0\",\"Sato\"\r\n2,\r\n"
+        );
+        // 最初の列を消すと、`2` だけの行は空の行にせず `""` と書く。
+        let mut first_gone = ColumnOrder::whole();
+        let _id = first_gone.remove(0, 1);
+        let narrow = AddedRowShape::new(1, LineEnding::CrLf);
+        let none = CellEdits::empty();
+        let removed = plan_with_columns(input, (&order, &first_gone), (&none, narrow)).unwrap();
+        assert_eq!(
+            apply(input, &removed),
+            b"\xEF\xBB\xBFname\r\n\"Sato\"\r\n\"\"\r\n"
+        );
+    }
+
+    #[test]
+    fn added_rows_follow_the_column_order() {
+        let input = b"a,b\n";
+        let mut order = RowOrder::whole();
+        let rows = order.insert(1, 1);
+        let mut columns = ColumnOrder::whole();
+        let added = columns.insert(0, 1);
+        let mut edits = CellEdits::empty();
+        edits.set(rows[0], added[0], text("new"));
+        edits.set(rows[0], ColumnId::Source(1), text("y"));
+        let shape = AddedRowShape::new(3, LineEnding::Lf);
+        let plan = plan_with_columns(input, (&order, &columns), (&edits, shape)).unwrap();
+        assert_eq!(apply(input, &plan), b",a,b\nnew,,y\n");
     }
 
     #[test]
@@ -726,6 +894,122 @@ mod tests {
             );
             for (&(row, value), new) in model.iter().zip(&after) {
                 assert_kept_row((row, value), (&before, &input), (new, &output));
+            }
+        }
+    }
+
+    /// 列を足し消しした後の 1 行の値（`restructured_row` の決め方）：表の列の順に、原本のセル・書いた値・足した列の空の
+    /// セル。原本の行より後ろの何も無い原本の列は書かず、何も残らなければ空のセル 1 つ。
+    fn restructured_values(
+        old: &[Vec<u8>],
+        columns: &[ColumnId],
+        written: &BTreeMap<ColumnId, &str>,
+    ) -> Vec<Vec<u8>> {
+        let present = |column: &ColumnId| match column {
+            ColumnId::Source(source) => *source < old.len() || written.contains_key(column),
+            ColumnId::Added(_) => true,
+        };
+        let last = columns.iter().rposition(present);
+        let mut row: Vec<Vec<u8>> = columns
+            .iter()
+            .take(last.map_or(0, |last| last + 1))
+            .map(|column| match (written.get(column), column) {
+                (Some(value), _) => value.replace("\r\n", "\n").replace('\r', "\n").into_bytes(),
+                (None, ColumnId::Source(source)) => old.get(*source).cloned().unwrap_or_default(),
+                (None, ColumnId::Added(_)) => Vec::new(),
+            })
+            .collect();
+        if row.is_empty() {
+            row.push(Vec::new());
+        }
+        row
+    }
+
+    /// 無作為に列を足し消しした並びと、表の列の数（開いたときは 4 列）。
+    fn random_columns(rng: &mut Xorshift) -> (ColumnOrder, usize) {
+        let mut columns = ColumnOrder::whole();
+        let mut width = 4_usize;
+        for _ in 0..=rng.below(3) {
+            let at = rng.below(width + 1);
+            let adding = rng.below(2) == 0;
+            if adding {
+                let _added = columns.insert(at, 1);
+                width += 1;
+            } else if at < width {
+                let _gone = columns.remove(at, 1);
+                width -= 1;
+            }
+        }
+        (columns, width)
+    }
+
+    /// 無作為の書き換え（`records` 行の表の、列 `ids` のどれか）と、行と列ごとの書いた値。
+    fn random_column_edits(
+        rng: &mut Xorshift,
+        records: usize,
+        ids: &[ColumnId],
+    ) -> (CellEdits, BTreeMap<(usize, ColumnId), &'static str>) {
+        let mut edits = CellEdits::empty();
+        let mut written = BTreeMap::new();
+        if records == 0 || ids.is_empty() {
+            return (edits, written);
+        }
+        for _ in 0..rng.below(4) {
+            let (row, value) = (rng.below(records), rng.pick(&VALUES));
+            let column = ids[rng.below(ids.len())];
+            edits.set(
+                RowId::Source(u64::try_from(row).unwrap()),
+                column,
+                text(value),
+            );
+            written.insert((row, column), value);
+        }
+        (edits, written)
+    }
+
+    /// 行 `row` の、組み立て直した後に読める値。
+    fn rebuilt_values(
+        (row, old, input): (usize, &Record, &[u8]),
+        ids: &[ColumnId],
+        written: &BTreeMap<(usize, ColumnId), &str>,
+    ) -> Vec<Vec<u8>> {
+        let mine: BTreeMap<ColumnId, &str> = written
+            .iter()
+            .filter(|((r, _), _)| *r == row)
+            .map(|((_, column), value)| (*column, *value))
+            .collect();
+        let mut want = restructured_values(&values(input, old), ids, &mine);
+        // 書いた値の改行は、その行の終わり方で書く（読み直すと終わり方の改行になる）。
+        for (at, column) in ids.iter().enumerate() {
+            if let (Some(value), Some(slot)) = (mine.get(column), want.get_mut(at)) {
+                *slot = expected_value(value, old);
+            }
+        }
+        want
+    }
+
+    #[test]
+    fn random_column_changes_rebuild_rows_with_the_same_values() {
+        let mut rng = Xorshift(0x5EED_0027_C011_0001);
+        for _ in 0..1_000_u32 {
+            let input = random_table(&mut rng);
+            let before: Vec<Record> = Records::new(&input, Dialect::rfc4180()).collect();
+            let (columns, width) = random_columns(&mut rng);
+            let ids = columns.columns(width);
+            let (edits, written) = random_column_edits(&mut rng, before.len(), &ids);
+            let shape = AddedRowShape::new(width, LineEnding::Lf);
+            let order = RowOrder::whole();
+            let plan = plan_with_columns(&input, (&order, &columns), (&edits, shape)).unwrap();
+            let output = apply(&input, &plan);
+            let after: Vec<Record> = Records::new(&output, Dialect::rfc4180()).collect();
+            assert_eq!(after.len(), before.len(), "{input:?} -> {output:?}");
+            for (row, (old, new)) in before.iter().zip(&after).enumerate() {
+                let want = rebuilt_values((row, old, &input), &ids, &written);
+                assert_eq!(
+                    values(&output, new),
+                    want,
+                    "{input:?} {ids:?} -> {output:?}"
+                );
             }
         }
     }
