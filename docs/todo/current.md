@@ -41,7 +41,7 @@ M1 の 56 項目は `確認済み` 21・`実装済み` 10・`未着手` 25（Git
 2026-11-05 の品質の調査（[research/2026-11-05-quality-sweep](../research/2026-11-05-quality-sweep.md)）で見つけた誤りは、施主の判断のとおり直してマージした: 文字コードの標本の境目（#10）・前書き（#12・#15）・範囲の取り出しの読み方（#30）・1 MiB 超の行（#13・#23・#32・#34・#36）・Latin-1（#18）・`--dump`（#20）・終わらない入力（#25）・曖昧な幅の字（#37）・索引の前のコピー（#39）・日本の数の書き方（#41）・三点リーダー（#7）・判別の確信（#24）。これからの順:
 
 0. 品質の調査の残り: #22（窓の記憶・数万列の BIG-08 とあわせて）・#42（低: 折り返しの結合文字・合計の桁あふれの順）
-1. M2 の ADR 2 本（GitHub Issue #53・提案）: 差分の持ち方（[ADR 0024](../adr/0024-edit-layer-over-the-source.md)）・保存の置き換えと Windows のロック（[ADR 0025](../adr/0025-save-by-replacement-and-windows-locks.md)）。施主の判断の 8 点を待つ
+1. M2 の ADR 2 本（GitHub Issue #53・2026-11-05 に施主が推しのとおり受理）: 差分の持ち方（[ADR 0024](../adr/0024-edit-layer-over-the-source.md)）・保存の置き換えと Windows のロック（[ADR 0025](../adr/0025-save-by-replacement-and-windows-locks.md)）
 2. M2 の最初の縦切り: 1 セルの書き換え → 保存 → 往復のバイト一致（EDIT-01・SAVE-01・KEEP-02・03）
 3. 検索（FIND-01・05）→ Undo / Redo（UNDO-01）→ 置換（FIND-02）→ 正規表現と同一視（FIND-03・06）
 4. 壊れた行の隔離と手直し（OPEN-15・EDIT-14・VALD-01）
