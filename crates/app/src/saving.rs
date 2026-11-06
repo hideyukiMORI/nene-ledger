@@ -153,7 +153,7 @@ fn spawn_saving(
     bytes: ScanBytes,
 ) -> Result<SaveJob, SavingFailure> {
     let format = reader.format();
-    representable(changes.edits(), format.encoding())?;
+    representable(&changes, format.encoding())?;
     let (rows, columns, edits, shape) = (
         changes.order().clone(),
         changes.columns().clone(),
@@ -186,9 +186,16 @@ fn spawn_saving(
 
 /// 書き換えた値が、すべて文字コード `encoding` で表せるか（書く前に止める・ADR 0025・SAVE-04）。写す区間は原本の
 /// バイト列のままで、区切りと引用符と改行は ASCII なので、確かめるのは書き換えた値だけでよい。
-fn representable(edits: &CellEdits, encoding: TextEncoding) -> Result<(), SavingFailure> {
-    for (_, cells) in edits.rows() {
-        for (_, value) in cells {
+/// 消した行と列（行と列の並びに無い）の書き換えは書かないので見ない（Undo のために差分には残っている・レビューで見つけた）。
+fn representable(changes: &TableChanges<'_>, encoding: TextEncoding) -> Result<(), SavingFailure> {
+    for (row, cells) in changes.edits().rows() {
+        if changes.order().position_of(row).is_none() {
+            continue;
+        }
+        for (column, value) in cells {
+            if changes.columns().position_of(column).is_none() {
+                continue;
+            }
             if let CellValue::Text(text) = value
                 && encoded(text, encoding).is_none()
             {
@@ -434,5 +441,23 @@ mod tests {
             }
         }
         assert_eq!(written, "\u{FEFF}名前,,\"a,b\"\r\n,0012,\r\n".as_bytes());
+    }
+
+    /// 消した行の書き換えは書かないので、その文字コードで表せない字があっても保存を止めない（レビューで見つけた）。
+    #[test]
+    fn a_removed_row_with_an_unrepresentable_value_does_not_block_the_save() {
+        let mut rows = RowOrder::whole();
+        let mut edits = CellEdits::empty();
+        edits.set(RowId::Source(1), ColumnId::Source(0), text("😀"));
+        let columns = ColumnOrder::whole();
+        let shape = AddedRowShape::new(1, LineEnding::CrLf);
+        let blocked = TableChanges::new((&rows, &columns), &edits, shape);
+        assert!(matches!(
+            representable(&blocked, TextEncoding::ShiftJis),
+            Err(SavingFailure::Save(SaveFailure::Unrepresentable(_)))
+        ));
+        let _gone = rows.remove(1, 1);
+        let removed = TableChanges::new((&rows, &columns), &edits, shape);
+        assert!(representable(&removed, TextEncoding::ShiftJis).is_ok());
     }
 }

@@ -158,6 +158,10 @@ impl<L: RecordLookup, S: PlanSink + ?Sized> Planner<'_, L, S> {
                 continue;
             }
             cursor = self.edited_row(number, cells, cursor)?;
+            // 書き換えた行ごとに原本を引くので、書き先が止まったら（中止）ここでもやめる。
+            if self.plan.stopped() {
+                return Err(SavePlanFailure::Stopped);
+            }
         }
         self.plan.copy(cursor, end.saturating_sub(cursor));
         // 区間の最後の行の終わり方。後ろに続く行（足した行・離れた原本の行）の書き方が変わる。
