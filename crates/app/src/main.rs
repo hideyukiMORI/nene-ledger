@@ -15,6 +15,7 @@ mod open_palette;
 mod opening;
 mod preferences;
 mod reader;
+mod replace_fold;
 mod rows;
 mod saving;
 mod scan_bytes;

@@ -13,6 +13,7 @@ use crate::format_summary::FormatSummary;
 use crate::job_state::JobState;
 use crate::notice::Notice;
 use crate::paste_notice::PasteNotice;
+use crate::replace_notice::ReplaceNotice;
 use crate::rows_notice::RowsNotice;
 use crate::save_problem::SaveProblem;
 use crate::selection_stats::SelectionStats;
@@ -28,6 +29,41 @@ fn find_status(notice: FindNotice) -> String {
         FindNotice::Failed => "ファイルを読めなかったので、探すのをやめました",
         FindNotice::NothingToRepeat => "続けて探すものがありません（Ctrl+F で探す）",
     })
+}
+
+/// 置換の知らせ。
+fn replace_status(notice: ReplaceNotice) -> String {
+    match notice {
+        ReplaceNotice::Replaced { cells, skipped } => format!(
+            "{} セルを置き換えました{}（Ctrl+Z で戻す）",
+            group_digits(u64::try_from(cells).unwrap_or(u64::MAX)),
+            skipped_note(skipped)
+        ),
+        ReplaceNotice::NothingToReplace { skipped } => {
+            format!("置き換えるセルがありませんでした{}", skipped_note(skipped))
+        }
+        ReplaceNotice::TooMany => {
+            String::from("100 万セルを越えるので置き換えませんでした（範囲や条件を狭めてください）")
+        }
+        ReplaceNotice::Changed => String::from(
+            "数えている間に表が変わったので置き換えませんでした（もう一度数えてください）",
+        ),
+        ReplaceNotice::Stopped => String::from("置き換えるのをやめました"),
+        ReplaceNotice::Failed => {
+            String::from("ファイルを読めなかったので、置き換えるのをやめました")
+        }
+    }
+}
+
+/// 全部の置換が 1 MiB で切り詰めたレコードを飛ばしたなら、その数（無ければ空）。
+pub(crate) fn skipped_note(skipped: u64) -> String {
+    if skipped == 0 {
+        return String::new();
+    }
+    format!(
+        "・1 MiB で切り詰めた {} 行は値の全体が見えないので飛ばしました",
+        group_digits(skipped)
+    )
 }
 
 /// 表への貼り付けの知らせ。
@@ -196,6 +232,7 @@ pub fn notice_status(notice: Notice) -> String {
         Notice::NewWindowFailed => String::from("新しい表の窓を開けませんでした"),
         Notice::Paste(paste) => paste_status(paste),
         Notice::Find(find) => find_status(find),
+        Notice::Replace(replace) => replace_status(replace),
         Notice::ReopenFailed => {
             String::from("保存しました。開き直せなかったので、表示は保存の前のままです")
         }

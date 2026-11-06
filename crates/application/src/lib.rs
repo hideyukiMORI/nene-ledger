@@ -80,6 +80,8 @@ pub mod reading_aspect;
 pub mod reading_choice;
 pub mod record_lookup;
 pub mod replace_failure;
+pub mod replace_notice;
+mod replace_run;
 pub mod replacing;
 pub mod romaji;
 pub mod row_band;

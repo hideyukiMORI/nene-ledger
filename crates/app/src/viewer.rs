@@ -4,7 +4,7 @@ use nene_ledger_application::clipboard_text::ClipboardText;
 use nene_ledger_application::close_state::CloseState;
 use nene_ledger_application::command_palette::CommandPalette;
 use nene_ledger_application::cut_record::CutRecord;
-use nene_ledger_application::document::Document;
+use nene_ledger_application::document::{Document, MAX_PASTE_CELLS};
 use nene_ledger_application::document_effect::DocumentEffect;
 use nene_ledger_application::format_summary::FormatSummary;
 use nene_ledger_application::index_summary::IndexSummary;
@@ -51,6 +51,7 @@ use crate::find_fold::FindFold;
 use crate::open_palette::OpenPalette;
 use crate::preferences::Preferences;
 use crate::reader::Reader;
+use crate::replace_fold::ReplaceFold;
 use crate::rows::WINDOW_RECORDS;
 #[cfg(not(windows))]
 use crate::saving::suggested_entry;
@@ -73,6 +74,8 @@ pub(crate) struct Viewer {
     totals: Option<RangeJob<TotalsFold>>,
     /// 裏で回っている検索の 1 回分（ADR 0030 の決定 4）。
     finding: Option<SplitJob<FindFold>>,
+    /// 裏で回っている全部の置換の数え（ADR 0030 の決定 6）。
+    replacing: Option<SplitJob<ReplaceFold>>,
     /// 読み方を試している間の、元の画面（Esc で戻す・Issue #52）。
     trial: Option<Document>,
     /// 裏で回っている保存（ADR 0026 の決定 6）。
@@ -101,6 +104,7 @@ impl Viewer {
             palette: None,
             totals: None,
             finding: None,
+            replacing: None,
             trial: None,
             saving: None,
             saving_as: None,
@@ -335,6 +339,16 @@ impl Viewer {
                 self.start_find_pass();
                 None
             }
+            DocumentEffect::Replace => {
+                self.start_replace_count();
+                None
+            }
+            DocumentEffect::StopReplacing => {
+                if let Some(job) = &self.replacing {
+                    job.cancel();
+                }
+                None
+            }
             DocumentEffect::StopFinding => {
                 if let Some(job) = &self.finding {
                     job.cancel();
@@ -464,6 +478,47 @@ impl Viewer {
             Ok(job) => self.finding = Some(job),
             Err(_failure) => self.document.find_stopped(true),
         }
+    }
+
+    /// 全部の置換の当たりを、原本の全体から裏で数え始める（前の数えは手放す）。始められなければ止まったと知らせる。
+    fn start_replace_count(&mut self) {
+        self.replacing = None;
+        let Some(pass) = self.document.take_replace_pass() else {
+            return;
+        };
+        let limit = usize::try_from(MAX_PASTE_CELLS).unwrap_or(usize::MAX);
+        let fold = ReplaceFold::new(
+            pass,
+            (self.reader.format(), self.document.header_record()),
+            self.document.changes().order().clone(),
+            limit,
+        );
+        match self.reader.spawn_split(0, usize::MAX, fold) {
+            Ok(job) => self.replacing = Some(job),
+            Err(_failure) => self.document.replace_stopped(true),
+        }
+    }
+
+    /// 裏の数えが終わっていれば書き換えを渡し、まだなら進み具合を渡す。
+    fn replacing_report(&mut self) {
+        let Some(job) = self.replacing.as_mut() else {
+            return;
+        };
+        match job.take_result() {
+            Some(Ok(RangeOutcome::Finished(fold))) => {
+                let (counted, too_many) = fold.result();
+                self.document.replace_counted(counted, too_many);
+            }
+            Some(Ok(RangeOutcome::Cancelled)) => self.document.replace_stopped(false),
+            Some(Err(_failure)) => self.document.replace_stopped(true),
+            None => {
+                let progress = job.progress();
+                self.document
+                    .replace_progress(progress.done(), progress.total());
+                return;
+            }
+        }
+        self.replacing = None;
     }
 
     /// 裏の検索の 1 回分が終わっていれば答えを渡し（続きがあれば次を始める）、まだなら進み具合を渡す。
@@ -748,6 +803,7 @@ impl Session for Viewer {
             self.document.totals_report(totals);
         }
         self.finding_report(view);
+        self.replacing_report();
         let ticks = self.ticker.take();
         if ticks > 0 {
             let effect = self.document.tick(ticks, view);

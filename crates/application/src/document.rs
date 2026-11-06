@@ -63,6 +63,8 @@ use crate::pointer_hold::PointerHold;
 use crate::pointer_shape::PointerShape;
 use crate::press_kind::PressKind;
 use crate::ranges::Ranges;
+use crate::replace_notice::ReplaceNotice;
+use crate::replace_run::ReplaceRun;
 use crate::row_band::RowBand;
 use crate::row_change::RowChange;
 use crate::row_place::RowPlace;
@@ -79,7 +81,8 @@ use crate::selection_mode::SelectionMode;
 use crate::selection_stats::SelectionStats;
 use crate::selection_totals::SelectionTotals;
 use crate::status_line::{
-    cursor_status, format_status, group_digits, index_status, notice_status, totals_status,
+    cursor_status, format_status, group_digits, index_status, notice_status, skipped_note,
+    totals_status,
 };
 use crate::table_changes::TableChanges;
 use crate::table_extent::TableExtent;
@@ -176,6 +179,8 @@ pub struct Document {
     find_query: Option<FindQuery>,
     /// 進んでいる検索。
     finding: Option<FindRun>,
+    /// 進んでいる全部の置換（数えている間と、件数を見せている間・ADR 0030 の決定 6）。
+    replacing: Option<ReplaceRun>,
     /// 求めたコピーが切り取りなら、その範囲（`copy_text` で枠を作る）。
     cutting: Option<Selection>,
 }
@@ -291,6 +296,7 @@ impl Document {
             cut: None,
             find_query: None,
             finding: None,
+            replacing: None,
             cutting: None,
         }
     }
@@ -733,6 +739,9 @@ impl Document {
         self.notice = None;
         if !keeps_cut(intent) {
             self.cut = None;
+        }
+        if let Some(effect) = self.replace_intent(intent) {
+            return effect;
         }
         // 探している間の Esc は、探すのをやめる（ADR 0030 の決定 4）。
         if self.finding.is_some() && intent == Intent::Cancel && self.editor.is_none() {
@@ -1565,10 +1574,7 @@ impl Document {
         }
         self.notice = None;
         self.commit_edit();
-        let columns = (0..self.widths.columns().len())
-            .map(|display| self.column_id(self.source_column(display)))
-            .collect();
-        let scope = FindScope::new(query.clone(), columns, self.edits.clone());
+        let scope = self.find_scope(query.clone());
         self.find_query = Some(query);
         let cursor = self.selection.cursor();
         let mut run = FindRun::new(
@@ -1579,6 +1585,188 @@ impl Document {
         run.set_pending(self.find_pass(&run));
         self.finding = Some(run);
         DocumentEffect::Find
+    }
+
+    /// 問い `query` を、表示の順の列と今の書き換えで照らす範囲。
+    fn find_scope(&self, query: FindQuery) -> FindScope {
+        let columns = (0..self.widths.columns().len())
+            .map(|display| self.column_id(self.source_column(display)))
+            .collect();
+        FindScope::new(query, columns, self.edits.clone())
+    }
+
+    /// 置換の段の Enter：カーソルのセルが `query` に当たれば、当たった所を `replacement` に置き換えて（1 手）、次を探す。
+    /// 当たらなければ次を探すだけ（ADR 0030 の決定 6）。保存中は置き換えない。
+    pub fn replace_one(&mut self, query: FindQuery, replacement: &str) -> DocumentEffect {
+        if query.is_empty() || self.closing != CloseState::Open {
+            return DocumentEffect::Stay;
+        }
+        if self.saving {
+            self.notice = Some(Notice::StillSaving);
+            return DocumentEffect::Stay;
+        }
+        self.commit_edit();
+        if let Some((change, source)) = self.replaced_at_cursor(&query, replacement) {
+            self.cut = None;
+            self.history.record(change, &source, &mut self.edits);
+        }
+        self.find(query, true)
+    }
+
+    /// カーソルのセルの当たった所を置き換える書き換えと、そのセルのファイルの今の値。当たらない・置き換えても変わらない・
+    /// 見えていない・1 MiB で切り詰めた行・「セルが無い」なら `None`。
+    fn replaced_at_cursor(
+        &self,
+        query: &FindQuery,
+        replacement: &str,
+    ) -> Option<(CellChange, String)> {
+        let cursor = self.selection.cursor();
+        let table = self.source_column(cursor.column());
+        let row = self.view_row(cursor.body())?;
+        if self.cuts.iter().any(|cut| cut.record() == row.line()) {
+            return None;
+        }
+        let id = self.column_id(table);
+        let file = row.values().get(table).cloned().unwrap_or_default();
+        let shown = match self.edits.get(row.row(), id) {
+            Some(CellValue::Text(value)) => value.clone(),
+            Some(CellValue::Absent) => return None,
+            None => file.clone(),
+        };
+        let after = query.replaced(&shown, replacement)?;
+        (after != shown).then(|| (CellChange::new(row.row(), id, shown, after), file))
+    }
+
+    /// 置換の段の全部（Alt+A）：`query` の当たりを `replacement` に置き換えるセルを、原本の行は裏で、足した行は差分から
+    /// 数え始める（ADR 0030 の決定 6）。数え終えたら件数を見せ、Enter で 1 手の束として置き換える。保存中は始めない。
+    pub fn replace_all(&mut self, query: FindQuery, replacement: &str) -> DocumentEffect {
+        if query.is_empty() || self.closing != CloseState::Open {
+            return DocumentEffect::Stay;
+        }
+        if self.saving {
+            self.notice = Some(Notice::StillSaving);
+            return DocumentEffect::Stay;
+        }
+        self.notice = None;
+        self.commit_edit();
+        self.finding = None;
+        let scope = self.find_scope(query.clone());
+        self.find_query = Some(query);
+        self.replacing = Some(ReplaceRun::new(
+            scope,
+            String::from(replacement),
+            self.history.revision(),
+        ));
+        DocumentEffect::Replace
+    }
+
+    /// 全部の置換で裏で数える問いと置き換える文字（合成ルートが 1 度だけ取りに来る）。無ければ `None`。
+    pub fn take_replace_pass(&mut self) -> Option<(FindScope, String)> {
+        let run = self.replacing.as_mut()?;
+        run.take()
+            .then(|| (run.scope().clone(), String::from(run.replacement())))
+    }
+
+    /// 裏の数えの進み具合（読んだレコードの数・読む見込み）。
+    pub fn replace_progress(&mut self, done: u64, total: u64) {
+        if let Some(run) = self.replacing.as_mut() {
+            run.set_progress(done, total);
+        }
+    }
+
+    /// 裏の数えが止まった（やめた・`failed` なら読めなかった）。
+    pub fn replace_stopped(&mut self, failed: bool) {
+        if self.replacing.take().is_some() {
+            self.notice = Some(Notice::Replace(if failed {
+                ReplaceNotice::Failed
+            } else {
+                ReplaceNotice::Stopped
+            }));
+        }
+    }
+
+    /// 裏で数え終えた原本の行の書き換え `changes`（セルの書き換えと、そのセルのファイルの今の値）と、切り詰めたので飛ばした
+    /// レコードの数 `skipped`。`too_many` は上限を越えて数えるのをやめた。足した行の当たりを足して、件数を見せる。
+    /// 数えている間に表が変わっていれば置き換えない。
+    pub fn replace_counted(
+        &mut self,
+        (mut changes, skipped): (Vec<(CellChange, String)>, u64),
+        too_many: bool,
+    ) {
+        let Some(mut run) = self.replacing.take() else {
+            return;
+        };
+        if run.revision() != self.history.revision() {
+            self.notice = Some(Notice::Replace(ReplaceNotice::Changed));
+            return;
+        }
+        changes.extend(self.added_replacements(&run));
+        if too_many || u128::try_from(changes.len()).unwrap_or(u128::MAX) > MAX_PASTE_CELLS {
+            self.notice = Some(Notice::Replace(ReplaceNotice::TooMany));
+            return;
+        }
+        if changes.is_empty() {
+            self.notice = Some(Notice::Replace(ReplaceNotice::NothingToReplace { skipped }));
+            return;
+        }
+        run.set_counted(changes, skipped);
+        self.replacing = Some(run);
+    }
+
+    /// 足した行の当たりを置き換える書き換え（ファイルの値は空）。
+    fn added_replacements(&self, run: &ReplaceRun) -> Vec<(CellChange, String)> {
+        let width = self.widths.columns().len();
+        let none = |_: usize| None;
+        self.added_rows()
+            .into_iter()
+            .flat_map(|(_, id)| {
+                (0..width).filter_map(move |display| {
+                    run.scope()
+                        .replaced_cell((RowId::Added(id), display), &none, run.replacement())
+                })
+            })
+            .collect()
+    }
+
+    /// 全部の置換を数えている間と、件数を見せている間の意図。数えている間の Esc はやめる。件数を見せている間は Enter で
+    /// 置き換え、ほかの意図は置き換えをやめる（Esc はそれだけで終わり、ほかの意図はそのまま続ける）。
+    fn replace_intent(&mut self, intent: Intent) -> Option<DocumentEffect> {
+        let run = self.replacing.as_ref()?;
+        if run.counted().is_none() {
+            return (intent == Intent::Cancel && self.editor.is_none())
+                .then_some(DocumentEffect::StopReplacing);
+        }
+        if intent == Intent::Confirm {
+            return Some(self.apply_replace());
+        }
+        self.replacing = None;
+        self.notice = Some(Notice::Replace(ReplaceNotice::Stopped));
+        (intent == Intent::Cancel).then_some(DocumentEffect::Stay)
+    }
+
+    /// 数え終えた書き換えを 1 手の束として書く（Ctrl+Z 1 回で戻る・ADR 0029 の決定 3 と同じ形）。
+    fn apply_replace(&mut self) -> DocumentEffect {
+        let Some(mut run) = self.replacing.take() else {
+            return DocumentEffect::Stay;
+        };
+        self.commit_edit();
+        if self.saving {
+            self.notice = Some(Notice::StillSaving);
+            return DocumentEffect::Stay;
+        }
+        if run.revision() != self.history.revision() {
+            self.notice = Some(Notice::Replace(ReplaceNotice::Changed));
+            return DocumentEffect::Stay;
+        }
+        let Some((changes, skipped)) = run.take_counted() else {
+            return DocumentEffect::Stay;
+        };
+        let cells = changes.len();
+        self.cut = None;
+        self.history
+            .record_batch(Vec::new(), changes, &mut self.edits);
+        self.notice = Some(Notice::Replace(ReplaceNotice::Replaced { cells, skipped }));
+        DocumentEffect::Stay
     }
 
     /// F3 / Shift+F3：前に探した問いで続けて探す。まだ探していなければ知らせる。
@@ -3042,7 +3230,9 @@ impl Document {
             | DocumentEffect::SaveAs
             | DocumentEffect::StopSaving
             | DocumentEffect::Find
-            | DocumentEffect::StopFinding => current,
+            | DocumentEffect::StopFinding
+            | DocumentEffect::Replace
+            | DocumentEffect::StopReplacing => current,
         };
         self.extend_to(at, first, window);
         effect
@@ -4113,6 +4303,9 @@ impl Document {
         if let Some(run) = &self.finding {
             return finding_status(run.progress());
         }
+        if let Some(run) = &self.replacing {
+            return replacing_status(run);
+        }
         if let Some(editor) = &self.editor {
             return String::from(match editor.mode() {
                 EditMode::Entering => EDITING_HINT_ENTERING,
@@ -4230,6 +4423,27 @@ fn finding_status(progress: Option<(u64, u64)>) -> String {
             format!("探しています… {}%（Esc でやめる）", percent.min(99))
         }
         Some(_) | None => String::from("探しています…（Esc でやめる）"),
+    }
+}
+
+/// 全部の置換の状態の行。数えている間は進み具合、数え終えたら件数と決め方。
+fn replacing_status(run: &ReplaceRun) -> String {
+    if let Some((changes, skipped)) = run.counted() {
+        return format!(
+            "{} セルを置き換えます{}（Enter で置き換える・Esc でやめる）",
+            group_digits(u64::try_from(changes.len()).unwrap_or(u64::MAX)),
+            skipped_note(*skipped)
+        );
+    }
+    match run.progress() {
+        Some((done, total)) if total > 0 && total < u64::MAX => {
+            let percent = u128::from(done).saturating_mul(100) / u128::from(total);
+            format!(
+                "置き換えるセルを数えています… {}%（Esc でやめる）",
+                percent.min(99)
+            )
+        }
+        Some(_) | None => String::from("置き換えるセルを数えています…（Esc でやめる）"),
     }
 }
 
@@ -7993,6 +8207,185 @@ mod tests {
         );
         document.find_stopped(false);
         text_at(&document.frame(normal(), palette()), "探すのをやめました");
+    }
+
+    /// 合成ルートの裏の数えの代わり：原本の行を並びの順に照らして、置き換える書き換えを集める。
+    fn counted_replacements(document: &mut Document) -> Vec<(CellChange, String)> {
+        let (scope, replacement) = document.take_replace_pass().unwrap();
+        assert!(document.take_replace_pass().is_none(), "1 度だけ渡す");
+        editable_rows()
+            .iter()
+            .zip(0_u64..)
+            .filter(|&(_, record)| document.rows.position_of(RowId::Source(record)).is_some())
+            .flat_map(|(cells, record)| {
+                let source = |index: usize| cells.get(index).cloned();
+                (0..scope.width())
+                    .filter_map(|display| {
+                        scope.replaced_cell((RowId::Source(record), display), &source, &replacement)
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
+    fn replacing_all(document: &mut Document, text: &str, replacement: &str) {
+        let query = FindQuery::new(text, FindOptions::standard());
+        assert_eq!(
+            document.replace_all(query, replacement),
+            DocumentEffect::Replace
+        );
+        let changes = counted_replacements(document);
+        document.replace_counted((changes, 0), false);
+    }
+
+    /// 全部の置換は件数を見せてから Enter で 1 手の束として書き、Ctrl+Z 1 回ですべて戻る（ADR 0030 の決定 6・強制）。
+    #[test]
+    fn replacing_all_shows_the_count_first_and_undoes_in_one_step() {
+        let mut document = indexed_editable();
+        replacing_all(&mut document, "1", "#");
+        text_at(
+            &document.frame(normal(), palette()),
+            "3 セルを置き換えます（Enter で置き換える・Esc でやめる）",
+        );
+        assert_eq!(cell_text(&document, 0, 0), None, "数えただけでは書かない");
+        assert_eq!(
+            document.apply(Intent::Confirm, normal()),
+            DocumentEffect::Stay
+        );
+        assert_eq!(cell_text(&document, 0, 0), Some("00#2"));
+        assert_eq!(cell_text(&document, 1, 0), Some("b#"));
+        assert_eq!(cell_text(&document, 2, 0), Some("c#"));
+        text_at(
+            &document.frame(normal(), palette()),
+            "3 セルを置き換えました（Ctrl+Z で戻す）",
+        );
+        document.apply(Intent::Undo, normal());
+        for (row, column) in [(0, 0), (1, 0), (2, 0)] {
+            assert_eq!(cell_text(&document, row, column), None);
+        }
+        document.apply(Intent::Redo, normal());
+        assert_eq!(cell_text(&document, 1, 0), Some("b#"));
+    }
+
+    /// 件数を見せている間のほかの意図はやめ、数えている間の Esc は数えをやめる。数えている間に表が変われば書かない。
+    #[test]
+    fn replacing_all_can_be_declined_stopped_or_outdated() {
+        let mut declined = indexed_editable();
+        replacing_all(&mut declined, "1", "#");
+        declined.apply(moving(CursorStep::Down), normal());
+        assert_eq!(
+            declined.selection().cursor(),
+            CellPosition::new(1, 0),
+            "下へはそのまま動く"
+        );
+        declined.apply(Intent::Confirm, normal());
+        assert_eq!(cell_text(&declined, 0, 0), None);
+        let mut escaped = indexed_editable();
+        replacing_all(&mut escaped, "1", "#");
+        assert_eq!(
+            escaped.apply(Intent::Cancel, normal()),
+            DocumentEffect::Stay
+        );
+        text_at(
+            &escaped.frame(normal(), palette()),
+            "置き換えるのをやめました",
+        );
+
+        let mut stopped = indexed_editable();
+        let query = FindQuery::new("1", FindOptions::standard());
+        assert_eq!(
+            stopped.replace_all(query.clone(), "#"),
+            DocumentEffect::Replace
+        );
+        assert_eq!(
+            stopped.apply(Intent::Cancel, normal()),
+            DocumentEffect::StopReplacing
+        );
+        stopped.replace_stopped(false);
+        text_at(
+            &stopped.frame(normal(), palette()),
+            "置き換えるのをやめました",
+        );
+
+        let mut changed = indexed_editable();
+        assert_eq!(
+            changed.replace_all(query.clone(), "#"),
+            DocumentEffect::Replace
+        );
+        let outdated = counted_replacements(&mut changed);
+        typed(&mut changed, "x");
+        changed.apply(Intent::Confirm, normal());
+        changed.replace_counted((outdated, 0), false);
+        text_at(
+            &changed.frame(normal(), palette()),
+            "数えている間に表が変わったので置き換えませんでした（もう一度数えてください）",
+        );
+        assert_eq!(cell_text(&changed, 1, 0), None);
+
+        let mut many = indexed_editable();
+        assert_eq!(many.replace_all(query, "#"), DocumentEffect::Replace);
+        let _taken = many.take_replace_pass();
+        many.replace_counted((Vec::new(), 2), true);
+        text_at(
+            &many.frame(normal(), palette()),
+            "100 万セルを越えるので置き換えませんでした（範囲や条件を狭めてください）",
+        );
+    }
+
+    /// 足した行の書き換えた値も置き換え、当たらなければ飛ばした行の数を添えて知らせる。
+    #[test]
+    fn replacing_all_reaches_added_rows_and_reports_nothing_found() {
+        let mut document = indexed_editable();
+        document.apply(Intent::InsertRows(RowPlace::End), normal());
+        let mut shown = editable_rows();
+        shown.push(Vec::new());
+        document.show(0, &shown);
+        typed(&mut document, "tail1");
+        document.apply(Intent::Confirm, normal());
+        replacing_all(&mut document, "1", "#");
+        text_at(
+            &document.frame(normal(), palette()),
+            "4 セルを置き換えます（Enter で置き換える・Esc でやめる）",
+        );
+        document.apply(Intent::Confirm, normal());
+        let added = document.rows.row_at(3).unwrap();
+        assert_eq!(
+            text_of(&document, added, ColumnId::Source(0)),
+            Some("tail#")
+        );
+
+        let mut nothing = indexed_editable();
+        let query = FindQuery::new("zzz", FindOptions::standard());
+        assert_eq!(nothing.replace_all(query, "#"), DocumentEffect::Replace);
+        let _taken = nothing.take_replace_pass();
+        nothing.replace_counted((Vec::new(), 2), false);
+        text_at(
+            &nothing.frame(normal(), palette()),
+            "置き換えるセルがありませんでした・1 MiB で切り詰めた 2 行は値の全体が見えないので飛ばしました",
+        );
+    }
+
+    /// 1 つずつの置換：カーソルのセルが当たれば置き換えて次へ、当たらなければ次を探すだけ（ADR 0030 の決定 6）。
+    #[test]
+    fn replacing_one_rewrites_the_cursor_cell_then_finds_the_next() {
+        let mut document = indexed_editable();
+        let query = FindQuery::new("B", FindOptions::standard());
+        // カーソルの「0012」は当たらないので、置き換えずに次の「b1」へ。
+        let skipped = document.replace_one(query.clone(), "x");
+        finish_finding(&mut document, skipped);
+        assert_eq!(cell_text(&document, 0, 0), None);
+        assert_eq!(document.selection().cursor(), CellPosition::new(1, 0));
+        let first = document.replace_one(query.clone(), "x");
+        finish_finding(&mut document, first);
+        assert_eq!(cell_text(&document, 1, 0), Some("x1"));
+        assert_eq!(document.selection().cursor(), CellPosition::new(1, 1));
+        let second = document.replace_one(query, "x");
+        finish_finding(&mut document, second);
+        assert_eq!(cell_text(&document, 1, 1), Some("x2"));
+        text_at(&document.frame(normal(), palette()), "見つかりませんでした");
+        document.apply(Intent::Undo, normal());
+        assert_eq!(cell_text(&document, 1, 1), None, "1 つずつ戻る");
+        assert_eq!(cell_text(&document, 1, 0), Some("x1"));
     }
 
     /// 編集中の貼り付けは字のまま（引用を解かない・レビューで見つけた）。
