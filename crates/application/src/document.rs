@@ -1,6 +1,6 @@
 //! 開いたファイルの画面の状態。
 
-use alloc::collections::BTreeMap;
+use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::format;
 use alloc::string::String;
 use alloc::vec;
@@ -27,6 +27,7 @@ use crate::column_shift::ColumnShift;
 use crate::columns_notice::ColumnsNotice;
 use crate::cursor_moves::step_cursor;
 use crate::cursor_step::CursorStep;
+use crate::cut_mark::CutMark;
 use crate::cut_record::CutRecord;
 use crate::detail_content::DetailContent;
 use crate::detail_painter::DetailPainter;
@@ -162,6 +163,10 @@ pub struct Document {
     save_progress: Option<(u64, u64)>,
     /// 原本の行を読むのを待っている貼り付け（ADR 0029・`paste_rows` で書く）。
     pasting: Option<PendingPaste>,
+    /// 切り取りの枠（ADR 0029 の決定 5）。表を変える操作・Esc・編集で消える。
+    cut: Option<CutMark>,
+    /// 求めたコピーが切り取りなら、その範囲（`copy_text` で枠を作る）。
+    cutting: Option<Selection>,
 }
 
 /// 状態の行の右端に出すパレットの案内。
@@ -268,6 +273,8 @@ impl Document {
             untitled: false,
             save_progress: None,
             pasting: None,
+            cut: None,
+            cutting: None,
         }
     }
 
@@ -379,6 +386,7 @@ impl Document {
             | Intent::FreezeColumns
             | Intent::UnfreezeColumns
             | Intent::Copy
+            | Intent::Cut
             | Intent::ToggleDetail
             | Intent::Theme(_)
             | Intent::Zoom(_)
@@ -703,6 +711,9 @@ impl Document {
             return effect;
         }
         self.notice = None;
+        if !keeps_cut(intent) {
+            self.cut = None;
+        }
         // 保存の途中の Esc は、保存をやめる（SAVE-02・ADR 0025 の施主の判断 4）。
         if self.saving && intent == Intent::Cancel && self.editor.is_none() {
             return DocumentEffect::StopSaving;
@@ -762,6 +773,7 @@ impl Document {
         let current = self.view.first_body();
         let target = match intent {
             Intent::Copy => return self.copy_request(),
+            Intent::Cut => return self.cut_request(),
             // 配色・文字の大きさ・パレット・文字の入力は合成ルートが受ける（ここに来たら何もしない。表に字を打つ編集は M2）。
             Intent::Theme(_)
             | Intent::Zoom(_)
@@ -853,6 +865,7 @@ impl Document {
             | Intent::FreezeColumns
             | Intent::UnfreezeColumns
             | Intent::Copy
+            | Intent::Cut
             | Intent::ToggleDetail
             | Intent::Theme(_)
             | Intent::Zoom(_)
@@ -888,8 +901,8 @@ impl Document {
             Intent::Edit => editor.toggle_mode(),
             Intent::SelectAll => editor.select_all(),
             Intent::Cancel => self.editor = None,
-            // 🔴 欄の中の字のコピーはまだ（OS のクリップボードへ渡す経路を、貼り付けの Issue で足す）。
-            Intent::Copy => {}
+            // 🔴 欄の中の字のコピーと切り取りはまだ（OS のクリップボードへ渡す経路を、別の Issue で足す）。
+            Intent::Copy | Intent::Cut => {}
             Intent::Move { step, mode } => {
                 if editor.arrow(step, mode == SelectionMode::Extend) {
                     return None;
@@ -987,10 +1000,7 @@ impl Document {
                 None
             }
             Intent::Delete => {
-                // 🔴 選んだ範囲の全部を空にするのは一括の入力（EDIT-02）の Issue で。今はカーソルのセルだけ。
-                if self.begin_edit(EditMode::Entering) {
-                    self.commit_edit();
-                }
+                self.empty_cursor_cell();
                 None
             }
             Intent::BreakLine => None,
@@ -1019,6 +1029,7 @@ impl Document {
             | Intent::FreezeColumns
             | Intent::UnfreezeColumns
             | Intent::Copy
+            | Intent::Cut
             | Intent::ToggleDetail
             | Intent::Theme(_)
             | Intent::Zoom(_)
@@ -1040,9 +1051,19 @@ impl Document {
         }
     }
 
+    /// Delete：カーソルのセルを空にする（1 手）。
+    /// 🔴 選んだ範囲の全部を空にするのは一括の入力（EDIT-02）の Issue で。今はカーソルのセルだけ。
+    fn empty_cursor_cell(&mut self) {
+        if self.begin_edit(EditMode::Entering) {
+            self.commit_edit();
+        }
+    }
+
     /// カーソルのセルの編集を始める。見えていない行・切り詰めたレコード・セルの無い所なら始めない（知らせる）。
     /// 始めたら `true`。
     fn begin_edit(&mut self, mode: EditMode) -> bool {
+        // セルを直し始めたら、切り取りの枠は消える（ADR 0029 の決定 5）。
+        self.cut = None;
         let cursor = self.selection.cursor();
         let column = self.source_column(cursor.column());
         let Some((line, row, source)) = self
@@ -1105,6 +1126,12 @@ impl Document {
         }
         self.notice = None;
         self.pasting = None;
+        // この窓の切り取りで置いた文字列で、その後に表が変わっていなければ、貼った後に元を空にする（ADR 0029 の決定 5）。
+        let revision = self.history.revision();
+        let cut = self
+            .cut
+            .take()
+            .filter(|mark| mark.is_current(revision) && mark.placed(text));
         if let Some(editor) = self.editor.as_mut() {
             // 欄には字のまま挿す（引用を解かない・Excel のセルの中の貼り付けと同じ）。最後の改行だけ除く。
             let raw = text
@@ -1118,9 +1145,12 @@ impl Document {
             self.notice = Some(Notice::Paste(PasteNotice::TooLarge));
             return PasteRequest::Done;
         }
-        let Some(plan) = self.paste_plan(parse_tsv(text)) else {
+        let Some(mut plan) = self.paste_plan(parse_tsv(text)) else {
             return PasteRequest::Done;
         };
+        if let Some(mark) = cut {
+            plan = plan.moving(mark.into_clears());
+        }
         let first_line = self.line_of(plan.top());
         // 表の終わりより下は足す行なので読まない。
         let (known, _) = self.known_body_rows();
@@ -1205,7 +1235,7 @@ impl Document {
         (rows, cuts): (&[Vec<String>], &[CutRecord]),
         window: WindowView,
     ) -> DocumentEffect {
-        let Some(plan) = self.pasting.take() else {
+        let Some(mut plan) = self.pasting.take() else {
             return DocumentEffect::Stay;
         };
         if self.saving || self.editor.is_some() || self.closing != CloseState::Open {
@@ -1244,7 +1274,9 @@ impl Document {
             targets_rows.extend(ids.into_iter().map(|id| (id, Vec::new())));
             steps.push(EditStep::Rows(change));
         }
-        let cells = self.paste_changes(&plan, &targets_rows, &targets);
+        let mut cells = self.paste_changes(&plan, &targets_rows, &targets);
+        let moved = plan.is_move();
+        cells.extend(self.uncovered_clears(&mut plan, &targets_rows, &targets));
         self.history.record_batch(steps, cells, &mut self.edits);
         if added_columns > 0 {
             let _read = self.after_columns_changed(plan.left(), window);
@@ -1254,6 +1286,7 @@ impl Document {
             columns: plan.columns(),
             added_rows,
             added_columns,
+            moved,
         }));
         self.select_pasted(&plan, targets_rows.len(), window)
     }
@@ -1374,6 +1407,32 @@ impl Document {
                         self.pasted_cell((*row, table), cells, value)
                     })
             })
+            .collect()
+    }
+
+    /// 切り取りを貼るとき、元を空にする書き換えのうち、貼った所に重ならないもの（重なった所は貼った値・ADR 0029 の決定 5）。
+    fn uncovered_clears(
+        &self,
+        plan: &mut PendingPaste,
+        rows: &[(RowId, Vec<String>)],
+        targets: &[usize],
+    ) -> Vec<(CellChange, String)> {
+        let pasted: &PendingPaste = plan;
+        let covered: BTreeSet<(RowId, ColumnId)> = rows
+            .iter()
+            .zip(0_u64..)
+            .flat_map(|((row, _), offset)| {
+                targets
+                    .iter()
+                    .enumerate()
+                    .filter(move |&(column, _)| pasted.value(offset, column).is_some())
+                    .map(move |(_, &table)| (*row, self.column_id(table)))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        plan.take_clears()
+            .into_iter()
+            .filter(|(change, _)| !covered.contains(&(change.row(), change.column())))
             .collect()
     }
 
@@ -1911,6 +1970,7 @@ impl Document {
             | Intent::GoTo(_)
             | Intent::OpenGoTo
             | Intent::Copy
+            | Intent::Cut
             | Intent::ToggleDetail
             | Intent::Theme(_)
             | Intent::Zoom(_)
@@ -2112,6 +2172,7 @@ impl Document {
             Intent::Scroll(_)
             | Intent::Move { .. }
             | Intent::Copy
+            | Intent::Cut
             | Intent::ToggleDetail
             | Intent::Theme(_)
             | Intent::Zoom(_)
@@ -3019,7 +3080,21 @@ impl Document {
     /// 選択の行をレコードの範囲にして読ませる。`MAX_COPY_ROWS` を超えればコピーせず知らせる。
     /// ファイルの終わりまでの選択は、索引を作り終えて行の数が決まるまでコピーしない（GitHub Issue #39。分かった行だけを
     /// コピーして黙って欠けていた）。
+    /// 切り取り（Ctrl+X・ADR 0029 の決定 5）。コピーと同じ行を読ませ、`copy_text` で枠を作る。離れた範囲は切り取らない。
+    fn cut_request(&mut self) -> DocumentEffect {
+        if self.ranges().is_multiple() {
+            self.notice = Some(Notice::Paste(PasteNotice::CutManyRanges));
+            return DocumentEffect::Stay;
+        }
+        let effect = self.copy_request();
+        if let DocumentEffect::Copy { .. } = effect {
+            self.cutting = Some(self.selection);
+        }
+        effect
+    }
+
     fn copy_request(&mut self) -> DocumentEffect {
+        self.cutting = None;
         if self.ranges().copy_shape().is_none() {
             self.notice = Some(Notice::RangesNotAligned);
             return DocumentEffect::Stay;
@@ -3055,6 +3130,7 @@ impl Document {
         rows: &[Vec<String>],
         cuts: &[CutRecord],
     ) -> Option<ClipboardText> {
+        let cutting = self.cutting.take();
         let shape = self.ranges().copy_shape()?;
         let (top, _) = self.ranges().row_span();
         // 書き換えたセルは、書き換えた値でコピーする（画面と同じ）。
@@ -3088,12 +3164,72 @@ impl Document {
             self.notice = Some(Notice::TooLargeToCopy);
             return None;
         }
+        let rows_copied = u64::try_from(body.len()).unwrap_or(u64::MAX);
+        if let Some(range) = cutting {
+            let clears = self.cut_cells(range, first_record, rows);
+            self.cut = Some(CutMark::new(
+                range,
+                clears,
+                text.clone(),
+                self.history.revision(),
+            ));
+            self.notice = Some(Notice::Paste(PasteNotice::Cut {
+                rows: rows_copied,
+                columns: shape.column_count(),
+            }));
+            return Some(ClipboardText::new(text));
+        }
         self.notice = Some(Notice::Copied {
-            rows: u64::try_from(body.len()).unwrap_or(u64::MAX),
+            rows: rows_copied,
             columns: shape.column_count(),
             cut: u64::try_from(cut).unwrap_or(u64::MAX),
         });
         Some(ClipboardText::new(text))
+    }
+
+    /// 切り取る範囲 `range` の、空でないセルを空にする書き換えと、それぞれのファイルの今の値（位置 `first_record` から
+    /// 読んだ行 `rows` から）。「セルが無い」にしたセルは触らない。
+    fn cut_cells(
+        &self,
+        range: Selection,
+        first_record: u64,
+        rows: &[Vec<String>],
+    ) -> Vec<(CellChange, String)> {
+        let (top, bottom) = self.row_span();
+        let (left, right) = (range.top_left().column(), range.bottom_right().column());
+        let tables: Vec<usize> = (left..=right)
+            .map(|display| self.source_column(display))
+            .collect();
+        self.body_cells(first_record, rows)
+            .into_iter()
+            .zip(top..=bottom)
+            .flat_map(|(cells, body)| {
+                let line = self.line_of(body);
+                let row = self.rows.row_at(line).unwrap_or(RowId::Source(line));
+                let arranged = self.arranged(cells);
+                tables
+                    .iter()
+                    .filter_map(|&table| self.cleared_cell((row, table), &arranged))
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
+    /// 行 `row` の表の `table` 列目（原本のセル `cells`）を空にする書き換えと、そのファイルの今の値。もう空・セルが無い
+    /// なら `None`。
+    fn cleared_cell(
+        &self,
+        (row, table): (RowId, usize),
+        cells: &[String],
+    ) -> Option<(CellChange, String)> {
+        let id = self.column_id(table);
+        let source = cells.get(table).cloned().unwrap_or_default();
+        let shown = match self.edits.get(row, id) {
+            Some(CellValue::Text(text)) => text.clone(),
+            Some(CellValue::Absent) => return None,
+            None => source.clone(),
+        };
+        (!shown.is_empty()).then(|| (CellChange::new(row, id, shown, String::new()), source))
     }
 
     /// 選んだ範囲が変わっていれば集計を作り直す（VIEW-14）。1 つのセルなら出さない。
@@ -3694,11 +3830,20 @@ impl Document {
         };
         FramePainter::new(&layout, metrics, palette, size)
             .with_ranges(self.ranges())
+            .with_cut(self.live_cut())
             .with_order(&self.order)
             .with_column_ids(&ids)
             .with_edits(&self.edits)
             .with_editing(editing.as_ref())
             .paint(self.header(), self.column_numbers().as_ref(), &self.view)
+    }
+
+    /// まだ使える切り取りの範囲（その後に表が変わっていない）。
+    fn live_cut(&self) -> Option<Selection> {
+        self.cut
+            .as_ref()
+            .filter(|mark| mark.is_current(self.history.revision()))
+            .map(CutMark::range)
     }
 
     /// 見出しの行が無い表の、列の番号の行（1 始まり・Issue #48）。見出しの行があれば `None`。
@@ -3777,6 +3922,55 @@ fn saving_status(progress: Option<(u64, u64)>) -> String {
             format!("保存しています… {}%（Esc でやめる）", percent.min(99))
         }
         Some(_) | None => String::from("保存しています…（Esc でやめる）"),
+    }
+}
+
+/// 意図 `intent` の後も切り取りの枠を残すか（見るだけ・選ぶだけ・動くだけの意図）。表の値・並び・列の見せる順を変える
+/// 意図・Esc・別のコピーと切り取り・直し始めは消す（ADR 0029 の決定 5）。
+const fn keeps_cut(intent: Intent) -> bool {
+    match intent {
+        Intent::Scroll(_)
+        | Intent::Move { .. }
+        | Intent::Point { .. }
+        | Intent::Drag { .. }
+        | Intent::Release
+        | Intent::GoTo(_)
+        | Intent::OpenGoTo
+        | Intent::SelectAll
+        | Intent::SelectRows
+        | Intent::SelectColumns
+        | Intent::ResetWidths
+        | Intent::FreezeColumns
+        | Intent::UnfreezeColumns
+        | Intent::ToggleDetail
+        | Intent::Theme(_)
+        | Intent::Zoom(_)
+        | Intent::OpenPalette
+        | Intent::Confirm
+        | Intent::Advance(_)
+        | Intent::NewTable
+        | Intent::Paste => true,
+        Intent::Copy
+        | Intent::Cut
+        | Intent::Cancel
+        | Intent::Type(_)
+        | Intent::Erase
+        | Intent::Edit
+        | Intent::Delete
+        | Intent::BreakLine
+        | Intent::DoubleClick { .. }
+        | Intent::MoveColumns(_)
+        | Intent::ResetColumns
+        | Intent::Save
+        | Intent::SaveAs
+        | Intent::Undo
+        | Intent::Redo
+        | Intent::InsertRows(_)
+        | Intent::RemoveRows
+        | Intent::InsertColumns(_)
+        | Intent::RemoveColumns
+        | Intent::InsertHere
+        | Intent::RemoveHere => false,
     }
 }
 
@@ -7078,6 +7272,132 @@ mod tests {
         document.apply(Intent::DoubleClick { at: inside(0, 0) }, window);
         document.apply(Intent::Release, window);
         assert_eq!(document.editor(), None);
+    }
+
+    /// Ctrl+X の 2 段を、表 `editable_rows` の原本から行を読んで済ませ、クリップボードに置く文字列を返す。
+    fn cut_text(document: &mut Document) -> String {
+        let DocumentEffect::Copy { first_line, count } = document.apply(Intent::Cut, normal())
+        else {
+            panic!("切り取りは行を読ませるはず");
+        };
+        let rows: Vec<Vec<String>> = editable_rows()
+            .into_iter()
+            .skip(usize::try_from(first_line).unwrap())
+            .take(usize::try_from(count).unwrap())
+            .collect();
+        String::from(document.copy_text(first_line, &rows, &[]).unwrap().as_str())
+    }
+
+    fn cell_text(document: &Document, row: u64, column: usize) -> Option<&str> {
+        text_of(document, RowId::Source(row), ColumnId::Source(column))
+    }
+
+    fn extending(step: CursorStep) -> Intent {
+        Intent::Move {
+            step,
+            mode: SelectionMode::Extend,
+        }
+    }
+
+    /// 切り取って同じ窓で貼ると、貼った後に元が空になり、1 手で戻る（ADR 0029 の決定 5）。切り取っただけでは元は残る。
+    #[test]
+    fn cutting_and_pasting_in_the_window_moves_the_values_in_one_step() {
+        let mut document = indexed_editable();
+        document.apply(extending(CursorStep::Right), normal());
+        let text = cut_text(&mut document);
+        assert_eq!(text, "0012\t東京\r\n");
+        assert!(document.edits().is_empty());
+        assert!(document.live_cut().is_some());
+        text_at(
+            &document.frame(normal(), palette()),
+            "1 行 × 2 列を切り取りました（貼るまで元は残ります・Esc でやめる）",
+        );
+        document.apply(moving(CursorStep::Left), normal());
+        document.apply(moving(CursorStep::Down), normal());
+        document.apply(moving(CursorStep::Down), normal());
+        pasted(&mut document, &text);
+        assert_eq!(
+            [cell_text(&document, 2, 0), cell_text(&document, 2, 1)],
+            [Some("0012"), Some("東京")]
+        );
+        assert_eq!(
+            [cell_text(&document, 0, 0), cell_text(&document, 0, 1)],
+            [Some(""), Some("")]
+        );
+        assert!(document.live_cut().is_none());
+        text_at(
+            &document.frame(normal(), palette()),
+            "1 行 × 2 列を動かしました",
+        );
+        document.apply(Intent::Undo, normal());
+        assert!(document.edits().is_empty());
+    }
+
+    /// 元と貼る先が重なれば、重なった所は貼った値になる（ADR 0029 の決定 5）。
+    #[test]
+    fn a_moved_range_that_overlaps_keeps_the_pasted_values() {
+        let mut document = indexed_editable();
+        document.apply(extending(CursorStep::Down), normal());
+        let text = cut_text(&mut document);
+        // 範囲を広げた後のカーソルは下の端（2 行目）。畳んで 1 つ下（2 行目）から貼る。
+        document.apply(moving(CursorStep::Up), normal());
+        document.apply(moving(CursorStep::Down), normal());
+        pasted(&mut document, &text);
+        assert_eq!(
+            [
+                cell_text(&document, 0, 0),
+                cell_text(&document, 1, 0),
+                cell_text(&document, 2, 0)
+            ],
+            [Some(""), Some("0012"), Some("b1")]
+        );
+    }
+
+    /// Esc・直し始め・表を変える操作・ほかで置いた文字列では、貼っても元を消さない（ただのコピーとして貼る）。
+    #[test]
+    fn a_cut_that_was_dropped_pastes_as_a_copy() {
+        let drops: [fn(&mut Document); 3] = [
+            |document| {
+                document.apply(Intent::Cancel, normal());
+            },
+            |document| {
+                typed(document, "x");
+                document.apply(Intent::Cancel, normal());
+            },
+            |document| {
+                document.apply(Intent::InsertRows(RowPlace::End), normal());
+            },
+        ];
+        for drop in drops {
+            let mut document = indexed_editable();
+            let text = cut_text(&mut document);
+            drop(&mut document);
+            assert!(document.live_cut().is_none());
+            document.apply(moving(CursorStep::Top), normal());
+            document.apply(moving(CursorStep::Down), normal());
+            pasted(&mut document, &text);
+            assert_eq!(cell_text(&document, 0, 0), None);
+            assert_eq!(cell_text(&document, 1, 0), Some("0012"));
+        }
+        // ほかのアプリが置いた文字列（切り取りの文字列と違う）なら、枠があっても元を消さない。
+        let mut document = indexed_editable();
+        let _text = cut_text(&mut document);
+        document.apply(moving(CursorStep::Down), normal());
+        pasted(&mut document, "other\r\n");
+        assert_eq!(cell_text(&document, 0, 0), None);
+        assert_eq!(cell_text(&document, 1, 0), Some("other"));
+    }
+
+    /// 離れた範囲は切り取らずに知らせる（Excel と同じ）。
+    #[test]
+    fn many_ranges_are_not_cut() {
+        let mut document = indexed_editable();
+        document.others.push(document.selection);
+        assert_eq!(document.apply(Intent::Cut, normal()), DocumentEffect::Stay);
+        text_at(
+            &document.frame(normal(), palette()),
+            "離れた範囲は切り取れません（1 つの範囲を選んでください）",
+        );
     }
 
     /// 編集中の貼り付けは字のまま（引用を解かない・レビューで見つけた）。

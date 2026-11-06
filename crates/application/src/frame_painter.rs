@@ -35,6 +35,7 @@ pub(crate) struct FramePainter<'view> {
     palette: Palette,
     size: PixelSize,
     selection: Option<Ranges<'view>>,
+    cut: Option<Selection>,
     order: &'view [usize],
     column_ids: &'view [ColumnId],
     edits: Option<&'view CellEdits>,
@@ -47,6 +48,10 @@ pub(crate) struct FramePainter<'view> {
 const CURSOR_LINE: u32 = 2;
 /// 選んだ範囲の外周の枠の太さ（画素・100% のとき）。
 const SELECTION_LINE: u32 = 1;
+/// 切り取りの点線の枠の太さ（画素・100% のとき・ADR 0029 の決定 5）。
+const CUT_LINE: u32 = 2;
+/// 切り取りの点線の 1 つの長さと間（画素・100% のとき）。
+const CUT_DASH: u32 = 4;
 /// 左に固定した列と横に動く列の境の線の太さ（画素・100% のとき・VIEW-01）。
 const FROZEN_LINE: u32 = 2;
 /// 編集の欄のカーソルの棒の太さ（論理の画素）。
@@ -68,6 +73,7 @@ impl<'view> FramePainter<'view> {
             palette,
             size,
             selection: None,
+            cut: None,
             order: &[],
             column_ids: &[],
             edits: None,
@@ -84,6 +90,11 @@ impl<'view> FramePainter<'view> {
     }
 
     /// 列の表示の順 `order`（表示の位置 → 元の列）で描く（入れ替えは表示だけ・Issue #49）。
+    /// 切り取った範囲 `cut`（点線の枠で示す・無ければ `None`）。
+    pub(crate) fn with_cut(self, cut: Option<Selection>) -> Self {
+        Self { cut, ..self }
+    }
+
     pub(crate) fn with_order(self, order: &'view [usize]) -> Self {
         Self { order, ..self }
     }
@@ -215,6 +226,7 @@ impl<'view> FramePainter<'view> {
             self.paint_shown_cell(rect, (row, style, source), mark);
             if let RowStyle::Body(body) = style {
                 self.edges(rect, body, column);
+                self.cut_edges(rect, body, column);
             }
             if mark == CellMark::Cursor {
                 cursor = Some(rect);
@@ -368,6 +380,54 @@ impl<'view> FramePainter<'view> {
                 PixelPoint::new(right, top),
                 PixelSize::new(line, height),
             ));
+        }
+    }
+
+    /// 切り取った範囲の外周に当たる、セル（本体の `body` 行・`column` 列）の辺を点線で描く。
+    fn cut_edges(&mut self, rect: PixelRect, body: u64, column: usize) {
+        let Some(cut) = self.cut.filter(|cut| cut.contains(body, column)) else {
+            return;
+        };
+        let (top_left, bottom_right) = (cut.top_left(), cut.bottom_right());
+        let (left, top) = (rect.origin().x(), rect.origin().y());
+        let (width, height) = (rect.size().width(), rect.size().height());
+        let line = self.metrics.px(CUT_LINE).min(width).min(height);
+        let right = left.saturating_add(width).saturating_sub(line);
+        let bottom = top.saturating_add(height).saturating_sub(line);
+        if body == top_left.body() {
+            self.dashed(PixelPoint::new(left, top), (width, line), true);
+        }
+        if body == bottom_right.body() {
+            self.dashed(PixelPoint::new(left, bottom), (width, line), true);
+        }
+        if column == top_left.column() {
+            self.dashed(PixelPoint::new(left, top), (line, height), false);
+        }
+        if column == bottom_right.column() {
+            self.dashed(PixelPoint::new(right, top), (line, height), false);
+        }
+    }
+
+    /// `from` から幅 × 高さ `size` の帯を、横（`across`）か縦に点線で描く。
+    fn dashed(&mut self, from: PixelPoint, (width, height): (u32, u32), across: bool) {
+        let dash = self.metrics.px(CUT_DASH).max(1);
+        let length = if across { width } else { height };
+        let mut offset = 0_u32;
+        while offset < length {
+            let piece = dash.min(length.saturating_sub(offset));
+            let (origin, size) = if across {
+                (
+                    PixelPoint::new(from.x().saturating_add(offset), from.y()),
+                    PixelSize::new(piece, height),
+                )
+            } else {
+                (
+                    PixelPoint::new(from.x(), from.y().saturating_add(offset)),
+                    PixelSize::new(width, piece),
+                )
+            };
+            self.overlay(PixelRect::new(origin, size));
+            offset = offset.saturating_add(dash.saturating_mul(2));
         }
     }
 

@@ -68,6 +68,8 @@ pub enum Intent {
     UnfreezeColumns,
     /// 選択した矩形をコピーする（Ctrl+C）。
     Copy,
+    /// 選択した矩形を切り取る（Ctrl+X）。コピーと同じ文字列を置き、この窓で貼ったら元を空にする（ADR 0029 の決定 5）。
+    Cut,
     /// 詳細ペインを開閉する（Ctrl+Shift+U）。
     ToggleDetail,
     /// 配色を表の中で替える（試しに・Ctrl+Shift+T と Ctrl+Shift+Alt+T）。

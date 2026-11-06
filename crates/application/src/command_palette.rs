@@ -154,6 +154,7 @@ impl CommandPalette {
             | Intent::UnfreezeColumns
             | Intent::GoTo(_)
             | Intent::Copy
+            | Intent::Cut
             | Intent::ToggleDetail
             | Intent::Theme(_)
             | Intent::Zoom(_)

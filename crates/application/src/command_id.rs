@@ -60,6 +60,8 @@ pub enum CommandId {
     UnfreezeColumns,
     /// 選んだ範囲をコピーする。
     Copy,
+    /// 選んだ範囲を切り取る（Ctrl+X・ADR 0029 の決定 5）。
+    Cut,
     /// 書き換えを保存する（ADR 0026 の決定 6）。
     Save,
     /// 名前を付けて保存する。
@@ -90,7 +92,7 @@ pub enum CommandId {
 
 impl CommandId {
     /// すべての操作（何も打たないときの順）。
-    pub const ALL: [Self; 36] = [
+    pub const ALL: [Self; 37] = [
         Self::Top,
         Self::Bottom,
         Self::GoTo,
@@ -114,6 +116,7 @@ impl CommandId {
         Self::FreezeColumns,
         Self::UnfreezeColumns,
         Self::Copy,
+        Self::Cut,
         Self::Save,
         Self::SaveAs,
         Self::NewTable,
@@ -160,6 +163,7 @@ impl CommandId {
             Self::FreezeColumns => "カーソルの列まで左に固定する",
             Self::UnfreezeColumns => "列の固定を外す",
             Self::Copy => "選んだ範囲をコピーする",
+            Self::Cut => "選んだ範囲を切り取る（貼るまで元は消さない）",
             Self::Save => "変えた所を保存する",
             Self::SaveAs => "名前を付けて保存する",
             Self::NewTable => "新しい表を作る",
@@ -203,6 +207,7 @@ impl CommandId {
             Self::FreezeColumns => "かーそるのれつまでひだりにこていする",
             Self::UnfreezeColumns => "れつのこていをはずす",
             Self::Copy => "えらんだはんいをこぴーする",
+            Self::Cut => "えらんだはんいをきりとる",
             Self::Save => "かえたところをほぞんする",
             Self::SaveAs => "なまえをつけてほぞんする",
             Self::NewTable => "あたらしいひょうをつくる",
@@ -253,6 +258,7 @@ impl CommandId {
             Self::FreezeColumns => &["freeze", "pin", "lock columns", "fixed column"],
             Self::UnfreezeColumns => &["unfreeze", "unpin", "unlock columns"],
             Self::Copy => &["copy", "clipboard"],
+            Self::Cut => &["cut", "move", "clipboard"],
             Self::Save => &["save", "write"],
             Self::SaveAs => &["saveas", "save as", "export"],
             Self::NewTable => &["new", "create", "blank"],
@@ -304,6 +310,7 @@ impl CommandId {
             Self::InsertRowsAbove | Self::InsertColumnsLeft => Some("Ctrl+Plus"),
             Self::RemoveRows | Self::RemoveColumns => Some("Ctrl+Minus"),
             Self::Copy => Some("Ctrl+C"),
+            Self::Cut => Some("Ctrl+X"),
             Self::Save => Some("Ctrl+S"),
             Self::SaveAs => Some("Ctrl+Shift+S"),
             Self::NewTable => Some("Ctrl+N"),
@@ -339,6 +346,7 @@ impl CommandId {
             | Self::FreezeColumns
             | Self::UnfreezeColumns
             | Self::Copy
+            | Self::Cut
             | Self::Save
             | Self::SaveAs
             | Self::NewTable
@@ -387,6 +395,7 @@ impl CommandId {
             Self::FreezeColumns => Some(Intent::FreezeColumns),
             Self::UnfreezeColumns => Some(Intent::UnfreezeColumns),
             Self::Copy => Some(Intent::Copy),
+            Self::Cut => Some(Intent::Cut),
             Self::Save => Some(Intent::Save),
             Self::SaveAs => Some(Intent::SaveAs),
             Self::NewTable => Some(Intent::NewTable),

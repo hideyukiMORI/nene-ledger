@@ -3,6 +3,8 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
+use nene_ledger_core::cell_change::CellChange;
+
 /// 貼る束と、貼る所（本体の行・表示の列）と大きさ。束が 1 つのセルで範囲が広ければ、範囲の全部に同じ値を書く。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PendingPaste {
@@ -12,6 +14,7 @@ pub struct PendingPaste {
     rows: u64,
     columns: usize,
     fill: bool,
+    clears: Vec<(CellChange, String)>,
 }
 
 impl PendingPaste {
@@ -27,6 +30,7 @@ impl PendingPaste {
             rows,
             columns,
             fill: false,
+            clears: Vec::new(),
         }
     }
 
@@ -44,7 +48,26 @@ impl PendingPaste {
             rows,
             columns,
             fill: true,
+            clears: Vec::new(),
         }
+    }
+
+    /// この窓で切り取った元を、貼った後に空にする書き換え `clears`（ADR 0029 の決定 5）を持たせる。
+    #[must_use]
+    pub fn moving(mut self, clears: Vec<(CellChange, String)>) -> Self {
+        self.clears = clears;
+        self
+    }
+
+    /// 切り取りを貼るか（元を空にする書き換えを持つ）。
+    #[must_use]
+    pub fn is_move(&self) -> bool {
+        !self.clears.is_empty()
+    }
+
+    /// 元を空にする書き換え（取り出す）。
+    pub fn take_clears(&mut self) -> Vec<(CellChange, String)> {
+        core::mem::take(&mut self.clears)
     }
 
     /// 貼る最初の行（本体の番目）。

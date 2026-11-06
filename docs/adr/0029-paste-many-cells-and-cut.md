@@ -65,8 +65,11 @@ GitHub Issue #115 で、Ctrl+V で OS のクリップボードの文字列を読
   - 1 つのセルの束で広い範囲を選ぶと、範囲のすべてに書く。束が端を越えると、足りない行と列を足す（application のテスト `pasting_one_value_over_a_range_fills_it`・`pasting_past_the_edges_adds_rows_and_columns`）
   - 上限を超える貼り付けは何も書かない（application のテスト `pastes_that_cannot_be_written_change_nothing`。索引を作っている途中で今読める所より下に届く貼り付け・切り詰めた行への貼り付けも同じ）
   - 貼った値を変えない（先頭の 0・日付に見える値・指数表記・application のテスト `pasted_values_are_kept_as_text`・X11 は gate-proofs 第 75 節）
+- **active**（GitHub Issue #149 で入れた）:
+  - 切り取って同じ窓で貼ると元が空になり（1 手で戻る）、元と貼る先が重なった所は貼った値になる（application のテスト `cutting_and_pasting_in_the_window_moves_the_values_in_one_step`・`a_moved_range_that_overlaps_keeps_the_pasted_values`）
+  - Esc・直し始め・表を変える操作で枠が消えた後や、ほかで置いた文字列を貼っても元は残る（application のテスト `a_cut_that_was_dropped_pastes_as_a_copy`。枠を残す意図と消す意図の表は `document::keeps_cut`・閉じた enum の網羅）
+  - 離れた範囲は切り取らない（application のテスト `many_ranges_are_not_cut`）
 - **planned**:
-  - 切り取って同じ窓で貼ると元が空になり、ほかの操作で枠が消えた後に貼っても元は残る（決定 5・6 の実装の Issue で）
   - Excel から貼った値が変わらない（Windows の実機・gate-proofs）
 
 ## 結果
