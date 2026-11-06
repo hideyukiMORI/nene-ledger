@@ -7,6 +7,7 @@ use nene_ledger_core::dialect_candidate::DialectCandidate;
 use nene_ledger_core::draw_command::DrawCommand;
 use nene_ledger_core::palette::Palette;
 
+use crate::about_line::AboutLine;
 use crate::command_id::CommandId;
 use crate::cursor_step::CursorStep;
 use crate::detail_pane::DetailPane;
@@ -98,6 +99,7 @@ impl CommandPalette {
             | PaletteMode::Find
             | PaletteMode::Replace { with: false }
             | PaletteMode::Keys
+            | PaletteMode::About
             | PaletteMode::Themes { .. }
             | PaletteMode::Reading { .. }
             | PaletteMode::Candidates { .. }
@@ -169,6 +171,7 @@ impl CommandPalette {
             | PaletteMode::Replace { .. }
             | PaletteMode::SaveAs { .. } => Vec::new(),
             PaletteMode::Keys => key_list(&self.query),
+            PaletteMode::About => AboutLine::ALL.map(PaletteItem::About).to_vec(),
             PaletteMode::Themes { .. } => themes(&self.query),
             PaletteMode::Reading { aspect, .. } => readings(aspect, &self.query),
             PaletteMode::Candidates { .. } => {
@@ -253,6 +256,7 @@ impl CommandPalette {
             | PaletteMode::Find
             | PaletteMode::Replace { .. }
             | PaletteMode::Keys
+            | PaletteMode::About
             | PaletteMode::Reading { .. }
             | PaletteMode::Candidates { .. }
             | PaletteMode::Themes { .. } => self.confirm(current_theme),
@@ -278,6 +282,7 @@ impl CommandPalette {
             }),
             PaletteMode::Commands
             | PaletteMode::Keys
+            | PaletteMode::About
             | PaletteMode::Themes { .. }
             | PaletteMode::Reading { .. }
             | PaletteMode::Candidates { .. }
@@ -424,7 +429,8 @@ impl CommandPalette {
             Some(&PaletteItem::Candidate(candidate)) => {
                 PaletteOutcome::PreviewReading(ReadingChoice::dialect(candidate.dialect()))
             }
-            Some(&PaletteItem::Command(_) | &PaletteItem::Key(_)) | None => PaletteOutcome::Stay,
+            Some(&PaletteItem::Command(_) | &PaletteItem::Key(_) | &PaletteItem::About(_))
+            | None => PaletteOutcome::Stay,
         }
     }
 
@@ -446,6 +452,7 @@ impl CommandPalette {
             | PaletteMode::Find
             | PaletteMode::Replace { .. }
             | PaletteMode::Keys
+            | PaletteMode::About
             | PaletteMode::SaveAs { .. } => PaletteOutcome::Close,
             PaletteMode::Themes { original } => PaletteOutcome::Revert(original),
             PaletteMode::Reading { .. } | PaletteMode::Candidates { .. } => {
@@ -465,7 +472,7 @@ impl CommandPalette {
     fn confirm(&mut self, current_theme: usize) -> PaletteOutcome {
         match self.items().get(self.selected()) {
             // パレットに無いキーの行は読むだけ。
-            None | Some(&PaletteItem::Key(_)) => PaletteOutcome::Stay,
+            None | Some(&PaletteItem::Key(_) | &PaletteItem::About(_)) => PaletteOutcome::Stay,
             Some(&PaletteItem::Theme(position)) => PaletteOutcome::Commit(position),
             Some(&PaletteItem::Reading(choice)) => PaletteOutcome::CommitReading(choice),
             Some(&PaletteItem::Candidate(candidate)) => {
@@ -489,6 +496,11 @@ impl CommandPalette {
         self.query.clear();
         if command == CommandId::ShowKeys {
             self.mode = PaletteMode::Keys;
+            self.selected = 0;
+            return PaletteOutcome::Stay;
+        }
+        if command == CommandId::ShowAbout {
+            self.mode = PaletteMode::About;
             self.selected = 0;
             return PaletteOutcome::Stay;
         }
@@ -718,14 +730,15 @@ mod tests {
         };
         palette.handle(moving(CursorStep::Bottom), 0);
         assert_eq!(palette.selected(), CommandId::ALL.len() - 1);
-        // 1 回の PageUp は 10 件。操作は 34 なので 4 回で先頭（最後は 0 で止まる）。
-        for page in 1..=3 {
+        // 1 回の PageUp は 10 件。残りが 10 件より少なくなったら、次の 1 回で先頭（0 で止まる）。
+        let pages = (CommandId::ALL.len() - 1) / 10;
+        for page in 1..=pages {
             palette.handle(moving(CursorStep::PageUp), 0);
             assert_eq!(palette.selected(), CommandId::ALL.len() - 1 - 10 * page);
         }
         palette.handle(moving(CursorStep::PageUp), 0);
         assert_eq!(palette.selected(), 0);
-        for page in 1..=3 {
+        for page in 1..=pages {
             palette.handle(moving(CursorStep::PageDown), 0);
             assert_eq!(palette.selected(), 10 * page);
         }

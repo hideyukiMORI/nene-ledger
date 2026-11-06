@@ -19,6 +19,8 @@ pub enum PaletteMode {
     },
     /// キーの一覧（Issue #63）。
     Keys,
+    /// 「このアプリについて」（版・著作権・ライセンス・ADR 0032）。
+    About,
     /// 判別の候補を選ぶ段（Issue #3）。候補そのものは `CommandPalette` が持つ。`current` は今の読み方（印を付け、Esc で戻す先）。
     Candidates {
         /// 今の読み方（方言）。
@@ -56,6 +58,7 @@ impl PaletteMode {
             | Self::Find
             | Self::Replace { .. }
             | Self::Keys
+            | Self::About
             | Self::SaveAs { .. } => false,
         }
     }

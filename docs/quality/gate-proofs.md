@@ -920,6 +920,17 @@ PR の枝の exe を Xvfb に出し、`xdotool` で操作した（2026-11-06）�
 
 64 桁の根拠：Xvfb の画面写し（Noto Sans CJK JP・倍率 100%）で 1 桁 ≈ 6.6 px。パレットのいちばん狭い幅（480 px）で字を置ける幅 ≈ 444 px ≈ 67 桁。切れた案内は 74・78・83 桁、収まった案内は 64・65 桁。🔴 Windows の字体（DirectWrite）の幅では測っていない。
 
+## 83. 版の表示と「このアプリについて」（GitHub Issue #179・ADR 0032 の決定 6）— 仮想の X サーバでの確認（QLT-013）
+
+PR の枝の exe（2026-11-06）:
+
+| # | 操作 | 結果 |
+| --- | --- | --- |
+| 1 | `nene-ledger --version` | `NeNe Ledger 0.1.0`・終了 0（`Cargo.toml` の版・`env!("CARGO_PKG_VERSION")`） |
+| 2 | Xvfb で Ctrl+Shift+P・`about`・Enter | パレットに `NeNe Ledger 0.1.0` / `Copyright (c) 2026 Hideyuki Mori` / ライセンスの要旨 / `無保証（NeNe Ledger License 1.0・LicenseRef-NeNe-Ledger-1.0）` / `全文は LICENSE、部品の著作権表示は THIRD-PARTY-NOTICES.txt` / リポジトリの URL。どの行もパレットの幅に収まる（64 桁以下をテストで見る） |
+
+Windows の exe の `--version`（コマンドプロンプトに結んで書く）は実機でまだ。`THIRD-PARTY-NOTICES.txt` は配る zip に入れる（次の Issue）。
+
 ## 7. active の規則と、その証明
 
 CNF-009 は active の規則ごとに `| ID |` で始まる行がここにあることを要求する。

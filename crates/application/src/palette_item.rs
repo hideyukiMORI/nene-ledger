@@ -2,6 +2,7 @@
 
 use nene_ledger_core::dialect_candidate::DialectCandidate;
 
+use crate::about_line::AboutLine;
 use crate::command_id::CommandId;
 use crate::key_guide::KeyGuide;
 use crate::reading_choice::ReadingChoice;
@@ -19,4 +20,6 @@ pub enum PaletteItem {
     Key(KeyGuide),
     /// 判別の候補の方言（点数の順・Issue #3）。
     Candidate(DialectCandidate),
+    /// 「このアプリについて」の行（読むだけ・ADR 0032）。
+    About(AboutLine),
 }
