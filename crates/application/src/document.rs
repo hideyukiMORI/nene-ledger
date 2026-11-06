@@ -580,6 +580,16 @@ impl Document {
         &self.title
     }
 
+    /// 窓の名前（自前のタイトルバーと OS の窓の名前）。未保存の書き換えがあれば頭に印を付ける（WIN-01・ADR 0026 の決定 7）。
+    #[must_use]
+    pub fn window_name(&self) -> String {
+        if self.has_unsaved() {
+            format!("● {}", self.title)
+        } else {
+            self.title.clone()
+        }
+    }
+
     /// 読み方の要約（文字コード・方言・改行の内訳）。
     #[must_use]
     pub fn format_summary(&self) -> FormatSummary {
@@ -4081,13 +4091,7 @@ impl Document {
             .into_iter()
             .map(|command| command.offset(dx, dy))
             .collect();
-        // 未保存の書き換えがあれば、題名の頭に印を付ける（WIN-01・ADR 0026 の決定 7）。
-        let title = if self.has_unsaved() {
-            format!("● {}", self.title)
-        } else {
-            self.title.clone()
-        };
-        commands.extend(ChromePainter::new(view, palette).title_bar(&title));
+        commands.extend(ChromePainter::new(view, palette).title_bar(&self.window_name()));
         commands.extend(ChromePainter::new(view, palette).border());
         if self.closing == CloseState::Asking {
             // 尋ねる画面は窓の真ん中に、表の上に重ねる（位置は窓の左上が原点・押した位置と同じ）。
@@ -6613,6 +6617,11 @@ mod tests {
         let frame = document.frame(normal(), palette());
         text_at(&frame, "13");
         text_at(&frame, "● e.csv — NeNe Ledger");
+        assert_eq!(
+            document.window_name(),
+            "● e.csv — NeNe Ledger",
+            "OS の窓の名前も同じ（#167）"
+        );
     }
 
     #[test]
