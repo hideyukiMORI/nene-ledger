@@ -7,4 +7,6 @@ pub enum FindToggle {
     Case,
     /// 部分一致かセル全体か（Alt+W）。
     WholeCell,
+    /// 文字どおりか正規表現か（Alt+R・ADR 0031）。
+    Regex,
 }

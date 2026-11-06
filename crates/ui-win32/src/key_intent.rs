@@ -41,6 +41,7 @@ const VK_X: u16 = 0x58;
 const VK_F: u16 = 0x46;
 const VK_H: u16 = 0x48;
 const VK_W: u16 = 0x57;
+const VK_R: u16 = 0x52;
 const VK_F3: u16 = 0x72;
 const VK_P: u16 = 0x50;
 const VK_S: u16 = 0x53;
@@ -90,6 +91,7 @@ pub(crate) fn key_intent(key: u16, modifiers: Modifiers) -> Option<Intent> {
         // 検索の欄の条件の切り替え（ADR 0030 の決定 3）。`WM_SYSKEYDOWN` で届く。表の上では何もしない。
         VK_C if alt && !control => return Some(Intent::FindToggle(FindToggle::Case)),
         VK_W if alt && !control => return Some(Intent::FindToggle(FindToggle::WholeCell)),
+        VK_R if alt && !control => return Some(Intent::FindToggle(FindToggle::Regex)),
         VK_A if alt && !control => return Some(Intent::ReplaceAll),
         VK_ESCAPE => return Some(Intent::Cancel),
         // Alt+Enter は `WM_SYSKEYDOWN` で届く（ui の側で同じ関数に渡す）。
@@ -516,6 +518,10 @@ mod tests {
         assert_eq!(
             key_intent(VK_C, Modifiers::new(false, false, true)),
             Some(Intent::FindToggle(FindToggle::Case))
+        );
+        assert_eq!(
+            key_intent(VK_R, Modifiers::new(false, false, true)),
+            Some(Intent::FindToggle(FindToggle::Regex))
         );
     }
 }

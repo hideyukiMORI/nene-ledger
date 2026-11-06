@@ -352,6 +352,7 @@ impl CommandPalette {
             self.find_options = match toggle {
                 FindToggle::Case => self.find_options.toggled_case(),
                 FindToggle::WholeCell => self.find_options.toggled_whole_cell(),
+                FindToggle::Regex => self.find_options.toggled_regex(),
             };
             return PaletteOutcome::Stay;
         }

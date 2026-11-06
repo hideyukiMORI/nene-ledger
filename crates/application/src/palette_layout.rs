@@ -75,7 +75,7 @@ impl PaletteLayout {
         let fit = (room / row_height.max(1)).clamp(1, MAX_ROWS);
         let count = u32::try_from(palette.items().len())
             .unwrap_or(u32::MAX)
-            .max(1);
+            .max(least_rows(palette.mode()));
         let visible = usize::try_from(count.min(fit)).unwrap_or(1);
         let first = palette.selected().saturating_add(1).saturating_sub(visible);
         let list_height = row_height.saturating_mul(u32::try_from(visible).unwrap_or(1));
@@ -155,6 +155,15 @@ impl PaletteLayout {
 
 fn rect(left: u32, top: u32, width: u32, height: u32) -> PixelRect {
     PixelRect::new(PixelPoint::new(left, top), PixelSize::new(width, height))
+}
+
+/// 候補が無くても取る行の数。知らせの 1 行、置換の段は置き換え方のキーと条件の 2 行（ADR 0030 の決定 6）。
+fn least_rows(mode: PaletteMode) -> u32 {
+    if let PaletteMode::Replace { .. } = mode {
+        2
+    } else {
+        1
+    }
 }
 
 fn bottom(rect: PixelRect) -> u32 {

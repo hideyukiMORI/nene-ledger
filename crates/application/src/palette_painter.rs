@@ -2,12 +2,14 @@
 
 use alloc::format;
 use alloc::string::String;
+use alloc::vec;
 use alloc::vec::Vec;
 
 use nene_ledger_core::color::Color;
 use nene_ledger_core::dialect_candidate::DialectCandidate;
 use nene_ledger_core::display_width::display_columns;
 use nene_ledger_core::draw_command::DrawCommand;
+use nene_ledger_core::find_query::FindQuery;
 use nene_ledger_core::glyph_metrics::GlyphMetrics;
 use nene_ledger_core::palette::Palette;
 use nene_ledger_core::pixel_point::PixelPoint;
@@ -250,18 +252,19 @@ impl<'state> PalettePainter<'state> {
         self.text_at(from_left(row, left), text, self.colors.gutter_text());
     }
 
-    /// 探す段と置換の段の 1 行。今の条件と切り替えるキー（ADR 0030 の決定 3・全角半角は区別しない）。置換の段は
-    /// 置き換え方のキーを前に足し、パレットの幅に収まるよう条件の言葉を縮める（決定 6）。
+    /// 探す段と置換の段の案内。今の条件と切り替えるキー（ADR 0030 の決定 3・全角半角は区別しない）。置換の段は 1 行目に
+    /// 置き換え方のキー、2 行目に条件（決定 6）。正規表現の式が読めなければ、そう出す（ADR 0031）。
     fn find_line(&mut self) {
         let options = self.palette.find_options();
-        let replacing = matches!(self.palette.mode(), PaletteMode::Replace { .. });
-        let (keys, case) = if replacing {
-            ("Enter 置換 · Alt+A 全部 · ", "大小を")
+        let regex = if !options.regex() {
+            "文字どおり"
+        } else if FindQuery::new(self.palette.query(), options).is_broken() {
+            "読めない正規表現"
         } else {
-            ("", "大文字小文字を")
+            "正規表現"
         };
-        let text = format!(
-            "{keys}Alt+C {case}{} · Alt+W {}",
+        let conditions = format!(
+            "Alt+C 大小を{} · Alt+W {} · Alt+R {regex}",
             if options.match_case() {
                 "区別する"
             } else {
@@ -273,9 +276,24 @@ impl<'state> PalettePainter<'state> {
                 "部分一致"
             },
         );
-        let row = self.layout.row(0);
-        let left = row.origin().x().saturating_add(self.px(TEXT_INSET));
-        self.text_at(from_left(row, left), text, self.colors.gutter_text());
+        let lines = if let PaletteMode::Replace { .. } = self.palette.mode() {
+            vec![
+                String::from("Enter 置き換えて次へ · Alt+A 全部 · Shift+Enter 前を探す"),
+                conditions,
+            ]
+        } else {
+            vec![conditions]
+        };
+        for (slot, text) in lines.into_iter().enumerate() {
+            let row = self.layout.row(slot);
+            let left = row.origin().x().saturating_add(self.px(TEXT_INSET));
+            let color = if text.contains("読めない正規表現") {
+                self.colors.cursor()
+            } else {
+                self.colors.gutter_text()
+            };
+            self.text_at(from_left(row, left), text, color);
+        }
     }
 
     /// 保存先の段の 1 行。上書きを尋ねていればその問い、そうでなければ Enter で保存する案内（ADR 0028 の決定 5）。
@@ -644,7 +662,7 @@ mod tests {
         assert!(shown.contains(&"東京"), "{shown:?}");
         assert!(shown.contains(&"探す: “tok”（Tab で替える）"), "{shown:?}");
         assert!(
-            shown.contains(&"Enter 置換 · Alt+A 全部 · Alt+C 大小を区別しない · Alt+W 部分一致"),
+            shown.contains(&"Alt+C 大小を区別しない · Alt+W 部分一致 · Alt+R 文字どおり"),
             "{shown:?}"
         );
         palette.handle(Intent::Advance(CursorStep::Left), 0);
@@ -653,6 +671,24 @@ mod tests {
         assert!(
             texts_now.contains(&"tok") && texts_now.contains(&"置き換える: “東京”（Tab で替える）")
         );
+    }
+
+    /// 探す段の条件の行は Alt+R の状態を出し、正規表現の式が読めなければそう出す（ADR 0031）。置換の段はキーの行が増える。
+    #[test]
+    fn the_find_line_shows_the_regex_state() {
+        let regex = FindOptions::standard().toggled_regex();
+        let broken = CommandPalette::open_find("(b", regex);
+        let shown = broken.paint(view(), colors(), DetailPane::Closed);
+        assert!(
+            texts(&shown)
+                .contains(&"Alt+C 大小を区別しない · Alt+W 部分一致 · Alt+R 読めない正規表現")
+        );
+        let fine = CommandPalette::open_find(r"b\d", regex);
+        let ok = fine.paint(view(), colors(), DetailPane::Closed);
+        assert!(texts(&ok).contains(&"Alt+C 大小を区別しない · Alt+W 部分一致 · Alt+R 正規表現"));
+        let replacing = CommandPalette::open_replace("b", "x", FindOptions::standard());
+        let both = replacing.paint(view(), colors(), DetailPane::Closed);
+        assert!(texts(&both).contains(&"Enter 置き換えて次へ · Alt+A 全部 · Shift+Enter 前を探す"));
     }
 
     /// 判別の候補の段（カンマ 87%・6 列が今の読み方、タブ・引用なし 12%・1 列）。

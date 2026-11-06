@@ -38,6 +38,7 @@ const XK_X: u32 = 0x78;
 const XK_F: u32 = 0x66;
 const XK_H: u32 = 0x68;
 const XK_W: u32 = 0x77;
+const XK_R: u32 = 0x72;
 const XK_F3: u32 = 0xffc0;
 const XK_U: u32 = 0x75;
 const XK_T: u32 = 0x74;
@@ -176,6 +177,7 @@ fn editing_intent(keysym: u32, typed: Option<char>, state: KeyButMask) -> Option
         // 検索の欄の条件の切り替え（ADR 0030 の決定 3）。表の上では何もしない。
         XK_C if alt_only(state) => Some(Intent::FindToggle(FindToggle::Case)),
         XK_W if alt_only(state) => Some(Intent::FindToggle(FindToggle::WholeCell)),
+        XK_R if alt_only(state) => Some(Intent::FindToggle(FindToggle::Regex)),
         // 置換の欄の全部（ADR 0030 の決定 6）。表の上では何もしない。
         XK_A if alt_only(state) => Some(Intent::ReplaceAll),
         XK_RETURN | XK_KP_ENTER if state.contains(KeyButMask::MOD1) => Some(Intent::BreakLine),
@@ -674,6 +676,10 @@ mod tests {
         assert_eq!(
             key_intent(XK_W, Some('w'), KeyButMask::MOD1),
             Some(Intent::FindToggle(FindToggle::WholeCell))
+        );
+        assert_eq!(
+            key_intent(XK_R, Some('r'), KeyButMask::MOD1),
+            Some(Intent::FindToggle(FindToggle::Regex))
         );
     }
 
