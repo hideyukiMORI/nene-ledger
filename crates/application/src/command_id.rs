@@ -62,6 +62,12 @@ pub enum CommandId {
     Copy,
     /// 選んだ範囲を切り取る（Ctrl+X・ADR 0029 の決定 5）。
     Cut,
+    /// 探す（Ctrl+F・ADR 0030 の決定 1）。
+    Find,
+    /// 次を探す（F3）。
+    FindNext,
+    /// 前を探す（Shift+F3）。
+    FindPrevious,
     /// 書き換えを保存する（ADR 0026 の決定 6）。
     Save,
     /// 名前を付けて保存する。
@@ -92,7 +98,7 @@ pub enum CommandId {
 
 impl CommandId {
     /// すべての操作（何も打たないときの順）。
-    pub const ALL: [Self; 37] = [
+    pub const ALL: [Self; 40] = [
         Self::Top,
         Self::Bottom,
         Self::GoTo,
@@ -117,6 +123,9 @@ impl CommandId {
         Self::UnfreezeColumns,
         Self::Copy,
         Self::Cut,
+        Self::Find,
+        Self::FindNext,
+        Self::FindPrevious,
         Self::Save,
         Self::SaveAs,
         Self::NewTable,
@@ -164,6 +173,9 @@ impl CommandId {
             Self::UnfreezeColumns => "列の固定を外す",
             Self::Copy => "選んだ範囲をコピーする",
             Self::Cut => "選んだ範囲を切り取る（貼るまで元は消さない）",
+            Self::Find => "探す（見えている値で）",
+            Self::FindNext => "次を探す",
+            Self::FindPrevious => "前を探す",
             Self::Save => "変えた所を保存する",
             Self::SaveAs => "名前を付けて保存する",
             Self::NewTable => "新しい表を作る",
@@ -208,6 +220,9 @@ impl CommandId {
             Self::UnfreezeColumns => "れつのこていをはずす",
             Self::Copy => "えらんだはんいをこぴーする",
             Self::Cut => "えらんだはんいをきりとる",
+            Self::Find => "さがす",
+            Self::FindNext => "つぎをさがす",
+            Self::FindPrevious => "まえをさがす",
             Self::Save => "かえたところをほぞんする",
             Self::SaveAs => "なまえをつけてほぞんする",
             Self::NewTable => "あたらしいひょうをつくる",
@@ -259,6 +274,9 @@ impl CommandId {
             Self::UnfreezeColumns => &["unfreeze", "unpin", "unlock columns"],
             Self::Copy => &["copy", "clipboard"],
             Self::Cut => &["cut", "move", "clipboard"],
+            Self::Find => &["find", "search", "kensaku"],
+            Self::FindNext => &["find", "next", "search"],
+            Self::FindPrevious => &["find", "previous", "back", "search"],
             Self::Save => &["save", "write"],
             Self::SaveAs => &["saveas", "save as", "export"],
             Self::NewTable => &["new", "create", "blank"],
@@ -311,6 +329,9 @@ impl CommandId {
             Self::RemoveRows | Self::RemoveColumns => Some("Ctrl+Minus"),
             Self::Copy => Some("Ctrl+C"),
             Self::Cut => Some("Ctrl+X"),
+            Self::Find => Some("Ctrl+F"),
+            Self::FindNext => Some("F3"),
+            Self::FindPrevious => Some("Shift+F3"),
             Self::Save => Some("Ctrl+S"),
             Self::SaveAs => Some("Ctrl+Shift+S"),
             Self::NewTable => Some("Ctrl+N"),
@@ -347,6 +368,9 @@ impl CommandId {
             | Self::UnfreezeColumns
             | Self::Copy
             | Self::Cut
+            | Self::Find
+            | Self::FindNext
+            | Self::FindPrevious
             | Self::Save
             | Self::SaveAs
             | Self::NewTable
@@ -396,6 +420,9 @@ impl CommandId {
             Self::UnfreezeColumns => Some(Intent::UnfreezeColumns),
             Self::Copy => Some(Intent::Copy),
             Self::Cut => Some(Intent::Cut),
+            Self::Find => Some(Intent::OpenFind),
+            Self::FindNext => Some(Intent::FindAgain { forward: true }),
+            Self::FindPrevious => Some(Intent::FindAgain { forward: false }),
             Self::Save => Some(Intent::Save),
             Self::SaveAs => Some(Intent::SaveAs),
             Self::NewTable => Some(Intent::NewTable),

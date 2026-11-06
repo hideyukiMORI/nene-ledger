@@ -19,6 +19,10 @@ pub enum DocumentEffect {
     SaveAs,
     /// 裏の保存をやめる（保存の途中の Esc・SAVE-02）。やめたら `Document::save_failed` が届く。
     StopSaving,
+    /// 裏で探す（`Document::take_find_pass` で 1 回分を取り、当たりを `Document::found` に返す・ADR 0030 の決定 4）。
+    Find,
+    /// 裏の検索をやめる（Esc）。やめたら `Document::find_stopped` を呼ぶ。
+    StopFinding,
     /// 裏の集計を止める（Esc）。
     StopTotals,
     /// 行の並びの位置 `first_line` から `count` 行を読んで `Document::copy_text` に渡す（コピー）。

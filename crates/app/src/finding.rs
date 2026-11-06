@@ -15,11 +15,11 @@ use nene_ledger_scan::record_range::RecordRange;
 use nene_ledger_scan::source::Source;
 use nene_ledger_scan::sparse_index::SparseIndex;
 
-use crate::find_bound::FindBound;
 use crate::find_fold::FindFold;
 use crate::open_failure::OpenFailure;
 use crate::opening::guess_format;
 use crate::rows::read_rows;
+use nene_ledger_application::find_bound::FindBound;
 
 /// 一度に読むレコードの数（裏の仕事 `RangeJob` と同じ）。
 const CHUNK_RECORDS: usize = 4_096;

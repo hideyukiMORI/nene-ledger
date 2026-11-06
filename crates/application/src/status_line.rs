@@ -8,6 +8,7 @@ use nene_ledger_core::quoting::Quoting;
 use nene_ledger_core::text_encoding::TextEncoding;
 
 use crate::columns_notice::ColumnsNotice;
+use crate::find_notice::FindNotice;
 use crate::format_summary::FormatSummary;
 use crate::job_state::JobState;
 use crate::notice::Notice;
@@ -17,6 +18,17 @@ use crate::save_problem::SaveProblem;
 use crate::selection_stats::SelectionStats;
 use crate::selection_totals::SelectionTotals;
 use nene_ledger_core::decimal::Decimal;
+
+/// 検索の知らせ。
+fn find_status(notice: FindNotice) -> String {
+    String::from(match notice {
+        FindNotice::Wrapped => "表の端まで探して、反対の端から続けて見つけました",
+        FindNotice::NotFound => "見つかりませんでした",
+        FindNotice::Stopped => "探すのをやめました",
+        FindNotice::Failed => "ファイルを読めなかったので、探すのをやめました",
+        FindNotice::NothingToRepeat => "続けて探すものがありません（Ctrl+F で探す）",
+    })
+}
 
 /// 表への貼り付けの知らせ。
 fn paste_status(notice: PasteNotice) -> String {
@@ -183,6 +195,7 @@ pub fn notice_status(notice: Notice) -> String {
         Notice::SaveFailed(problem) => save_problem_status(problem),
         Notice::NewWindowFailed => String::from("新しい表の窓を開けませんでした"),
         Notice::Paste(paste) => paste_status(paste),
+        Notice::Find(find) => find_status(find),
         Notice::ReopenFailed => {
             String::from("保存しました。開き直せなかったので、表示は保存の前のままです")
         }

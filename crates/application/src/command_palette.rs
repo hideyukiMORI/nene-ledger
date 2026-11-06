@@ -10,6 +10,7 @@ use nene_ledger_core::palette::Palette;
 use crate::command_id::CommandId;
 use crate::cursor_step::CursorStep;
 use crate::detail_pane::DetailPane;
+use crate::find_toggle::FindToggle;
 use crate::go_to_target::GoToTarget;
 use crate::intent::Intent;
 use crate::palette_item::PaletteItem;
@@ -21,6 +22,7 @@ use crate::palette_search::{self, commands, key_list, readings, themes};
 use crate::reading_aspect::ReadingAspect;
 use crate::reading_choice::ReadingChoice;
 use crate::window_view::WindowView;
+use nene_ledger_core::find_options::FindOptions;
 
 /// `PageUp` / `PageDown` で動く候補の数。
 const PAGE: usize = 10;
@@ -33,6 +35,7 @@ pub struct CommandPalette {
     query: String,
     selected: usize,
     candidates: Vec<DialectCandidate>,
+    find_options: FindOptions,
 }
 
 impl CommandPalette {
@@ -44,7 +47,26 @@ impl CommandPalette {
             query: String::new(),
             selected: 0,
             candidates: Vec::new(),
+            find_options: FindOptions::standard(),
         }
+    }
+
+    /// 探す文字を打つ段で開く（Ctrl+F・ADR 0030 の決定 1）。前に探した文字 `text` と条件 `options` を入れておく。
+    #[must_use]
+    pub fn open_find(text: &str, options: FindOptions) -> Self {
+        Self {
+            mode: PaletteMode::Find,
+            query: String::from(text),
+            selected: 0,
+            candidates: Vec::new(),
+            find_options: options,
+        }
+    }
+
+    /// 検索の条件（探す段で切り替える）。
+    #[must_use]
+    pub const fn find_options(&self) -> FindOptions {
+        self.find_options
     }
 
     /// 名前を付けて保存の保存先を打つ段で開く（X11・ADR 0028 の決定 4）。初めの道筋は `initial`（今のファイルのフォルダ）。
@@ -55,6 +77,7 @@ impl CommandPalette {
             query: initial,
             selected: 0,
             candidates: Vec::new(),
+            find_options: FindOptions::standard(),
         }
     }
 
@@ -74,6 +97,7 @@ impl CommandPalette {
             query: String::new(),
             selected: 0,
             candidates: Vec::new(),
+            find_options: FindOptions::standard(),
         }
     }
 
@@ -96,7 +120,7 @@ impl CommandPalette {
             PaletteMode::Commands => commands(&self.query),
             // 飛ぶ先は候補ではなく、打った番号そのもの。
             // 飛ぶ先と保存先は候補ではなく、打った文字列そのもの。
-            PaletteMode::GoTo | PaletteMode::SaveAs { .. } => Vec::new(),
+            PaletteMode::GoTo | PaletteMode::Find | PaletteMode::SaveAs { .. } => Vec::new(),
             PaletteMode::Keys => key_list(&self.query),
             PaletteMode::Themes { .. } => themes(&self.query),
             PaletteMode::Reading { aspect, .. } => readings(aspect, &self.query),
@@ -124,21 +148,22 @@ impl CommandPalette {
             Intent::Type(character) => self.edit_query(Some(character)),
             Intent::Erase => self.edit_query(None),
             Intent::Move { step, .. } => self.step(step),
+            Intent::Confirm
+            | Intent::Advance(CursorStep::Up)
+            | Intent::FindAgain { .. }
+            | Intent::FindToggle(_)
+                if self.mode == PaletteMode::Find =>
+            {
+                self.find_intent(intent)
+            }
             Intent::Confirm if self.mode == PaletteMode::GoTo => GoToTarget::parse(&self.query)
                 .map_or(PaletteOutcome::Stay, |target| {
                     PaletteOutcome::Run(Intent::GoTo(target))
                 }),
-            Intent::Confirm => match self.mode {
-                PaletteMode::SaveAs { .. } if self.query.trim().is_empty() => PaletteOutcome::Stay,
-                PaletteMode::SaveAs { overwrite } => PaletteOutcome::SaveAs { overwrite },
-                PaletteMode::Commands
-                | PaletteMode::GoTo
-                | PaletteMode::Keys
-                | PaletteMode::Reading { .. }
-                | PaletteMode::Candidates { .. }
-                | PaletteMode::Themes { .. } => self.confirm(current_theme),
-            },
-            Intent::Cancel | Intent::OpenPalette | Intent::OpenGoTo => self.cancelled(),
+            Intent::Confirm => self.confirmed(current_theme),
+            Intent::Cancel | Intent::OpenPalette | Intent::OpenGoTo | Intent::OpenFind => {
+                self.cancelled()
+            }
             Intent::Scroll(_)
             | Intent::Point { .. }
             | Intent::DoubleClick { .. }
@@ -155,6 +180,8 @@ impl CommandPalette {
             | Intent::GoTo(_)
             | Intent::Copy
             | Intent::Cut
+            | Intent::FindAgain { .. }
+            | Intent::FindToggle(_)
             | Intent::ToggleDetail
             | Intent::Theme(_)
             | Intent::Zoom(_)
@@ -175,6 +202,38 @@ impl CommandPalette {
             | Intent::InsertHere
             | Intent::RemoveHere => PaletteOutcome::Stay,
         }
+    }
+
+    /// Enter：保存先の段は道筋で保存する（空なら何もしない）、ほかの段は選んでいる候補を決める。
+    fn confirmed(&mut self, current_theme: usize) -> PaletteOutcome {
+        match self.mode {
+            PaletteMode::SaveAs { .. } if self.query.trim().is_empty() => PaletteOutcome::Stay,
+            PaletteMode::SaveAs { overwrite } => PaletteOutcome::SaveAs { overwrite },
+            PaletteMode::Commands
+            | PaletteMode::GoTo
+            | PaletteMode::Find
+            | PaletteMode::Keys
+            | PaletteMode::Reading { .. }
+            | PaletteMode::Candidates { .. }
+            | PaletteMode::Themes { .. } => self.confirm(current_theme),
+        }
+    }
+
+    /// 探す段の Enter（次）・Shift+Enter（前）・F3・Shift+F3 と、Alt+C・Alt+W の条件の切り替え（ADR 0030 の決定 1・3）。
+    fn find_intent(&mut self, intent: Intent) -> PaletteOutcome {
+        if let Intent::FindToggle(toggle) = intent {
+            self.find_options = match toggle {
+                FindToggle::Case => self.find_options.toggled_case(),
+                FindToggle::WholeCell => self.find_options.toggled_whole_cell(),
+            };
+            return PaletteOutcome::Stay;
+        }
+        let forward = if let Intent::FindAgain { forward } = intent {
+            forward
+        } else {
+            intent == Intent::Confirm
+        };
+        PaletteOutcome::Find { forward }
     }
 
     /// 窓 `view` に重ねる描画命令。色 `colors` はパレットを開いたときの配色（試しても動かない）。`detail` は詳細ペインの開閉。
@@ -256,6 +315,7 @@ impl CommandPalette {
         match self.mode {
             PaletteMode::Commands
             | PaletteMode::GoTo
+            | PaletteMode::Find
             | PaletteMode::Keys
             | PaletteMode::SaveAs { .. } => PaletteOutcome::Close,
             PaletteMode::Themes { original } => PaletteOutcome::Revert(original),
@@ -328,6 +388,38 @@ mod tests {
         for character in text.chars() {
             palette.handle(Intent::Type(character), 0);
         }
+    }
+
+    /// 探す段：Enter で次・Shift+Enter と Shift+F3 で前・Alt+C と Alt+W で条件を切り替え、Esc で閉じる（ADR 0030 の決定 1・3）。
+    #[test]
+    fn the_find_step_searches_both_ways_and_toggles_its_options() {
+        let mut palette = CommandPalette::open_find("tok", FindOptions::standard());
+        assert_eq!(
+            (palette.mode(), palette.query()),
+            (PaletteMode::Find, "tok")
+        );
+        typed(&mut palette, "yo");
+        assert_eq!(palette.query(), "tokyo");
+        assert_eq!(
+            palette.handle(Intent::Confirm, 0),
+            PaletteOutcome::Find { forward: true }
+        );
+        assert_eq!(
+            palette.handle(Intent::Advance(CursorStep::Up), 0),
+            PaletteOutcome::Find { forward: false }
+        );
+        assert_eq!(
+            palette.handle(Intent::FindAgain { forward: false }, 0),
+            PaletteOutcome::Find { forward: false }
+        );
+        assert_eq!(
+            palette.handle(Intent::FindToggle(FindToggle::Case), 0),
+            PaletteOutcome::Stay
+        );
+        palette.handle(Intent::FindToggle(FindToggle::WholeCell), 0);
+        assert!(palette.find_options().match_case() && palette.find_options().whole_cell());
+        assert!(palette.items().is_empty());
+        assert_eq!(palette.handle(Intent::Cancel, 0), PaletteOutcome::Close);
     }
 
     #[test]

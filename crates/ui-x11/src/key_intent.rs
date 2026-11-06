@@ -2,6 +2,7 @@
 
 use nene_ledger_application::column_shift::ColumnShift;
 use nene_ledger_application::cursor_step::CursorStep;
+use nene_ledger_application::find_toggle::FindToggle;
 use nene_ledger_application::intent::Intent;
 use nene_ledger_application::scroll::Scroll;
 use nene_ledger_application::selection_mode::SelectionMode;
@@ -34,6 +35,9 @@ const XK_G: u32 = 0x67;
 const XK_N: u32 = 0x6e;
 const XK_V: u32 = 0x76;
 const XK_X: u32 = 0x78;
+const XK_F: u32 = 0x66;
+const XK_W: u32 = 0x77;
+const XK_F3: u32 = 0xffc0;
 const XK_U: u32 = 0x75;
 const XK_T: u32 = 0x74;
 const XK_P: u32 = 0x70;
@@ -165,7 +169,12 @@ fn editing_intent(keysym: u32, typed: Option<char>, state: KeyButMask) -> Option
     match keysym {
         XK_F1 => Some(Intent::OpenPalette),
         XK_F2 => Some(Intent::Edit),
+        XK_F3 if shift => Some(Intent::FindAgain { forward: false }),
+        XK_F3 => Some(Intent::FindAgain { forward: true }),
         XK_ESCAPE => Some(Intent::Cancel),
+        // 検索の欄の条件の切り替え（ADR 0030 の決定 3）。表の上では何もしない。
+        XK_C if alt_only(state) => Some(Intent::FindToggle(FindToggle::Case)),
+        XK_W if alt_only(state) => Some(Intent::FindToggle(FindToggle::WholeCell)),
         XK_RETURN | XK_KP_ENTER if state.contains(KeyButMask::MOD1) => Some(Intent::BreakLine),
         XK_RETURN | XK_KP_ENTER if shift => Some(Intent::Advance(CursorStep::Up)),
         XK_RETURN | XK_KP_ENTER => Some(Intent::Confirm),
@@ -178,6 +187,11 @@ fn editing_intent(keysym: u32, typed: Option<char>, state: KeyButMask) -> Option
             .filter(|_| !state.contains(KeyButMask::CONTROL))
             .map(Intent::Type),
     }
+}
+
+/// Alt だけを押しているか（Ctrl は押していない）。
+fn alt_only(state: KeyButMask) -> bool {
+    state.contains(KeyButMask::MOD1) && !state.contains(KeyButMask::CONTROL)
 }
 
 /// 行全体・列全体を選ぶキーと、列を移すキー（Issue #62）。Shift+Space は字を打つより先に受ける。
@@ -200,6 +214,7 @@ fn save_intent(keysym: u32, shift: bool) -> Option<Intent> {
         (XK_S, false) => Some(Intent::Save),
         (XK_N, false) => Some(Intent::NewTable),
         (XK_V, false) => Some(Intent::Paste),
+        (XK_F, false) => Some(Intent::OpenFind),
         (XK_C, _) => Some(Intent::Copy),
         (XK_X, _) => Some(Intent::Cut),
         (XK_S | 0x53, true) => Some(Intent::SaveAs),
@@ -630,6 +645,31 @@ mod tests {
         assert_eq!(
             key_intent(XK_Z, Some('z'), plain()),
             Some(Intent::Type('z'))
+        );
+    }
+
+    /// Ctrl+F は検索の欄、F3 / Shift+F3 は続けて探す、Alt+C / Alt+W は検索の条件（ADR 0030）。
+    #[test]
+    fn find_keys() {
+        assert_eq!(
+            key_intent(XK_F, Some('f'), KeyButMask::CONTROL),
+            Some(Intent::OpenFind)
+        );
+        assert_eq!(
+            key_intent(XK_F3, None, plain()),
+            Some(Intent::FindAgain { forward: true })
+        );
+        assert_eq!(
+            key_intent(XK_F3, None, KeyButMask::SHIFT),
+            Some(Intent::FindAgain { forward: false })
+        );
+        assert_eq!(
+            key_intent(XK_C, Some('c'), KeyButMask::MOD1),
+            Some(Intent::FindToggle(FindToggle::Case))
+        );
+        assert_eq!(
+            key_intent(XK_W, Some('w'), KeyButMask::MOD1),
+            Some(Intent::FindToggle(FindToggle::WholeCell))
         );
     }
 }

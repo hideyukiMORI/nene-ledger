@@ -35,4 +35,10 @@ pub enum PaletteOutcome {
         /// 上書きを確かめたか。
         overwrite: bool,
     },
+    /// 開いたまま、打った文字を今の条件で探す（合成ルートが `CommandPalette::query` と `find_options` を読む）。
+    /// `forward` なら次（Enter・F3）、そうでなければ前（Shift+Enter・Shift+F3）。
+    Find {
+        /// 次へ探すか。
+        forward: bool,
+    },
 }

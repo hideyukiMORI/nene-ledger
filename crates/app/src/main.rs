@@ -7,7 +7,6 @@
 
 mod dialect_doubt;
 mod dumping;
-mod find_bound;
 mod find_fold;
 mod finding;
 mod guessed;

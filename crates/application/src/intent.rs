@@ -6,6 +6,7 @@ use nene_ledger_core::pointer_point::PointerPoint;
 use crate::column_place::ColumnPlace;
 use crate::column_shift::ColumnShift;
 use crate::cursor_step::CursorStep;
+use crate::find_toggle::FindToggle;
 use crate::go_to_target::GoToTarget;
 use crate::row_place::RowPlace;
 use crate::scroll::Scroll;
@@ -70,6 +71,15 @@ pub enum Intent {
     Copy,
     /// 選択した矩形を切り取る（Ctrl+X）。コピーと同じ文字列を置き、この窓で貼ったら元を空にする（ADR 0029 の決定 5）。
     Cut,
+    /// 検索の欄を開く（Ctrl+F・ADR 0030 の決定 1）。
+    OpenFind,
+    /// 前に探した問いで、次（`forward`）か前を探す（F3・Shift+F3）。
+    FindAgain {
+        /// 次へ探すか。
+        forward: bool,
+    },
+    /// 検索の欄で条件を切り替える（Alt+C・Alt+W）。
+    FindToggle(FindToggle),
     /// 詳細ペインを開閉する（Ctrl+Shift+U）。
     ToggleDetail,
     /// 配色を表の中で替える（試しに・Ctrl+Shift+T と Ctrl+Shift+Alt+T）。
