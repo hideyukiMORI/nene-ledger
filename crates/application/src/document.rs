@@ -49,6 +49,9 @@ use crate::job_report::JobReport;
 use crate::job_state::JobState;
 use crate::line_hit::LineHit;
 use crate::notice::Notice;
+use crate::paste_notice::PasteNotice;
+use crate::paste_request::PasteRequest;
+use crate::pending_paste::PendingPaste;
 use crate::pointer_hold::PointerHold;
 use crate::pointer_shape::PointerShape;
 use crate::press_kind::PressKind;
@@ -157,6 +160,8 @@ pub struct Document {
     untitled: bool,
     /// 裏の保存の進み具合（書いたバイト数・書く見込みのバイト数・SAVE-02）。
     save_progress: Option<(u64, u64)>,
+    /// 原本の行を読むのを待っている貼り付け（ADR 0029・`paste_rows` で書く）。
+    pasting: Option<PendingPaste>,
 }
 
 /// 状態の行の右端に出すパレットの案内。
@@ -188,6 +193,11 @@ pub const REPEAT_DELAY_TICKS: u64 = 10;
 pub const MAX_TOTAL_ROWS: u64 = 100_000;
 /// 一度にコピーする文字列の上限（バイト）。X11 の 1 つの要求に収める（INCR はまだ）。
 pub const MAX_COPY_BYTES: usize = 4 * 1024 * 1024;
+
+/// 1 回の貼り付けで書くセルの上限（ADR 0029 の決定 4）。
+pub const MAX_PASTE_CELLS: u128 = 1_000_000;
+/// 貼るクリップボードの文字列の上限（バイト・ADR 0029 の決定 4）。
+pub const MAX_PASTE_BYTES: usize = 64 * 1024 * 1024;
 
 /// 足した列の幅（半角の字数・ADR 0027）。
 const NEW_COLUMN_WIDTH: u32 = 8;
@@ -257,6 +267,7 @@ impl Document {
             ),
             untitled: false,
             save_progress: None,
+            pasting: None,
         }
     }
 
@@ -1080,27 +1091,20 @@ impl Document {
         }
     }
 
-    /// クリップボードの文字列 `text` を貼る（CLIP-01）。タブ区切り（Excel の形）として読み、1 つのセルなら：
-    /// カーソルのセルの値をそれにする（1 手として履歴に積む）。編集中は、何であれ字のまま欄のカーソルに挿す（最後の改行は
-    /// 除く・引用は解かない）。編集していなければ、複数のセルはまだ貼らずに知らせる。
-    /// 値は変えない（型を推し量らない・KEEP-01）。
-    pub fn paste(&mut self, text: &str) {
+    /// クリップボードの文字列 `text` を貼る（CLIP-01・ADR 0029）。編集中は、何であれ字のまま欄のカーソルに挿す（最後の
+    /// 改行は除く・引用は解かない）。編集していなければ、タブ区切り（Excel の形）として読み、選んだ最初の範囲の左上から
+    /// 束のまま書く（束が 1 つのセルで範囲が広ければ範囲の全部）。書く前の値と原本の値を履歴に残すため、貼る行を合成ルート
+    /// に読ませる（`PasteRequest::Read` を `paste_rows` に渡す）。値は変えない（型を推し量らない・KEEP-01）。
+    pub fn paste(&mut self, text: &str) -> PasteRequest {
         if self.closing != CloseState::Open || text.is_empty() {
-            return;
+            return PasteRequest::Done;
         }
         if self.saving {
             self.notice = Some(Notice::StillSaving);
-            return;
+            return PasteRequest::Done;
         }
         self.notice = None;
-        let cells = parse_tsv(text);
-        let single = match cells.as_slice() {
-            [row] => match row.as_slice() {
-                [value] => Some(value.clone()),
-                _ => None,
-            },
-            _ => None,
-        };
+        self.pasting = None;
         if let Some(editor) = self.editor.as_mut() {
             // 欄には字のまま挿す（引用を解かない・Excel のセルの中の貼り付けと同じ）。最後の改行だけ除く。
             let raw = text
@@ -1108,21 +1112,319 @@ impl Document {
                 .or_else(|| text.strip_suffix('\n'))
                 .unwrap_or(text);
             editor.insert(raw);
-            return;
+            return PasteRequest::Done;
         }
-        let Some(value) = single else {
-            self.notice = Some(Notice::PasteManyCells {
-                rows: cells.len(),
-                columns: cells.iter().map(Vec::len).max().unwrap_or(0),
-            });
-            return;
+        if text.len() > MAX_PASTE_BYTES {
+            self.notice = Some(Notice::Paste(PasteNotice::TooLarge));
+            return PasteRequest::Done;
+        }
+        let Some(plan) = self.paste_plan(parse_tsv(text)) else {
+            return PasteRequest::Done;
         };
-        if self.begin_edit(EditMode::Entering) {
-            if let Some(editor) = self.editor.as_mut() {
-                editor.insert(&value);
+        let first_line = self.line_of(plan.top());
+        // 表の終わりより下は足す行なので読まない。
+        let (known, _) = self.known_body_rows();
+        let count = if plan.top() < known {
+            let last = plan.bottom().min(known.saturating_sub(1));
+            self.line_of(last)
+                .saturating_sub(first_line)
+                .saturating_add(1)
+        } else {
+            0
+        };
+        self.pasting = Some(plan);
+        PasteRequest::Read { first_line, count }
+    }
+
+    /// 束 `cells` を、選んだ最初の範囲のどこにどの大きさで貼るか。上限を超える・索引を待つなら知らせて `None`。
+    fn paste_plan(&mut self, cells: Vec<Vec<String>>) -> Option<PendingPaste> {
+        let range = self.ranges().all().next().unwrap_or(self.selection);
+        let (top_left, bottom_right) = (range.top_left(), range.bottom_right());
+        let corner = (top_left.body(), top_left.column());
+        let single = match cells.as_slice() {
+            [row] => match row.as_slice() {
+                [value] => Some(value.clone()),
+                _ => None,
+            },
+            _ => None,
+        };
+        let plan = match single {
+            Some(value) if top_left != bottom_right => {
+                if bottom_right.body() == TO_END && self.records().is_none() {
+                    self.notice = Some(Notice::Paste(PasteNotice::AwaitIndex));
+                    return None;
+                }
+                let bottom = bottom_right.body().min(self.last_body());
+                PendingPaste::filling(
+                    value,
+                    corner,
+                    (
+                        bottom.saturating_sub(corner.0).saturating_add(1),
+                        bottom_right
+                            .column()
+                            .saturating_sub(corner.1)
+                            .saturating_add(1),
+                    ),
+                )
             }
-            self.commit_edit();
+            Some(_) | None => PendingPaste::new(cells, corner),
+        };
+        if plan.cell_count() > MAX_PASTE_CELLS {
+            self.notice = Some(Notice::Paste(PasteNotice::TooLarge));
+            return None;
         }
+        if plan.rows() == 0 || plan.columns() == 0 {
+            return None;
+        }
+        let (known, exact) = self.known_body_rows();
+        if !exact && plan.bottom() >= known {
+            self.notice = Some(Notice::Paste(PasteNotice::AwaitIndex));
+            return None;
+        }
+        Some(plan)
+    }
+
+    /// 本体の行の数と、それが表の全部か（索引を作り終えていれば全部・そうでなければ今読める所までで、その先にもあり得る）。
+    fn known_body_rows(&self) -> (u64, bool) {
+        if let Some(records) = self.records() {
+            return (self.body_lines(records), true);
+        }
+        let seen = self
+            .view
+            .first_body()
+            .saturating_add(u64::try_from(self.view.rows().len()).unwrap_or(u64::MAX));
+        (self.reachable_rows().unwrap_or(0).max(seen), false)
+    }
+
+    /// `paste` が読ませた行（位置 `first_record` から読んだ `rows`・切り詰めたレコード `cuts`）に、待っている束を書く。
+    /// 表の端を越えれば足りない行と列を足し、足した列・足した行・書き換えを 1 手の束として積む（ADR 0029 の決定 2・3）。
+    /// 切り詰めた行か「セルが無い」にしたセルにかかれば、何も書かずに知らせる。貼った範囲を選び、カーソルは左上。
+    pub fn paste_rows(
+        &mut self,
+        first_record: u64,
+        (rows, cuts): (&[Vec<String>], &[CutRecord]),
+        window: WindowView,
+    ) -> DocumentEffect {
+        let Some(plan) = self.pasting.take() else {
+            return DocumentEffect::Stay;
+        };
+        if self.saving || self.editor.is_some() || self.closing != CloseState::Open {
+            return DocumentEffect::Stay;
+        }
+        let read = first_record
+            ..first_record.saturating_add(u64::try_from(rows.len()).unwrap_or(u64::MAX));
+        if cuts.iter().any(|cut| read.contains(&cut.record())) {
+            self.notice = Some(Notice::EditCut);
+            return DocumentEffect::Stay;
+        }
+        let mut targets_rows = self.pasted_rows(&plan, first_record, rows);
+        let width = self.widths.columns().len();
+        let targets = self.paste_targets(&plan, width);
+        if self.hits_missing_cell(&plan, &targets_rows, (&targets, width)) {
+            self.notice = Some(Notice::EditMissingCell);
+            return DocumentEffect::Stay;
+        }
+        let mut steps = Vec::new();
+        let added_columns = plan
+            .left()
+            .saturating_add(plan.columns())
+            .saturating_sub(width);
+        if added_columns > 0 {
+            steps.push(EditStep::Columns(self.add_columns(width, added_columns)));
+        }
+        let (known, exact) = self.known_body_rows();
+        let written = u64::try_from(targets_rows.len()).unwrap_or(u64::MAX);
+        let added_rows = if exact {
+            plan.rows().saturating_sub(written)
+        } else {
+            0
+        };
+        if added_rows > 0 {
+            let (ids, change) = self.add_rows(self.line_of(known), added_rows);
+            targets_rows.extend(ids.into_iter().map(|id| (id, Vec::new())));
+            steps.push(EditStep::Rows(change));
+        }
+        let cells = self.paste_changes(&plan, &targets_rows, &targets);
+        self.history.record_batch(steps, cells, &mut self.edits);
+        if added_columns > 0 {
+            let _read = self.after_columns_changed(plan.left(), window);
+        }
+        self.notice = Some(Notice::Paste(PasteNotice::Pasted {
+            rows: u64::try_from(targets_rows.len()).unwrap_or(u64::MAX),
+            columns: plan.columns(),
+            added_rows,
+            added_columns,
+        }));
+        self.select_pasted(&plan, targets_rows.len(), window)
+    }
+
+    /// 位置 `first_record` から読んだ行 `rows` のうち、束 `plan` を書く本体の行（同一性と、表の列の順に並べた原本のセル）。
+    fn pasted_rows(
+        &self,
+        plan: &PendingPaste,
+        first_record: u64,
+        rows: &[Vec<String>],
+    ) -> Vec<(RowId, Vec<String>)> {
+        self.body_cells(first_record, rows)
+            .into_iter()
+            .zip(plan.top()..)
+            .take(usize::try_from(plan.rows()).unwrap_or(usize::MAX))
+            .map(|(cells, body)| {
+                let line = self.line_of(body);
+                let row = self.rows.row_at(line).unwrap_or(RowId::Source(line));
+                (row, self.arranged(cells))
+            })
+            .collect()
+    }
+
+    /// 束 `plan` の各列を書く表の列（表の幅 `width` より右は、これから右の端に足す列）。
+    fn paste_targets(&self, plan: &PendingPaste, width: usize) -> Vec<usize> {
+        (0..plan.columns())
+            .map(|offset| {
+                let display = plan.left().saturating_add(offset);
+                if display < width {
+                    self.source_column(display)
+                } else {
+                    display
+                }
+            })
+            .collect()
+    }
+
+    /// 束 `plan` が、差分で「セルが無い」にしたセルにかかるか（編集と同じく直さない・書く前に確かめて途中で止めない）。
+    fn hits_missing_cell(
+        &self,
+        plan: &PendingPaste,
+        rows: &[(RowId, Vec<String>)],
+        (targets, width): (&[usize], usize),
+    ) -> bool {
+        let cells = rows.iter().zip(0_u64..).flat_map(|((row, _), offset)| {
+            targets
+                .iter()
+                .enumerate()
+                .map(move |(column, &table)| (*row, offset, column, table))
+        });
+        cells
+            .filter(|&(_, offset, column, table)| {
+                table < width && plan.value(offset, column).is_some()
+            })
+            .any(|(row, _, _, table)| {
+                matches!(
+                    self.edits.get(row, self.column_id(table)),
+                    Some(CellValue::Absent)
+                )
+            })
+    }
+
+    /// 行の並びの位置 `at` に、空の行を `count` 行足す。足した行と、足した手を返す（履歴には呼ぶ側が積む）。
+    fn add_rows(&mut self, at: u64, count: u64) -> (Vec<RowId>, RowChange) {
+        let added = self.rows.insert(at, count);
+        let ids = added
+            .iter()
+            .filter_map(|row| match row {
+                RowId::Added(id) => Some(*id),
+                RowId::Source(_) => None,
+            })
+            .collect();
+        (
+            added,
+            RowChange::Inserted {
+                at,
+                runs: vec![OrderRun::Added(ids)],
+            },
+        )
+    }
+
+    /// 表の `at` 列目の前に、空の列を `count` 列足す（幅は足した列の幅）。足した手を返す（履歴には呼ぶ側が積む）。
+    fn add_columns(&mut self, at: usize, count: usize) -> ColumnChange {
+        let ids = self
+            .columns
+            .insert(at, count)
+            .into_iter()
+            .filter_map(|column| match column {
+                ColumnId::Added(id) => Some(id),
+                ColumnId::Source(_) => None,
+            })
+            .collect();
+        let widths = vec![NEW_COLUMN_WIDTH; count];
+        self.columns_inserted(at, &widths);
+        ColumnChange::Inserted {
+            at,
+            runs: vec![OrderRun::Added(ids)],
+            widths,
+        }
+    }
+
+    /// 束 `plan` を行 `rows`（同一性と、表の列の順に並べた原本のセル）と表の列 `targets` に書く書き換えと、書いたセルの
+    /// ファイルの今の値。見えている値と同じセルは書かない。束の短い行の先のセルも書かない。
+    fn paste_changes(
+        &self,
+        plan: &PendingPaste,
+        rows: &[(RowId, Vec<String>)],
+        targets: &[usize],
+    ) -> Vec<(CellChange, String)> {
+        rows.iter()
+            .zip(0_u64..)
+            .flat_map(|((row, cells), offset)| {
+                targets
+                    .iter()
+                    .enumerate()
+                    .filter_map(move |(column, &table)| {
+                        let value = plan.value(offset, column)?;
+                        self.pasted_cell((*row, table), cells, value)
+                    })
+            })
+            .collect()
+    }
+
+    /// 行 `row` の表の `table` 列目（原本のセル `cells`）を `value` にする書き換えと、そのセルのファイルの今の値。
+    /// 見えている値と同じなら `None`。
+    fn pasted_cell(
+        &self,
+        (row, table): (RowId, usize),
+        cells: &[String],
+        value: &str,
+    ) -> Option<(CellChange, String)> {
+        let id = self.column_id(table);
+        let source = cells.get(table).cloned().unwrap_or_default();
+        let shown = match self.edits.get(row, id) {
+            Some(CellValue::Text(text)) => text.clone(),
+            Some(CellValue::Absent) | None => source.clone(),
+        };
+        (shown != value).then(|| (CellChange::new(row, id, shown, String::from(value)), source))
+    }
+
+    /// 貼った範囲（本体の `plan.top()` 番目から `rows` 行・表示の `plan.left()` 列目から）を選び、カーソルを左上に置いて
+    /// 見えるように動かす。
+    fn select_pasted(
+        &mut self,
+        plan: &PendingPaste,
+        rows: usize,
+        window: WindowView,
+    ) -> DocumentEffect {
+        let last_column = self.widths.columns().len().saturating_sub(1);
+        let left = plan.left().min(last_column);
+        let right = plan
+            .left()
+            .saturating_add(plan.columns().saturating_sub(1))
+            .min(last_column);
+        let bottom = plan
+            .top()
+            .saturating_add(u64::try_from(rows.saturating_sub(1)).unwrap_or(u64::MAX))
+            .min(self.last_body());
+        self.select(CellPosition::new(bottom, right), SelectionMode::Collapse);
+        self.select(CellPosition::new(plan.top(), left), SelectionMode::Extend);
+        self.counted = None;
+        self.first_column = self.reveal_column(left, window);
+        let page = self.page_rows(window);
+        let current = self.view.first_body();
+        let first = clamp_first(
+            current,
+            reveal_row(current, plan.top(), page),
+            page,
+            self.extent().rows(),
+        );
+        DocumentEffect::Read { first_body: first }
     }
 
     /// IME の確定（ADR 0026 の決定 4）。欄に挿し、確定前の文字列は消える。編集していなければ入力の状態で編集に入る。
@@ -1219,12 +1521,7 @@ impl Document {
                 effect
             }
             Some(EditStep::Columns(change)) => {
-                // 戻すと足した列が消え、消した列が戻る。やり直しはその逆。
-                if change.adds() == redo {
-                    self.columns_inserted(change.at(), change.widths());
-                } else {
-                    let _widths = self.columns_removed(change.at(), change.count());
-                }
+                self.column_step_taken(&change, redo);
                 self.notice = Some(Notice::Columns(if redo {
                     ColumnsNotice::Redone(change.count())
                 } else {
@@ -1232,6 +1529,7 @@ impl Document {
                 }));
                 self.after_columns_changed(change.at(), window)
             }
+            Some(EditStep::Batch(steps)) => self.batch_undone(&steps, redo, window),
             Some(EditStep::Rows(change)) => {
                 let body = body_of(change.at(), self.header_line());
                 self.notice = Some(if redo {
@@ -1241,6 +1539,64 @@ impl Document {
                 });
                 self.after_rows_changed(body, window)
             }
+        }
+    }
+
+    /// 束の 1 手（貼り付け・ADR 0029 の決定 3）を戻した・やり直した後。列の幅を足し消しし、書き換えたセルのうち並びに残る
+    /// 左上のセルへカーソルを動かす（残っていなければ、足し消しした行の位置へ）。
+    fn batch_undone(
+        &mut self,
+        steps: &[EditStep],
+        redo: bool,
+        window: WindowView,
+    ) -> DocumentEffect {
+        let flat = flattened(steps);
+        let cells = flat.iter().map(|step| step.cell_changes().len()).sum();
+        // 貼った範囲の左上（並びに残っているセルのうち、いちばん上でいちばん左）へ動く。
+        let first_cell = flat
+            .iter()
+            .flat_map(|step| step.cell_changes())
+            .filter_map(|change| {
+                let line = self.rows.position_of(change.row())?;
+                let column = self.columns.position_of(change.column())?;
+                Some(((line, column), (change.row(), change.column())))
+            })
+            .min_by_key(|&(place, _)| place)
+            .map(|(_, cell)| cell);
+        let columns: Vec<&ColumnChange> = flat
+            .iter()
+            .filter_map(|step| step.column_change())
+            .collect();
+        for change in &columns {
+            self.column_step_taken(change, redo);
+        }
+        self.notice = Some(if redo {
+            Notice::Redone(cells)
+        } else {
+            Notice::Undone(cells)
+        });
+        let mut effect = DocumentEffect::Stay;
+        if let Some(change) = columns.first() {
+            effect = self.after_columns_changed(change.at(), window);
+        }
+        if let Some((row, column)) = first_cell {
+            let revealed = self.reveal_cell(row, column, window);
+            if revealed != DocumentEffect::Stay {
+                return revealed;
+            }
+        }
+        if let Some(change) = flat.iter().find_map(|step| step.row_change()) {
+            return self.after_rows_changed(body_of(change.at(), self.header_line()), window);
+        }
+        effect
+    }
+
+    /// 列の足し消しの手 `change` を戻した（`redo` ならやり直した）。戻すと足した列が消え、消した列が戻る。幅を合わせる。
+    fn column_step_taken(&mut self, change: &ColumnChange, redo: bool) {
+        if change.adds() == redo {
+            self.columns_inserted(change.at(), change.widths());
+        } else {
+            let _widths = self.columns_removed(change.at(), change.count());
         }
     }
 
@@ -1286,22 +1642,8 @@ impl Document {
             ColumnPlace::Left => first,
             ColumnPlace::Right => last.saturating_add(1),
         };
-        let ids = self
-            .columns
-            .insert(at, count)
-            .into_iter()
-            .filter_map(|column| match column {
-                ColumnId::Added(id) => Some(id),
-                ColumnId::Source(_) => None,
-            })
-            .collect();
-        let widths = vec![NEW_COLUMN_WIDTH; count];
-        self.columns_inserted(at, &widths);
-        self.history.record_columns(ColumnChange::Inserted {
-            at,
-            runs: vec![OrderRun::Added(ids)],
-            widths,
-        });
+        let change = self.add_columns(at, count);
+        self.history.record_columns(change);
         self.notice = Some(Notice::Columns(ColumnsNotice::Inserted(count)));
         self.after_columns_changed(at, window)
     }
@@ -1422,19 +1764,8 @@ impl Document {
                 (self.body_lines(records), 1)
             }
         };
-        let at = self.line_of(body);
-        let added = self.rows.insert(at, count);
-        let ids = added
-            .iter()
-            .filter_map(|row| match row {
-                RowId::Added(id) => Some(*id),
-                RowId::Source(_) => None,
-            })
-            .collect();
-        self.history.record_rows(RowChange::Inserted {
-            at,
-            runs: vec![OrderRun::Added(ids)],
-        });
+        let (_added, change) = self.add_rows(self.line_of(body), count);
+        self.history.record_rows(change);
         self.notice = Some(Notice::Rows(RowsNotice::Inserted(count)));
         self.after_rows_changed(body, window)
     }
@@ -3446,6 +3777,17 @@ fn saving_status(progress: Option<(u64, u64)>) -> String {
         }
         Some(_) | None => String::from("保存しています…（Esc でやめる）"),
     }
+}
+
+/// 束を開いた手の並び（束の中の束も開く）。
+fn flattened(steps: &[EditStep]) -> Vec<&EditStep> {
+    steps
+        .iter()
+        .flat_map(|step| match step {
+            EditStep::Batch(inner) => flattened(inner),
+            EditStep::Cells(_) | EditStep::Rows(_) | EditStep::Columns(_) => vec![step],
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -6456,7 +6798,7 @@ mod tests {
     #[test]
     fn pasting_one_cell_sets_the_cursor_cell_or_goes_into_the_field() {
         let mut document = editable();
-        document.paste("0099\r\n");
+        pasted(&mut document, "0099\r\n");
         assert_eq!(
             edited(&document, 0, 0),
             Some(&CellValue::Text(String::from("0099")))
@@ -6465,7 +6807,7 @@ mod tests {
         document.apply(Intent::Undo, normal());
         assert_eq!(edited(&document, 0, 0), None);
         // 引用した 1 つのセル（中に改行）も 1 つの値。
-        document.paste("\"a\nb\"\r\n");
+        pasted(&mut document, "\"a\nb\"\r\n");
         assert_eq!(
             edited(&document, 0, 0),
             Some(&CellValue::Text(String::from("a\nb")))
@@ -6473,7 +6815,7 @@ mod tests {
         // 編集中は欄のカーソルに挿す。
         let mut editing = editable();
         editing.apply(Intent::Edit, normal());
-        editing.paste("-1\r\n");
+        assert_eq!(editing.paste("-1\r\n"), PasteRequest::Done);
         assert!(
             editing
                 .editor()
@@ -6481,21 +6823,217 @@ mod tests {
         );
     }
 
-    /// 複数のセルは、編集していなければまだ貼らずに知らせ、編集中なら字のまま挿す。空は何もしない。
-    #[test]
-    fn pasting_many_cells_is_refused_outside_the_field() {
+    /// 貼り付けの 2 段を、表 `editable_rows` の原本から行を読んで済ませる（合成ルートの代わり）。
+    fn pasted(document: &mut Document, text: &str) -> DocumentEffect {
+        match document.paste(text) {
+            PasteRequest::Done => DocumentEffect::Stay,
+            PasteRequest::Read { first_line, count } => {
+                let rows: Vec<Vec<String>> = editable_rows()
+                    .into_iter()
+                    .skip(usize::try_from(first_line).unwrap())
+                    .take(usize::try_from(count).unwrap())
+                    .collect();
+                document.paste_rows(first_line, (&rows, &[]), normal())
+            }
+        }
+    }
+
+    fn indexed_editable() -> Document {
         let mut document = editable();
-        document.paste("a\tb\r\nc\td\r\n");
+        document.report(JobReport::Finished(IndexSummary::new(3, None)));
+        document
+    }
+
+    fn text_of(document: &Document, row: RowId, column: ColumnId) -> Option<&str> {
+        match document.edits().get(row, column) {
+            Some(CellValue::Text(value)) => Some(value),
+            Some(CellValue::Absent) | None => None,
+        }
+    }
+
+    /// 複数のセルは、選んだ所の左上から束のまま書き（列の数が足りない行にも書く）、貼った範囲を選ぶ。1 手で戻り、やり直せる
+    /// （ADR 0029 の決定 1・3）。束の短い行は、その先のセルを書かない。
+    #[test]
+    fn pasting_many_cells_writes_from_the_top_left_as_one_step() {
+        let mut document = indexed_editable();
+        document.apply(moving(CursorStep::Down), normal());
+        pasted(&mut document, "x\ty\r\nz\r\n");
+        let cell = |row: u64, column: usize| (RowId::Source(row), ColumnId::Source(column));
+        let (b1, b2, c1, c2) = (cell(1, 0), cell(1, 1), cell(2, 0), cell(2, 1));
+        assert_eq!(text_of(&document, b1.0, b1.1), Some("x"));
+        assert_eq!(text_of(&document, b2.0, b2.1), Some("y"));
+        assert_eq!(text_of(&document, c1.0, c1.1), Some("z"));
+        assert_eq!(text_of(&document, c2.0, c2.1), None);
+        assert_eq!(document.selection().cursor(), CellPosition::new(1, 0));
+        assert_eq!(document.selection().bottom_right(), CellPosition::new(2, 1));
+        text_at(
+            &document.frame(normal(), palette()),
+            "2 行 × 2 列を貼りました",
+        );
+        document.apply(Intent::Undo, normal());
+        assert!(document.edits().is_empty());
+        assert!(!document.has_unsaved());
+        text_at(
+            &document.frame(normal(), palette()),
+            "元に戻しました（3 セル）",
+        );
+        document.apply(Intent::Redo, normal());
+        assert_eq!(text_of(&document, c1.0, c1.1), Some("z"));
+    }
+
+    /// 貼った値は変えない（先頭の 0・日付に見える値・指数表記・KEEP-01）。
+    #[test]
+    fn pasted_values_are_kept_as_text() {
+        let mut document = indexed_editable();
+        pasted(&mut document, "007\t2026/1/2\r\n1E5\r\n");
+        let value = |row: u64, column: usize| {
+            text_of(&document, RowId::Source(row), ColumnId::Source(column)).map(String::from)
+        };
+        assert_eq!(
+            [value(0, 0), value(0, 1), value(1, 0)],
+            [
+                Some(String::from("007")),
+                Some(String::from("2026/1/2")),
+                Some(String::from("1E5"))
+            ]
+        );
+    }
+
+    /// 表の右下のセルから 2 行 × 2 列を貼った表（1 行と 1 列が足りない）。
+    fn pasted_past_the_edges() -> Document {
+        let mut document = indexed_editable();
+        document.apply(moving(CursorStep::Down), normal());
+        document.apply(moving(CursorStep::Down), normal());
+        document.apply(moving(CursorStep::Right), normal());
+        pasted(&mut document, "p\tq\r\nr\ts\r\n");
+        document
+    }
+
+    /// 束が表の下と右の端を越えれば、足りない行と列を足して書き、貼った範囲を選ぶ（ADR 0029 の決定 2）。
+    #[test]
+    fn pasting_past_the_edges_adds_rows_and_columns() {
+        let document = pasted_past_the_edges();
+        assert_eq!(document.widths().columns().len(), 3);
+        text_at(
+            &document.frame(normal(), palette()),
+            "2 行 × 2 列を貼りました（1 行と 1 列を足しました）",
+        );
+        let changes = document.changes();
+        let added_row = changes.order().row_at(3).unwrap();
+        let added_column = changes.columns().column_at(2).unwrap();
+        assert!(matches!(
+            (added_row, added_column),
+            (RowId::Added(_), ColumnId::Added(_))
+        ));
+        let values = [
+            text_of(&document, RowId::Source(2), ColumnId::Source(1)),
+            text_of(&document, RowId::Source(2), added_column),
+            text_of(&document, added_row, ColumnId::Source(1)),
+            text_of(&document, added_row, added_column),
+        ];
+        assert_eq!(values, [Some("p"), Some("q"), Some("r"), Some("s")]);
+        assert_eq!(
+            (
+                document.selection().cursor(),
+                document.selection().bottom_right()
+            ),
+            (CellPosition::new(2, 1), CellPosition::new(3, 2))
+        );
+    }
+
+    /// 端を越えた貼り付けは、Ctrl+Z 1 回で書き換えも足した行と列も戻り、Ctrl+Y でまた全部になる（ADR 0029 の決定 3）。
+    #[test]
+    fn one_undo_takes_back_a_paste_with_its_added_rows_and_columns() {
+        let mut document = pasted_past_the_edges();
+        assert!(document.has_unsaved());
+        document.apply(Intent::Undo, normal());
+        assert!(document.edits().is_empty());
+        assert_eq!(document.widths().columns().len(), 2);
+        assert!(!document.has_unsaved());
+        // カーソルは貼った左上（消えた行と列ではない）。
+        assert_eq!(document.selection().cursor(), CellPosition::new(2, 1));
+        document.apply(Intent::Redo, normal());
+        assert_eq!(document.widths().columns().len(), 3);
+        let changes = document.changes();
+        let corner = (
+            changes.order().row_at(3).unwrap(),
+            changes.columns().column_at(2).unwrap(),
+        );
+        assert_eq!(text_of(&document, corner.0, corner.1), Some("s"));
+    }
+
+    /// 1 つの値を広い範囲に貼れば、範囲のすべてのセルになる（Excel と同じ・ADR 0029 の決定 1）。
+    #[test]
+    fn pasting_one_value_over_a_range_fills_it() {
+        let mut document = indexed_editable();
+        document.apply(
+            Intent::Move {
+                step: CursorStep::Down,
+                mode: SelectionMode::Extend,
+            },
+            normal(),
+        );
+        document.apply(
+            Intent::Move {
+                step: CursorStep::Right,
+                mode: SelectionMode::Extend,
+            },
+            normal(),
+        );
+        pasted(&mut document, "z\r\n");
+        for (row, column) in [(0, 0), (0, 1), (1, 0), (1, 1)] {
+            assert_eq!(
+                text_of(&document, RowId::Source(row), ColumnId::Source(column)),
+                Some("z")
+            );
+        }
+        assert_eq!(
+            text_of(&document, RowId::Source(2), ColumnId::Source(0)),
+            None
+        );
+        document.apply(Intent::Undo, normal());
+        assert!(document.edits().is_empty());
+    }
+
+    /// 索引を作っている間に今読める所より下へ届く貼り付け・上限を超える貼り付け・切り詰めた行への貼り付けは、何も書かずに
+    /// 知らせる（ADR 0029 の決定 2・4）。空は何もしない。
+    #[test]
+    fn pastes_that_cannot_be_written_change_nothing() {
+        let mut document = editable();
+        document.apply(moving(CursorStep::Down), normal());
+        document.apply(moving(CursorStep::Down), normal());
+        assert_eq!(document.paste("a\r\nb\r\n"), PasteRequest::Done);
         assert!(document.edits().is_empty());
         text_at(
             &document.frame(normal(), palette()),
-            "2 行 × 2 列の貼り付けはまだできません（1 つのセルか、編集中の欄には貼れます）",
+            "表の終わりを越えるかもしれないので、行を数え終えてから貼ってください（索引を作っています）",
         );
-        document.paste("");
-        assert!(document.edits().is_empty());
+        assert_eq!(document.paste(""), PasteRequest::Done);
+        // 列全体を選んで 1 つの値を貼ると、200 万行を埋めることになる。
+        let mut large = editable();
+        large.report(JobReport::Finished(IndexSummary::new(2_000_000, None)));
+        large.apply(Intent::SelectColumns, normal());
+        assert_eq!(large.paste("z"), PasteRequest::Done);
+        text_at(
+            &large.frame(normal(), palette()),
+            "貼り付けが大きすぎるので貼りませんでした（100 万セル・64 MiB まで）",
+        );
+        // 切り詰めたレコードにかかれば書かない。
+        let mut cut = indexed_editable();
+        let PasteRequest::Read { first_line, count } = cut.paste("a\tb\r\n") else {
+            panic!("読ませるはず");
+        };
+        assert_eq!((first_line, count), (0, 1));
+        cut.paste_rows(
+            0,
+            (&editable_rows()[..1], &[CutRecord::new(0, Some(1))]),
+            normal(),
+        );
+        assert!(cut.edits().is_empty());
+        // 編集中は字のまま欄に挿す（複数のセルでも）。
         let mut editing = editable();
         editing.apply(Intent::Edit, normal());
-        editing.paste("a\tb\r\n");
+        assert_eq!(editing.paste("a\tb\r\n"), PasteRequest::Done);
         assert!(
             editing
                 .editor()
@@ -6546,7 +7084,7 @@ mod tests {
     fn pasting_into_the_field_keeps_quotes() {
         let mut editing = editable();
         editing.apply(Intent::Edit, normal());
-        editing.paste("\"abc\"\r\n");
+        assert_eq!(editing.paste("\"abc\"\r\n"), PasteRequest::Done);
         assert!(
             editing
                 .editor()

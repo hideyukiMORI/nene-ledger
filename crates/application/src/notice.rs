@@ -1,6 +1,7 @@
 //! 状態の行に一度だけ出す知らせ。
 
 use crate::columns_notice::ColumnsNotice;
+use crate::paste_notice::PasteNotice;
 use crate::rows_notice::RowsNotice;
 use crate::save_problem::SaveProblem;
 use crate::zoom_level::ZoomLevel;
@@ -61,13 +62,8 @@ pub enum Notice {
     SaveFailed(SaveProblem),
     /// 保存したが、置き換えた後のファイルを開き直せなかった（表示は保存の前のまま）。
     ReopenFailed,
-    /// 複数のセルの貼り付けはまだ（行と列の数）。1 つのセルなら貼れる（CLIP-01・EDIT-02）。
-    PasteManyCells {
-        /// 行の数。
-        rows: usize,
-        /// 列の数（いちばん長い行）。
-        columns: usize,
-    },
+    /// 表への貼り付け（ADR 0029）。
+    Paste(PasteNotice),
     /// 新しい表の窓を開けなかった（自分の exe を起こせない・ADR 0028 の決定 1）。
     NewWindowFailed,
     /// 新しい表は、読み方を変えられない（名前を付けて保存してから・ADR 0028 の決定 3）。
