@@ -26,7 +26,15 @@ fn paste_status(notice: PasteNotice) -> String {
             columns,
             added_rows,
             added_columns,
-        } => pasted_status(rows, columns, (added_rows, added_columns)),
+            moved,
+        } => pasted_status(rows, columns, (added_rows, added_columns), moved),
+        PasteNotice::Cut { rows, columns } => format!(
+            "{} 行 × {columns} 列を切り取りました（貼るまで元は残ります・Esc でやめる）",
+            group_digits(rows)
+        ),
+        PasteNotice::CutManyRanges => {
+            String::from("離れた範囲は切り取れません（1 つの範囲を選んでください）")
+        }
         PasteNotice::TooLarge => {
             String::from("貼り付けが大きすぎるので貼りませんでした（100 万セル・64 MiB まで）")
         }
@@ -36,9 +44,19 @@ fn paste_status(notice: PasteNotice) -> String {
     }
 }
 
-/// 貼った知らせ。表の端を越えて足した行と列があれば添える。
-fn pasted_status(rows: u64, columns: usize, (added_rows, added_columns): (u64, usize)) -> String {
-    let shape = format!("{} 行 × {columns} 列を貼りました", group_digits(rows));
+/// 貼った（切り取りなら動かした）知らせ。表の端を越えて足した行と列があれば添える。
+fn pasted_status(
+    rows: u64,
+    columns: usize,
+    (added_rows, added_columns): (u64, usize),
+    moved: bool,
+) -> String {
+    let verb = if moved {
+        "動かしました"
+    } else {
+        "貼りました"
+    };
+    let shape = format!("{} 行 × {columns} 列を{verb}", group_digits(rows));
     match (added_rows, added_columns) {
         (0, 0) => shape,
         (0, added) => format!("{shape}（{added} 列を足しました）"),

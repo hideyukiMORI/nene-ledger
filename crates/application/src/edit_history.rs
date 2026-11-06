@@ -28,6 +28,8 @@ pub struct EditHistory {
     done: Vec<EditStep>,
     undone: Vec<EditStep>,
     sources: BTreeMap<(RowId, ColumnId), String>,
+    /// 履歴が変わるたびに 1 つ進む数（積む・戻す・やり直す・保存した）。切り取りの枠が古くないかを見る。
+    revision: u64,
 }
 
 impl EditHistory {
@@ -38,6 +40,7 @@ impl EditHistory {
             done: Vec::new(),
             undone: Vec::new(),
             sources: BTreeMap::new(),
+            revision: 0,
         }
     }
 
@@ -50,18 +53,21 @@ impl EditHistory {
         self.apply(&change, edits);
         self.done.push(EditStep::Cells(vec![change]));
         self.undone.clear();
+        self.advance();
     }
 
     /// 行の足し消し `change`（並びにはもう行った）を 1 手として積む。やり直しの列は捨てる。
     pub fn record_rows(&mut self, change: RowChange) {
         self.done.push(EditStep::Rows(change));
         self.undone.clear();
+        self.advance();
     }
 
     /// 列の足し消し `change`（並びにはもう行った）を 1 手として積む。やり直しの列は捨てる。
     pub fn record_columns(&mut self, change: ColumnChange) {
         self.done.push(EditStep::Columns(change));
         self.undone.clear();
+        self.advance();
     }
 
     /// 行と列の足し消し `steps`（並びにはもう行った）とセルの書き換え `cells`（書き換えと、そのセルのファイルの今の値）を、
@@ -93,6 +99,7 @@ impl EditHistory {
         }
         self.done.push(EditStep::Batch(steps));
         self.undone.clear();
+        self.advance();
     }
 
     /// 1 手戻す。戻した手（セルなら戻した後の値への書き換え・束なら戻した順の中の手）を返す。戻すものが無ければ `None`。
@@ -103,6 +110,7 @@ impl EditHistory {
         let step = self.done.pop()?;
         let taken = self.undo_step(&step, (edits, order, columns));
         self.undone.push(step);
+        self.advance();
         Some(taken)
     }
 
@@ -114,6 +122,7 @@ impl EditHistory {
         let step = self.undone.pop()?;
         self.redo_step(&step, (edits, order, columns));
         self.done.push(step.clone());
+        self.advance();
         Some(step)
     }
 
@@ -180,11 +189,23 @@ impl EditHistory {
 
     /// 保存した。触ったセルのファイルの値を、保存した値（差分があればその値）に進める。差分は呼ぶ側が空にする。
     pub fn saved(&mut self, edits: &CellEdits) {
+        self.advance();
         for ((row, column), source) in &mut self.sources {
             if let Some(CellValue::Text(value)) = edits.get(*row, *column) {
                 source.clone_from(value);
             }
         }
+    }
+
+    /// 履歴が変わるたびに進む数。同じなら、その間に表の値も並びも変わっていない。
+    #[must_use]
+    pub const fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    /// 履歴が変わった。
+    fn advance(&mut self) {
+        self.revision = self.revision.wrapping_add(1);
     }
 
     /// 戻せる手の数。

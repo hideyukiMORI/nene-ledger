@@ -36,6 +36,7 @@ const VK_C: u16 = 0x43;
 const VK_G: u16 = 0x47;
 const VK_N: u16 = 0x4E;
 const VK_V: u16 = 0x56;
+const VK_X: u16 = 0x58;
 const VK_P: u16 = 0x50;
 const VK_S: u16 = 0x53;
 const VK_Y: u16 = 0x59;
@@ -121,6 +122,7 @@ pub(crate) fn key_intent(key: u16, modifiers: Modifiers) -> Option<Intent> {
 fn control_intent(key: u16, shift: bool, alt: bool) -> Option<Intent> {
     match (key, shift) {
         (VK_C, _) => Some(Intent::Copy),
+        (VK_X, _) => Some(Intent::Cut),
         (VK_SPACE, false) => Some(Intent::SelectColumns),
         (VK_PRIOR, true) => Some(Intent::MoveColumns(ColumnShift::Left)),
         (VK_NEXT, true) => Some(Intent::MoveColumns(ColumnShift::Right)),
@@ -366,6 +368,7 @@ mod tests {
     #[test]
     fn control_keys_copy_select_jump_and_open() {
         assert_eq!(key_intent(VK_C, control()), Some(Intent::Copy));
+        assert_eq!(key_intent(VK_X, control()), Some(Intent::Cut));
         assert_eq!(key_intent(VK_A, control()), Some(Intent::SelectAll));
         assert_eq!(key_intent(VK_G, control()), Some(Intent::OpenGoTo));
         assert_eq!(key_intent(VK_N, control()), Some(Intent::NewTable));
