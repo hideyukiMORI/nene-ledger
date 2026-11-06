@@ -153,7 +153,7 @@
 | 番号 | 機能 | フェーズ | 状態 | FR | 競合 | 根拠 |
 | --- | --- | --- | --- | --- | --- | --- |
 | FIND-01 | 検索（大文字小文字・セル全体の一致・列を限る・選択範囲を限る） | 1 | 未着手 | FR-008 | 多 | 競合。照合の規則（大文字小文字・セル全体・全角半角・ひらがなカタカナ・ADR 0030 の決定 3）と見えている値で照らすことは GitHub Issue #151（core `find_query`・application `find_scope`）。画面は GitHub Issue #152（Ctrl+F の探す段・Enter / F3 で次・Shift+Enter / Shift+F3 で前・端から回る知らせ・Alt+C / Alt+W・足した行も・gate-proofs 第 77 節）。列と選択範囲を限るのと、条件を設定に残すのはまだ |
-| FIND-02 | 置換（同じ条件・件数の事前表示・プレビュー） | 1 | 未着手 | FR-008 | 一部 | 競合・Modern |
+| FIND-02 | 置換（同じ条件・件数の事前表示・プレビュー） | 1 | 未着手 | FR-008 | 一部 | 競合・Modern。当たった所だけを元の字のまま置き換える規則は GitHub Issue #161（core `FindQuery::replaced`）。1 つずつと、件数を見せてから 1 手の束で書く全部の置換は GitHub Issue #163（Ctrl+Z 1 回で戻る・100 万セルまで）。画面は GitHub Issue #165（Ctrl+H の置換の段・Tab で欄を替える・Enter で 1 つ・Alt+A で全部・gate-proofs 第 78 節・benchmarks 第 9 節）。プレビューの表（ADR 0030 でフェーズ 2）と、正規表現の `$1` はまだ |
 | FIND-03 | 正規表現 | 1 | 未着手 | FR-008 | 多 | 要望 5・競合。GitHub Issue #8（業務ペルソナ 5 人の洗い出し・`_work/reports/2026-11-05-nene-ledger-persona-needs.md`）でフェーズ 1 へ |
 | FIND-04 | 一致の件数・全一致の選択・一致した行だけを見る | 2 | 未着手 | FR-008 | 一部 | 競合・Modern / CSView |
 | FIND-05 | 巨大なファイルでも裏で検索し、見つかった順に出す | 1 | 未着手 | FR-010 | 少 | 速さ。原本を塊ごとに照らして最初に当たった所で止まる畳み込みは GitHub Issue #151（`--find` で 1 GB の最後の行まで 9.1〜9.8 s・benchmarks 第 8 節）。画面からの裏の検索（進み具合・Esc で止める）は #152（1 GB の最後の行まで 9.2〜9.3 s）。GitHub Issue #157 で索引の目印で分けて並列に（8 スレッド・1.6〜1.8 s・benchmarks 第 8 節） |

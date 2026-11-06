@@ -76,6 +76,8 @@ pub(crate) struct Viewer {
     finding: Option<SplitJob<FindFold>>,
     /// 裏で回っている全部の置換の数え（ADR 0030 の決定 6）。
     replacing: Option<SplitJob<ReplaceFold>>,
+    /// 前に置き換えた文字（次に置換の欄を開くときに入れておく）。
+    replacement: String,
     /// 読み方を試している間の、元の画面（Esc で戻す・Issue #52）。
     trial: Option<Document>,
     /// 裏で回っている保存（ADR 0026 の決定 6）。
@@ -105,6 +107,7 @@ impl Viewer {
             totals: None,
             finding: None,
             replacing: None,
+            replacement: String::new(),
             trial: None,
             saving: None,
             saving_as: None,
@@ -451,6 +454,60 @@ impl Viewer {
         ));
     }
 
+    /// パレットを開く意図（検索・置換・飛ぶ先・操作の一覧）なら開いて `true`。開いたときの配色でパレットを描く
+    /// （配色を試しても、パレットの色は動かない）。
+    fn opened_palette(&mut self, intent: Intent) -> bool {
+        let colors = self.preferences.theme().palette();
+        if let Intent::OpenFind { replace } = intent {
+            if replace {
+                self.open_replace();
+            } else {
+                self.open_find();
+            }
+        } else if intent == Intent::OpenGoTo {
+            self.palette = Some(OpenPalette::new(CommandPalette::open_go_to(), colors));
+        } else if intent == Intent::OpenPalette {
+            self.palette = Some(OpenPalette::new(CommandPalette::open(), colors));
+        } else {
+            return false;
+        }
+        true
+    }
+
+    /// 置換の欄を開く（Ctrl+H）。前に探した文字と条件、前に置き換えた文字を入れておく。
+    fn open_replace(&mut self) {
+        let (text, options) = self
+            .document
+            .find_query()
+            .map_or((String::new(), FindOptions::standard()), |query| {
+                (String::from(query.text()), query.options())
+            });
+        let colors = self.preferences.theme().palette();
+        self.palette = Some(OpenPalette::new(
+            CommandPalette::open_replace(&text, &self.replacement, options),
+            colors,
+        ));
+    }
+
+    /// 置換の欄で Enter（カーソルのセルを置き換えて次へ・欄は開いたまま）か Alt+A（`all`・欄を閉じて全部を数える）。
+    fn replace_entered(&mut self, all: bool) -> Option<ClipboardText> {
+        let (query, replacement) = self.palette.as_ref().map(|open| {
+            let state = open.state();
+            (
+                FindQuery::new(state.query(), state.find_options()),
+                String::from(state.replacement()),
+            )
+        })?;
+        self.replacement.clone_from(&replacement);
+        let effect = if all {
+            self.palette = None;
+            self.document.replace_all(query, &replacement)
+        } else {
+            self.document.replace_one(query, &replacement)
+        };
+        self.effect(effect)
+    }
+
     /// 検索の欄で Enter（`forward`）か Shift+Enter：打った文字を今の条件で探し始める（欄は開いたまま）。
     fn find_entered(&mut self, forward: bool) -> Option<ClipboardText> {
         let query = self.palette.as_ref().map(|open| {
@@ -608,6 +665,7 @@ impl Viewer {
                 None
             }
             PaletteOutcome::Find { forward } => self.find_entered(forward),
+            PaletteOutcome::Replace { all } => self.replace_entered(all),
             PaletteOutcome::Run(intent) => {
                 self.palette = None;
                 self.intent(intent, view)
@@ -830,19 +888,7 @@ impl Session for Viewer {
             self.palette_took_last = true;
             return self.palette_intent(intent, view);
         }
-        if intent == Intent::OpenFind {
-            self.open_find();
-            return None;
-        }
-        if intent == Intent::OpenGoTo {
-            let colors = self.preferences.theme().palette();
-            self.palette = Some(OpenPalette::new(CommandPalette::open_go_to(), colors));
-            return None;
-        }
-        if intent == Intent::OpenPalette {
-            // 開いたときの配色でパレットを描く（配色を試しても、パレットの色は動かない）。
-            let colors = self.preferences.theme().palette();
-            self.palette = Some(OpenPalette::new(CommandPalette::open(), colors));
+        if self.opened_palette(intent) {
             return None;
         }
         if intent == Intent::NewTable {

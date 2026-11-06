@@ -107,7 +107,7 @@ impl<'state> PalettePainter<'state> {
             self.colors.cursor(),
         );
         let left = field.origin().x().saturating_add(self.px(TEXT_INSET));
-        let query = self.palette.query();
+        let query = self.palette.field_text();
         if query.is_empty() {
             self.text_at(
                 from_left(field, left),
@@ -150,7 +150,10 @@ impl<'state> PalettePainter<'state> {
     /// 段の候補の全部の数（検索欄の右端の「該当 / 全部」）。飛ぶ先の段は数を出さない。
     fn total(&self) -> Option<usize> {
         match self.palette.mode() {
-            PaletteMode::GoTo | PaletteMode::Find | PaletteMode::SaveAs { .. } => None,
+            PaletteMode::GoTo
+            | PaletteMode::Find
+            | PaletteMode::Replace { .. }
+            | PaletteMode::SaveAs { .. } => None,
             PaletteMode::Commands => Some(CommandId::ALL.len()),
             PaletteMode::Keys => Some(key_list("").len()),
             PaletteMode::Themes { .. } => Some(COUNT),
@@ -159,11 +162,25 @@ impl<'state> PalettePainter<'state> {
         }
     }
 
-    /// 配色の段の、試しの案内（試している配色の名前と、決める・戻すのキー）。
+    /// 配色の段の、試しの案内（試している配色の名前と、決める・戻すのキー）。置換の段は、打っていないほうの欄の中身。
     fn hint(&mut self) {
         let Some(hint) = self.layout.hint() else {
             return;
         };
+        if let PaletteMode::Replace { with } = self.palette.mode() {
+            let (label, other) = if with {
+                ("探す", self.palette.query())
+            } else {
+                ("置き換える", self.palette.replacement())
+            };
+            let text = format!("{label}: “{other}”（Tab で替える）");
+            self.text_at(
+                from_left(hint, hint.origin().x()),
+                text,
+                self.colors.gutter_text(),
+            );
+            return;
+        }
         let text = match self.palette.items().get(self.palette.selected()) {
             Some(&PaletteItem::Theme(position)) => {
                 format!(
@@ -193,7 +210,7 @@ impl<'state> PalettePainter<'state> {
             self.go_to_line();
             return;
         }
-        if self.palette.mode() == PaletteMode::Find {
+        if let PaletteMode::Find | PaletteMode::Replace { .. } = self.palette.mode() {
             self.find_line();
             return;
         }
@@ -204,6 +221,7 @@ impl<'state> PalettePainter<'state> {
         let kind = match self.palette.mode() {
             PaletteMode::GoTo
             | PaletteMode::Find
+            | PaletteMode::Replace { .. }
             | PaletteMode::Commands
             | PaletteMode::SaveAs { .. } => "操作",
             PaletteMode::Keys => "キー",
@@ -232,11 +250,18 @@ impl<'state> PalettePainter<'state> {
         self.text_at(from_left(row, left), text, self.colors.gutter_text());
     }
 
-    /// 探す段の 1 行。今の条件と切り替えるキー（ADR 0030 の決定 3・全角半角は区別しない）。
+    /// 探す段と置換の段の 1 行。今の条件と切り替えるキー（ADR 0030 の決定 3・全角半角は区別しない）。置換の段は
+    /// 置き換え方のキーを前に足し、パレットの幅に収まるよう条件の言葉を縮める（決定 6）。
     fn find_line(&mut self) {
         let options = self.palette.find_options();
+        let replacing = matches!(self.palette.mode(), PaletteMode::Replace { .. });
+        let (keys, case) = if replacing {
+            ("Enter 置換 · Alt+A 全部 · ", "大小を")
+        } else {
+            ("", "大文字小文字を")
+        };
         let text = format!(
-            "Alt+C 大文字小文字を{} · Alt+W {}",
+            "{keys}Alt+C {case}{} · Alt+W {}",
             if options.match_case() {
                 "区別する"
             } else {
@@ -341,6 +366,7 @@ impl<'state> PalettePainter<'state> {
             PaletteMode::Commands
             | PaletteMode::GoTo
             | PaletteMode::Find
+            | PaletteMode::Replace { .. }
             | PaletteMode::Keys
             | PaletteMode::SaveAs { .. }
             | PaletteMode::Themes { .. } => false,
@@ -488,6 +514,8 @@ fn placeholder(mode: PaletteMode) -> &'static str {
         PaletteMode::Commands => "操作の名前を英字かローマ字で（例: theme, haishoku）",
         PaletteMode::GoTo => "行の番号（例: 1200、列も選ぶなら 1200,3）",
         PaletteMode::Find => "探す文字（Enter で次・Shift+Enter で前）",
+        PaletteMode::Replace { with: false } => "探す文字（Tab で置き換える文字の欄へ）",
+        PaletteMode::Replace { with: true } => "置き換える文字（空なら当たった所を消す）",
         PaletteMode::SaveAs { .. } => "保存先のファイルの道筋（例: /srv/data/表.csv）",
         PaletteMode::Keys => "キーか操作の名前で絞る（例: ctrl, shift, kopi-）",
         PaletteMode::Themes { .. } => "配色の名前を英字で（例: solarized）",
@@ -503,10 +531,12 @@ fn placeholder(mode: PaletteMode) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cursor_step::CursorStep;
     use crate::intent::Intent;
     use crate::theme_state::ThemeState;
     use crate::window_view::WindowView;
     use alloc::vec;
+    use nene_ledger_core::find_options::FindOptions;
     use nene_ledger_core::window_placement::WindowPlacement;
 
     fn view() -> WindowView {
@@ -550,7 +580,7 @@ mod tests {
         let commands = palette.paint(view(), colors(), DetailPane::Open);
         let shown = texts(&commands);
         assert!(shown.contains(&"操作の名前を英字かローマ字で（例: theme, haishoku）"));
-        assert!(shown.contains(&"40 / 40"));
+        assert!(shown.contains(&"41 / 41"));
         assert!(shown.contains(&"詳細ペインを閉じる") && shown.contains(&"Ctrl+Shift+U"));
         assert!(shown.contains(&"文字を大きくする") && shown.contains(&"Ctrl+0"));
         // 選んでいる最初の行は選択の色で塗り、左に強調の色の 3px の帯。
@@ -601,8 +631,28 @@ mod tests {
         let commands = palette.paint(view(), colors(), DetailPane::Closed);
         let shown = texts(&commands);
         assert!(shown.contains(&"“xyz” に合う操作は無い"));
-        assert!(shown.contains(&"0 / 40") && shown.contains(&"xyz"));
+        assert!(shown.contains(&"0 / 41") && shown.contains(&"xyz"));
         assert!(fills(&commands, colors().selection()).is_empty());
+    }
+
+    /// 置換の段は打っている欄の中身を欄に、もう一方を下の行に、その下に置き換え方と条件のキーを出す（ADR 0030 の決定 6）。
+    #[test]
+    fn the_replace_step_shows_both_fields_and_its_keys() {
+        let mut palette = CommandPalette::open_replace("tok", "東京", FindOptions::standard());
+        let commands = palette.paint(view(), colors(), DetailPane::Closed);
+        let shown = texts(&commands);
+        assert!(shown.contains(&"東京"), "{shown:?}");
+        assert!(shown.contains(&"探す: “tok”（Tab で替える）"), "{shown:?}");
+        assert!(
+            shown.contains(&"Enter 置換 · Alt+A 全部 · Alt+C 大小を区別しない · Alt+W 部分一致"),
+            "{shown:?}"
+        );
+        palette.handle(Intent::Advance(CursorStep::Left), 0);
+        let swapped = palette.paint(view(), colors(), DetailPane::Closed);
+        let texts_now = texts(&swapped);
+        assert!(
+            texts_now.contains(&"tok") && texts_now.contains(&"置き換える: “東京”（Tab で替える）")
+        );
     }
 
     /// 判別の候補の段（カンマ 87%・6 列が今の読み方、タブ・引用なし 12%・1 列）。

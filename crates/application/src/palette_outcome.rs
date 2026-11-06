@@ -41,4 +41,10 @@ pub enum PaletteOutcome {
         /// 次へ探すか。
         forward: bool,
     },
+    /// 開いたまま、カーソルのセルを置き換えて次を探す（`all` なら閉じて全部を数える）。合成ルートが
+    /// `CommandPalette::query`・`replacement`・`find_options` を読む（ADR 0030 の決定 6）。
+    Replace {
+        /// 全部を置き換えるか（Alt+A）。
+        all: bool,
+    },
 }

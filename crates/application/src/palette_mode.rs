@@ -32,6 +32,12 @@ pub enum PaletteMode {
     },
     /// 探す文字を打つ段（Ctrl+F・ADR 0030 の決定 1）。条件は `CommandPalette::find_options`。
     Find,
+    /// 探す文字と置き換える文字を打つ段（Ctrl+H・ADR 0030 の決定 6）。`with` は置き換える欄を打っている間（Tab で替える）。
+    /// 置き換える文字は `CommandPalette::replacement`。
+    Replace {
+        /// 置き換える欄を打っているか。
+        with: bool,
+    },
     /// 配色の一覧。`original` は開いたときの配色の、表の中の位置（Esc で戻す先）。
     Themes {
         /// 開いたときの配色の位置。
@@ -45,7 +51,12 @@ impl PaletteMode {
     pub fn tries_the_selection(self) -> bool {
         match self {
             Self::Themes { .. } | Self::Reading { .. } | Self::Candidates { .. } => true,
-            Self::Commands | Self::GoTo | Self::Find | Self::Keys | Self::SaveAs { .. } => false,
+            Self::Commands
+            | Self::GoTo
+            | Self::Find
+            | Self::Replace { .. }
+            | Self::Keys
+            | Self::SaveAs { .. } => false,
         }
     }
 }

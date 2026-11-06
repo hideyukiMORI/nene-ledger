@@ -68,6 +68,8 @@ pub enum CommandId {
     FindNext,
     /// 前を探す（Shift+F3）。
     FindPrevious,
+    /// 置き換える（Ctrl+H・ADR 0030 の決定 6）。
+    Replace,
     /// 書き換えを保存する（ADR 0026 の決定 6）。
     Save,
     /// 名前を付けて保存する。
@@ -98,7 +100,7 @@ pub enum CommandId {
 
 impl CommandId {
     /// すべての操作（何も打たないときの順）。
-    pub const ALL: [Self; 40] = [
+    pub const ALL: [Self; 41] = [
         Self::Top,
         Self::Bottom,
         Self::GoTo,
@@ -126,6 +128,7 @@ impl CommandId {
         Self::Find,
         Self::FindNext,
         Self::FindPrevious,
+        Self::Replace,
         Self::Save,
         Self::SaveAs,
         Self::NewTable,
@@ -176,6 +179,7 @@ impl CommandId {
             Self::Find => "探す（見えている値で）",
             Self::FindNext => "次を探す",
             Self::FindPrevious => "前を探す",
+            Self::Replace => "置き換える（探して）",
             Self::Save => "変えた所を保存する",
             Self::SaveAs => "名前を付けて保存する",
             Self::NewTable => "新しい表を作る",
@@ -223,6 +227,7 @@ impl CommandId {
             Self::Find => "さがす",
             Self::FindNext => "つぎをさがす",
             Self::FindPrevious => "まえをさがす",
+            Self::Replace => "おきかえる",
             Self::Save => "かえたところをほぞんする",
             Self::SaveAs => "なまえをつけてほぞんする",
             Self::NewTable => "あたらしいひょうをつくる",
@@ -277,6 +282,7 @@ impl CommandId {
             Self::Find => &["find", "search", "kensaku"],
             Self::FindNext => &["find", "next", "search"],
             Self::FindPrevious => &["find", "previous", "back", "search"],
+            Self::Replace => &["replace", "find", "okikae", "chikan"],
             Self::Save => &["save", "write"],
             Self::SaveAs => &["saveas", "save as", "export"],
             Self::NewTable => &["new", "create", "blank"],
@@ -332,6 +338,7 @@ impl CommandId {
             Self::Find => Some("Ctrl+F"),
             Self::FindNext => Some("F3"),
             Self::FindPrevious => Some("Shift+F3"),
+            Self::Replace => Some("Ctrl+H"),
             Self::Save => Some("Ctrl+S"),
             Self::SaveAs => Some("Ctrl+Shift+S"),
             Self::NewTable => Some("Ctrl+N"),
@@ -371,6 +378,7 @@ impl CommandId {
             | Self::Find
             | Self::FindNext
             | Self::FindPrevious
+            | Self::Replace
             | Self::Save
             | Self::SaveAs
             | Self::NewTable
@@ -420,9 +428,10 @@ impl CommandId {
             Self::UnfreezeColumns => Some(Intent::UnfreezeColumns),
             Self::Copy => Some(Intent::Copy),
             Self::Cut => Some(Intent::Cut),
-            Self::Find => Some(Intent::OpenFind),
+            Self::Find => Some(Intent::OpenFind { replace: false }),
             Self::FindNext => Some(Intent::FindAgain { forward: true }),
             Self::FindPrevious => Some(Intent::FindAgain { forward: false }),
+            Self::Replace => Some(Intent::OpenFind { replace: true }),
             Self::Save => Some(Intent::Save),
             Self::SaveAs => Some(Intent::SaveAs),
             Self::NewTable => Some(Intent::NewTable),

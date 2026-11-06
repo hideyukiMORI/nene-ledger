@@ -36,6 +36,7 @@ pub struct CommandPalette {
     selected: usize,
     candidates: Vec<DialectCandidate>,
     find_options: FindOptions,
+    replacement: String,
 }
 
 impl CommandPalette {
@@ -48,6 +49,7 @@ impl CommandPalette {
             selected: 0,
             candidates: Vec::new(),
             find_options: FindOptions::standard(),
+            replacement: String::new(),
         }
     }
 
@@ -60,6 +62,46 @@ impl CommandPalette {
             selected: 0,
             candidates: Vec::new(),
             find_options: options,
+            replacement: String::new(),
+        }
+    }
+
+    /// 探す文字と置き換える文字を打つ段で開く（Ctrl+H・ADR 0030 の決定 6）。前に探した文字 `text`・置き換えた文字
+    /// `replacement`・条件 `options` を入れておく。探す欄が空なら探す欄から、そうでなければ置き換える欄から打つ。
+    #[must_use]
+    pub fn open_replace(text: &str, replacement: &str, options: FindOptions) -> Self {
+        Self {
+            mode: PaletteMode::Replace {
+                with: !text.is_empty(),
+            },
+            query: String::from(text),
+            selected: 0,
+            candidates: Vec::new(),
+            find_options: options,
+            replacement: String::from(replacement),
+        }
+    }
+
+    /// 置き換える文字（置換の段）。
+    #[must_use]
+    pub fn replacement(&self) -> &str {
+        &self.replacement
+    }
+
+    /// 欄に見せる文字列（置換の段で置き換える欄を打っている間は置き換える文字、ほかは検索の文字列）。
+    #[must_use]
+    pub fn field_text(&self) -> &str {
+        match self.mode {
+            PaletteMode::Replace { with: true } => &self.replacement,
+            PaletteMode::Commands
+            | PaletteMode::GoTo
+            | PaletteMode::Find
+            | PaletteMode::Replace { with: false }
+            | PaletteMode::Keys
+            | PaletteMode::Themes { .. }
+            | PaletteMode::Reading { .. }
+            | PaletteMode::Candidates { .. }
+            | PaletteMode::SaveAs { .. } => &self.query,
         }
     }
 
@@ -78,6 +120,7 @@ impl CommandPalette {
             selected: 0,
             candidates: Vec::new(),
             find_options: FindOptions::standard(),
+            replacement: String::new(),
         }
     }
 
@@ -98,6 +141,7 @@ impl CommandPalette {
             selected: 0,
             candidates: Vec::new(),
             find_options: FindOptions::standard(),
+            replacement: String::new(),
         }
     }
 
@@ -120,7 +164,10 @@ impl CommandPalette {
             PaletteMode::Commands => commands(&self.query),
             // 飛ぶ先は候補ではなく、打った番号そのもの。
             // 飛ぶ先と保存先は候補ではなく、打った文字列そのもの。
-            PaletteMode::GoTo | PaletteMode::Find | PaletteMode::SaveAs { .. } => Vec::new(),
+            PaletteMode::GoTo
+            | PaletteMode::Find
+            | PaletteMode::Replace { .. }
+            | PaletteMode::SaveAs { .. } => Vec::new(),
             PaletteMode::Keys => key_list(&self.query),
             PaletteMode::Themes { .. } => themes(&self.query),
             PaletteMode::Reading { aspect, .. } => readings(aspect, &self.query),
@@ -144,24 +191,15 @@ impl CommandPalette {
 
     /// 意図を受ける。`current_theme` は今の配色の位置（配色を選ぶ段へ入るとき、元に戻す先として覚える）。
     pub fn handle(&mut self, intent: Intent, current_theme: usize) -> PaletteOutcome {
+        if let Some(outcome) = self.mode_intent(intent) {
+            return outcome;
+        }
         match intent {
             Intent::Type(character) => self.edit_query(Some(character)),
             Intent::Erase => self.edit_query(None),
             Intent::Move { step, .. } => self.step(step),
-            Intent::Confirm
-            | Intent::Advance(CursorStep::Up)
-            | Intent::FindAgain { .. }
-            | Intent::FindToggle(_)
-                if self.mode == PaletteMode::Find =>
-            {
-                self.find_intent(intent)
-            }
-            Intent::Confirm if self.mode == PaletteMode::GoTo => GoToTarget::parse(&self.query)
-                .map_or(PaletteOutcome::Stay, |target| {
-                    PaletteOutcome::Run(Intent::GoTo(target))
-                }),
             Intent::Confirm => self.confirmed(current_theme),
-            Intent::Cancel | Intent::OpenPalette | Intent::OpenGoTo | Intent::OpenFind => {
+            Intent::Cancel | Intent::OpenPalette | Intent::OpenGoTo | Intent::OpenFind { .. } => {
                 self.cancelled()
             }
             Intent::Scroll(_)
@@ -182,6 +220,7 @@ impl CommandPalette {
             | Intent::Cut
             | Intent::FindAgain { .. }
             | Intent::FindToggle(_)
+            | Intent::ReplaceAll
             | Intent::ToggleDetail
             | Intent::Theme(_)
             | Intent::Zoom(_)
@@ -212,11 +251,99 @@ impl CommandPalette {
             PaletteMode::Commands
             | PaletteMode::GoTo
             | PaletteMode::Find
+            | PaletteMode::Replace { .. }
             | PaletteMode::Keys
             | PaletteMode::Reading { .. }
             | PaletteMode::Candidates { .. }
             | PaletteMode::Themes { .. } => self.confirm(current_theme),
         }
+    }
+
+    /// 段に固有の意図：探す段の Enter・Shift+Enter・F3・条件、飛ぶ先の段の Enter、置換の段の全部。共通の扱いなら `None`。
+    fn mode_intent(&mut self, intent: Intent) -> Option<PaletteOutcome> {
+        match self.mode {
+            PaletteMode::Replace { with } => self.replace_intent(intent, with),
+            PaletteMode::Find => matches!(
+                intent,
+                Intent::Confirm
+                    | Intent::Advance(CursorStep::Up)
+                    | Intent::FindAgain { .. }
+                    | Intent::FindToggle(_)
+            )
+            .then(|| self.find_intent(intent)),
+            PaletteMode::GoTo => (intent == Intent::Confirm).then(|| {
+                GoToTarget::parse(&self.query).map_or(PaletteOutcome::Stay, |target| {
+                    PaletteOutcome::Run(Intent::GoTo(target))
+                })
+            }),
+            PaletteMode::Commands
+            | PaletteMode::Keys
+            | PaletteMode::Themes { .. }
+            | PaletteMode::Reading { .. }
+            | PaletteMode::Candidates { .. }
+            | PaletteMode::SaveAs { .. } => None,
+        }
+    }
+
+    /// 置換の段の意図（`with` は置き換える欄を打っている間）。字と Backspace は打っている欄へ、Tab / Shift+Tab は欄を替え、
+    /// Enter は置き換えて次へ、Alt+A は全部、Shift+Enter・F3・Shift+F3・Alt+C・Alt+W は探す段と同じ。ほかは `None`
+    /// （Esc などはパレットの共通の扱い）。
+    fn replace_intent(&mut self, intent: Intent, with: bool) -> Option<PaletteOutcome> {
+        match intent {
+            Intent::Type(character) if with => self.replacement.push(character),
+            Intent::Erase if with => drop(self.replacement.pop()),
+            Intent::Advance(CursorStep::Right | CursorStep::Left) => {
+                self.mode = PaletteMode::Replace { with: !with };
+            }
+            Intent::Confirm => return Some(PaletteOutcome::Replace { all: false }),
+            Intent::ReplaceAll => return Some(PaletteOutcome::Replace { all: true }),
+            Intent::Advance(CursorStep::Up) | Intent::FindAgain { .. } | Intent::FindToggle(_) => {
+                return Some(self.find_intent(intent));
+            }
+            Intent::Type(_)
+            | Intent::Erase
+            | Intent::Scroll(_)
+            | Intent::Move { .. }
+            | Intent::Point { .. }
+            | Intent::DoubleClick { .. }
+            | Intent::Drag { .. }
+            | Intent::Release
+            | Intent::SelectAll
+            | Intent::SelectRows
+            | Intent::SelectColumns
+            | Intent::MoveColumns(_)
+            | Intent::ResetColumns
+            | Intent::ResetWidths
+            | Intent::FreezeColumns
+            | Intent::UnfreezeColumns
+            | Intent::GoTo(_)
+            | Intent::Copy
+            | Intent::Cut
+            | Intent::OpenFind { .. }
+            | Intent::ToggleDetail
+            | Intent::Theme(_)
+            | Intent::Zoom(_)
+            | Intent::OpenPalette
+            | Intent::OpenGoTo
+            | Intent::Cancel
+            | Intent::Edit
+            | Intent::Delete
+            | Intent::BreakLine
+            | Intent::Advance(_)
+            | Intent::Save
+            | Intent::SaveAs
+            | Intent::NewTable
+            | Intent::Paste
+            | Intent::Undo
+            | Intent::Redo
+            | Intent::InsertRows(_)
+            | Intent::RemoveRows
+            | Intent::InsertColumns(_)
+            | Intent::RemoveColumns
+            | Intent::InsertHere
+            | Intent::RemoveHere => return None,
+        }
+        Some(PaletteOutcome::Stay)
     }
 
     /// 探す段の Enter（次）・Shift+Enter（前）・F3・Shift+F3 と、Alt+C・Alt+W の条件の切り替え（ADR 0030 の決定 1・3）。
@@ -316,6 +443,7 @@ impl CommandPalette {
             PaletteMode::Commands
             | PaletteMode::GoTo
             | PaletteMode::Find
+            | PaletteMode::Replace { .. }
             | PaletteMode::Keys
             | PaletteMode::SaveAs { .. } => PaletteOutcome::Close,
             PaletteMode::Themes { original } => PaletteOutcome::Revert(original),
@@ -418,6 +546,50 @@ mod tests {
         );
         palette.handle(Intent::FindToggle(FindToggle::WholeCell), 0);
         assert!(palette.find_options().match_case() && palette.find_options().whole_cell());
+        assert!(palette.items().is_empty());
+        assert_eq!(palette.handle(Intent::Cancel, 0), PaletteOutcome::Close);
+    }
+
+    /// 置換の段は 2 つの欄を Tab で替えて打つ（ADR 0030 の決定 6）。
+    #[test]
+    fn the_replace_step_types_into_two_fields() {
+        let mut palette = CommandPalette::open_replace("", "", FindOptions::standard());
+        assert_eq!(palette.mode(), PaletteMode::Replace { with: false });
+        typed(&mut palette, "tok");
+        palette.handle(Intent::Advance(CursorStep::Right), 0);
+        assert_eq!(palette.mode(), PaletteMode::Replace { with: true });
+        typed(&mut palette, "osa");
+        palette.handle(Intent::Erase, 0);
+        assert_eq!((palette.query(), palette.replacement()), ("tok", "os"));
+        assert_eq!(palette.field_text(), "os");
+        palette.handle(Intent::Advance(CursorStep::Left), 0);
+        assert_eq!(palette.field_text(), "tok");
+        // 前に探した文字があれば、置き換える欄から打つ。
+        let again = CommandPalette::open_replace("tok", "os", FindOptions::standard());
+        assert_eq!(
+            (again.mode(), again.field_text()),
+            (PaletteMode::Replace { with: true }, "os")
+        );
+    }
+
+    /// 置換の段の Enter は 1 つ、Alt+A は全部、Shift+Enter は前を探す、条件の切り替えは探す段と同じ。
+    #[test]
+    fn the_replace_step_replaces_one_or_all_and_finds_like_the_find_step() {
+        let mut palette = CommandPalette::open_replace("tok", "os", FindOptions::standard());
+        assert_eq!(
+            palette.handle(Intent::Confirm, 0),
+            PaletteOutcome::Replace { all: false }
+        );
+        assert_eq!(
+            palette.handle(Intent::ReplaceAll, 0),
+            PaletteOutcome::Replace { all: true }
+        );
+        assert_eq!(
+            palette.handle(Intent::Advance(CursorStep::Up), 0),
+            PaletteOutcome::Find { forward: false }
+        );
+        palette.handle(Intent::FindToggle(FindToggle::Case), 0);
+        assert!(palette.find_options().match_case());
         assert!(palette.items().is_empty());
         assert_eq!(palette.handle(Intent::Cancel, 0), PaletteOutcome::Close);
     }

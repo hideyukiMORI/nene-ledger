@@ -71,8 +71,11 @@ pub enum Intent {
     Copy,
     /// 選択した矩形を切り取る（Ctrl+X）。コピーと同じ文字列を置き、この窓で貼ったら元を空にする（ADR 0029 の決定 5）。
     Cut,
-    /// 検索の欄を開く（Ctrl+F・ADR 0030 の決定 1）。
-    OpenFind,
+    /// 検索の欄を開く（Ctrl+F・ADR 0030 の決定 1）。`replace` なら置換の欄（Ctrl+H・決定 6）。
+    OpenFind {
+        /// 置換の欄を開くか。
+        replace: bool,
+    },
     /// 前に探した問いで、次（`forward`）か前を探す（F3・Shift+F3）。
     FindAgain {
         /// 次へ探すか。
@@ -80,6 +83,8 @@ pub enum Intent {
     },
     /// 検索の欄で条件を切り替える（Alt+C・Alt+W）。
     FindToggle(FindToggle),
+    /// 置換の欄で、当たりを全部置き換える（Alt+A・件数を見せてから）。
+    ReplaceAll,
     /// 詳細ペインを開閉する（Ctrl+Shift+U）。
     ToggleDetail,
     /// 配色を表の中で替える（試しに・Ctrl+Shift+T と Ctrl+Shift+Alt+T）。
