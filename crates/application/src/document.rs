@@ -201,6 +201,10 @@ pub const MAX_COPY_BYTES: usize = 4 * 1024 * 1024;
 
 /// 1 回の貼り付けで書くセルの上限（ADR 0029 の決定 4）。
 pub const MAX_PASTE_CELLS: u128 = 1_000_000;
+/// 1 回の貼り付けで書く行の上限（貼る行は全部の列を原本から読むので、コピーと同じ上限・GitHub Issue #153）。
+pub const MAX_PASTE_ROWS: u64 = MAX_COPY_ROWS;
+/// 1 回の貼り付けで書く列の上限（Excel の列の数と同じ・GitHub Issue #153）。
+pub const MAX_PASTE_COLUMNS: usize = 16_384;
 /// 貼るクリップボードの文字列の上限（バイト・ADR 0029 の決定 4）。
 pub const MAX_PASTE_BYTES: usize = 64 * 1024 * 1024;
 
@@ -1127,11 +1131,12 @@ impl Document {
         self.notice = None;
         self.pasting = None;
         // この窓の切り取りで置いた文字列で、その後に表が変わっていなければ、貼った後に元を空にする（ADR 0029 の決定 5）。
+        // 断った貼り付けでは枠を残す（GitHub Issue #153）。
         let revision = self.history.revision();
-        let cut = self
+        let moving = self
             .cut
-            .take()
-            .filter(|mark| mark.is_current(revision) && mark.placed(text));
+            .as_ref()
+            .is_some_and(|mark| mark.is_current(revision) && mark.placed(text));
         if let Some(editor) = self.editor.as_mut() {
             // 欄には字のまま挿す（引用を解かない・Excel のセルの中の貼り付けと同じ）。最後の改行だけ除く。
             let raw = text
@@ -1141,14 +1146,22 @@ impl Document {
             editor.insert(raw);
             return PasteRequest::Done;
         }
-        if text.len() > MAX_PASTE_BYTES {
+        // 分ける前に、区切りの数で大きさを見積もる（タブだけの大きな文字列を分けてから断らない・GitHub Issue #153）。
+        let separators = text
+            .bytes()
+            .filter(|&byte| byte == b'\t' || byte == b'\n')
+            .count();
+        if text.len() > MAX_PASTE_BYTES
+            || u128::try_from(separators).unwrap_or(u128::MAX) > MAX_PASTE_CELLS.saturating_mul(2)
+        {
             self.notice = Some(Notice::Paste(PasteNotice::TooLarge));
             return PasteRequest::Done;
         }
         let Some(mut plan) = self.paste_plan(parse_tsv(text)) else {
             return PasteRequest::Done;
         };
-        if let Some(mark) = cut {
+        let cut = self.cut.take();
+        if moving && let Some(mark) = cut {
             plan = plan.moving(mark.into_clears());
         }
         let first_line = self.line_of(plan.top());
@@ -1199,7 +1212,10 @@ impl Document {
             }
             Some(_) | None => PendingPaste::new(cells, corner),
         };
-        if plan.cell_count() > MAX_PASTE_CELLS {
+        if plan.cell_count() > MAX_PASTE_CELLS
+            || plan.rows() > MAX_PASTE_ROWS
+            || plan.columns() > MAX_PASTE_COLUMNS
+        {
             self.notice = Some(Notice::Paste(PasteNotice::TooLarge));
             return None;
         }
@@ -1279,7 +1295,7 @@ impl Document {
         cells.extend(self.uncovered_clears(&mut plan, &targets_rows, &targets));
         self.history.record_batch(steps, cells, &mut self.edits);
         if added_columns > 0 {
-            let _read = self.after_columns_changed(plan.left(), window);
+            self.end_columns_added((width, added_columns), plan.left(), window);
         }
         self.notice = Some(Notice::Paste(PasteNotice::Pasted {
             rows: u64::try_from(targets_rows.len()).unwrap_or(u64::MAX),
@@ -1289,6 +1305,31 @@ impl Document {
             moved,
         }));
         self.select_pasted(&plan, targets_rows.len(), window)
+    }
+
+    /// `paste` が求めた行を合成ルートが読めなかった。待っている束を捨てて知らせる（GitHub Issue #153）。
+    pub fn paste_unread(&mut self) {
+        if self.pasting.take().is_some() {
+            self.notice = Some(Notice::Paste(PasteNotice::Unread));
+        }
+    }
+
+    /// 貼り付けで表の右の端（`width` 列目）に `count` 列を足した後。表示だけの列の入れ替えはそのまま残して後ろに並べ
+    /// （入れ替えを外すと、貼った値の並びが見えていた順と変わる・GitHub Issue #153）、表示の `left` 列目へ。
+    fn end_columns_added(
+        &mut self,
+        (width, count): (usize, usize),
+        left: usize,
+        window: WindowView,
+    ) {
+        let shown = core::mem::take(&mut self.order);
+        let _read = self.after_columns_changed(left, window);
+        if !shown.is_empty() {
+            self.order = shown
+                .into_iter()
+                .chain(width..width.saturating_add(count))
+                .collect();
+        }
     }
 
     /// 位置 `first_record` から読んだ行 `rows` のうち、束 `plan` を書く本体の行（同一性と、表の列の順に並べた原本のセル）。
@@ -1417,6 +1458,9 @@ impl Document {
         rows: &[(RowId, Vec<String>)],
         targets: &[usize],
     ) -> Vec<(CellChange, String)> {
+        if !plan.is_move() {
+            return Vec::new();
+        }
         let pasted: &PendingPaste = plan;
         let covered: BTreeSet<(RowId, ColumnId)> = rows
             .iter()
@@ -1638,11 +1682,15 @@ impl Document {
         if let Some(change) = columns.first() {
             effect = self.after_columns_changed(change.at(), window);
         }
+        // 左上のセルが並びに残っていれば、そこへ（動かなくてよければ `Stay`・GitHub Issue #153）。
+        // 列を足し消ししたなら、動かなくても見えている行を読み直す。
         if let Some((row, column)) = first_cell {
             let revealed = self.reveal_cell(row, column, window);
-            if revealed != DocumentEffect::Stay {
-                return revealed;
-            }
+            return if revealed == DocumentEffect::Stay {
+                effect
+            } else {
+                revealed
+            };
         }
         if let Some(change) = flat.iter().find_map(|step| step.row_change()) {
             return self.after_rows_changed(body_of(change.at(), self.header_line()), window);
@@ -3134,6 +3182,8 @@ impl Document {
         let shape = self.ranges().copy_shape()?;
         let (top, _) = self.ranges().row_span();
         // 書き換えたセルは、書き換えた値でコピーする（画面と同じ）。
+        // 切り取りの元のファイルの値は、並べ直す前の原本の行から読む（並べ直した行を並べ直さない・GitHub Issue #153）。
+        let source_rows = rows;
         let overlaid;
         let rows = if self.edits.is_empty() && self.columns.is_whole() {
             rows
@@ -3166,7 +3216,7 @@ impl Document {
         }
         let rows_copied = u64::try_from(body.len()).unwrap_or(u64::MAX);
         if let Some(range) = cutting {
-            let clears = self.cut_cells(range, first_record, rows);
+            let clears = self.cut_cells(range, first_record, source_rows);
             self.cut = Some(CutMark::new(
                 range,
                 clears,
@@ -7201,7 +7251,7 @@ mod tests {
         assert!(document.edits().is_empty());
         text_at(
             &document.frame(normal(), palette()),
-            "表の終わりを越えるかもしれないので、行を数え終えてから貼ってください（索引を作っています）",
+            "表の終わりを越えるかもしれないので、行を数え終えてから貼ってください（今は見えている所までしか数えていません）",
         );
         assert_eq!(document.paste(""), PasteRequest::Done);
         // 列全体を選んで 1 つの値を貼ると、200 万行を埋めることになる。
@@ -7397,6 +7447,106 @@ mod tests {
         text_at(
             &document.frame(normal(), palette()),
             "離れた範囲は切り取れません（1 つの範囲を選んでください）",
+        );
+    }
+
+    /// 列を足した後の切り取りは、元のセルを正しい列から読む。元が空になり、戻した後に隣の列の値を打っても書き換えが
+    /// 残る（GitHub Issue #153 の 1）。
+    #[test]
+    fn cutting_after_a_column_insert_reads_the_right_source_column() {
+        // 合成ルートと同じく、列を足し消しした後・貼った後・戻した後に見えている行を読み直す。
+        let reread = |document: &mut Document| document.show(0, &editable_rows());
+        let mut document = indexed_editable();
+        document.apply(Intent::InsertColumns(ColumnPlace::Left), normal());
+        reread(&mut document);
+        document.apply(moving(CursorStep::Top), normal());
+        document.apply(moving(CursorStep::Right), normal());
+        document.apply(moving(CursorStep::Right), normal());
+        // 表は [足した列, S0, S1]。S1 の 0 行目（東京）を切り取って 2 行目へ。
+        let text = cut_text(&mut document);
+        assert_eq!(text, "東京\r\n");
+        document.apply(moving(CursorStep::Down), normal());
+        document.apply(moving(CursorStep::Down), normal());
+        pasted(&mut document, &text);
+        assert_eq!(cell_text(&document, 0, 1), Some(""));
+        assert_eq!(cell_text(&document, 2, 1), Some("東京"));
+        document.apply(Intent::Undo, normal());
+        reread(&mut document);
+        assert_eq!(document.selection().cursor(), CellPosition::new(0, 2));
+        typed(&mut document, "0012");
+        document.apply(Intent::Confirm, normal());
+        assert_eq!(cell_text(&document, 0, 1), Some("0012"));
+        // S0（表示の 1 列目）も、切り取って貼れば元が空になる。
+        let mut first = indexed_editable();
+        first.apply(Intent::InsertColumns(ColumnPlace::Left), normal());
+        reread(&mut first);
+        first.apply(moving(CursorStep::Top), normal());
+        first.apply(moving(CursorStep::Right), normal());
+        let first_text = cut_text(&mut first);
+        first.apply(moving(CursorStep::Down), normal());
+        first.apply(moving(CursorStep::Down), normal());
+        pasted(&mut first, &first_text);
+        assert_eq!(
+            [cell_text(&first, 0, 0), cell_text(&first, 2, 0)],
+            [Some(""), Some("0012")]
+        );
+    }
+
+    /// 表示だけの列の入れ替えの後に右の端を越えて貼っても、見えていた順に p q r と並ぶ（GitHub Issue #153 の 2）。
+    #[test]
+    fn pasting_past_the_right_edge_keeps_the_shown_column_order() {
+        let mut document = indexed_editable();
+        document.apply(Intent::SelectColumns, normal());
+        document.apply(Intent::MoveColumns(ColumnShift::Right), normal());
+        document.apply(moving(CursorStep::Top), normal());
+        document.apply(moving(CursorStep::Left), normal());
+        document.apply(moving(CursorStep::Left), normal());
+        pasted(&mut document, "p\tq\tr\r\n");
+        let added = document.changes().columns().column_at(2).unwrap();
+        // 表示の順は S1・S0・足した列のまま。
+        assert_eq!(document.order, vec![1, 0, 2]);
+        assert_eq!(
+            [
+                text_of(&document, RowId::Source(0), ColumnId::Source(1)),
+                text_of(&document, RowId::Source(0), ColumnId::Source(0)),
+                text_of(&document, RowId::Source(0), added),
+            ],
+            [Some("p"), Some("q"), Some("r")]
+        );
+    }
+
+    /// 行を足した貼り付けを戻すと、カーソルは貼った左上（GitHub Issue #153 の 4）。断った貼り付けは切り取りの枠を残す（5）。
+    #[test]
+    fn undo_returns_to_the_pasted_corner_and_a_refused_paste_keeps_the_cut() {
+        let mut document = indexed_editable();
+        document.apply(moving(CursorStep::Down), normal());
+        pasted(&mut document, "a\r\nb\r\nc\r\nd\r\ne\r\n");
+        document.apply(Intent::Undo, normal());
+        assert_eq!(document.selection().cursor(), CellPosition::new(1, 0));
+        let mut cut = editable();
+        let _text = cut_text(&mut cut);
+        cut.apply(moving(CursorStep::Down), normal());
+        cut.apply(moving(CursorStep::Down), normal());
+        // 索引を作り終えていないので、表の終わりを越える貼り付けは断る。枠は残る。
+        assert_eq!(cut.paste("x\r\ny\r\n"), PasteRequest::Done);
+        assert!(cut.live_cut().is_some());
+    }
+
+    /// 上限：行（コピーと同じ 10 万行）・列（16,384 列）・分ける前の区切りの数（GitHub Issue #153 の 3）。
+    #[test]
+    fn pastes_beyond_the_row_and_column_limits_are_refused_early() {
+        let mut document = indexed_editable();
+        let many_columns = "x\t".repeat(MAX_PASTE_COLUMNS);
+        assert_eq!(document.paste(&many_columns), PasteRequest::Done);
+        let mut tall = editable();
+        tall.report(JobReport::Finished(IndexSummary::new(500_000, None)));
+        tall.apply(Intent::SelectColumns, normal());
+        assert_eq!(tall.paste("z"), PasteRequest::Done);
+        let tabs = "\t".repeat(2_000_001);
+        assert_eq!(document.paste(&tabs), PasteRequest::Done);
+        text_at(
+            &document.frame(normal(), palette()),
+            "貼り付けが大きすぎるので貼りませんでした（100 万セル・64 MiB まで）",
         );
     }
 

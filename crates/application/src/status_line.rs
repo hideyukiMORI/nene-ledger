@@ -32,6 +32,9 @@ fn paste_status(notice: PasteNotice) -> String {
             "{} 行 × {columns} 列を切り取りました（貼るまで元は残ります・Esc でやめる）",
             group_digits(rows)
         ),
+        PasteNotice::Unread => {
+            String::from("貼る所の行をファイルから読めなかったので貼りませんでした")
+        }
         PasteNotice::CutManyRanges => {
             String::from("離れた範囲は切り取れません（1 つの範囲を選んでください）")
         }
@@ -39,7 +42,7 @@ fn paste_status(notice: PasteNotice) -> String {
             String::from("貼り付けが大きすぎるので貼りませんでした（100 万セル・64 MiB まで）")
         }
         PasteNotice::AwaitIndex => String::from(
-            "表の終わりを越えるかもしれないので、行を数え終えてから貼ってください（索引を作っています）",
+            "表の終わりを越えるかもしれないので、行を数え終えてから貼ってください（今は見えている所までしか数えていません）",
         ),
     }
 }
