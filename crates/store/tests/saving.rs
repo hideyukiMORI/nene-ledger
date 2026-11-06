@@ -455,4 +455,48 @@ mod saving {
         );
         assert_eq!(missing, Err(SaveFailure::Target(ErrorKind::NotFound)));
     }
+
+    /// 書いている間に原本が外から変わったら、名前を付けて保存は書かない（GitHub Issue #126）。
+    struct ChangedSource(Bytes);
+
+    impl SourceBytes for ChangedSource {
+        type Failure = ErrorKind;
+
+        fn read_at(&mut self, offset: u64, buffer: &mut [u8]) -> Result<usize, ErrorKind> {
+            self.0.read_at(offset, buffer)
+        }
+
+        fn unchanged(&mut self) -> bool {
+            false
+        }
+    }
+
+    #[test]
+    fn a_source_changed_while_writing_writes_nothing() {
+        let dir = folder("source-changed");
+        let absent = dir.join("new.csv");
+        let refused = save(
+            &absent,
+            (&whole(2), TextEncoding::Utf8, SaveTarget::Absent),
+            &mut ChangedSource(Bytes(b"ab".to_vec())),
+            &RenameReplacing,
+        );
+        assert_eq!(refused, Err(SaveFailure::ChangedOutside));
+        assert!(!absent.exists());
+        let existing = dir.join("other.csv");
+        std::fs::write(&existing, b"theirs").unwrap();
+        let kept = save(
+            &existing,
+            (
+                &whole(2),
+                TextEncoding::Utf8,
+                SaveTarget::Existing(stamp_of(&existing).unwrap()),
+            ),
+            &mut ChangedSource(Bytes(b"ab".to_vec())),
+            &RenameReplacing,
+        );
+        assert_eq!(kept, Err(SaveFailure::ChangedOutside));
+        assert_eq!(std::fs::read(&existing).unwrap(), b"theirs");
+        assert!(leftovers(&dir).is_empty());
+    }
 }
