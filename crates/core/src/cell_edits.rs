@@ -38,6 +38,15 @@ impl CellEdits {
         self.cells.get(&(row, column))
     }
 
+    /// 行 `row` のセルを 1 つでも書き換えているか。
+    #[must_use]
+    pub fn touches_row(&self, row: RowId) -> bool {
+        self.cells
+            .range((row, ColumnId::Source(0))..)
+            .next()
+            .is_some_and(|(&(found, _), _)| found == row)
+    }
+
     /// 書き換えが 1 つも無いか。
     #[must_use]
     pub fn is_empty(&self) -> bool {

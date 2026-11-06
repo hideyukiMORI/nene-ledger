@@ -10,8 +10,8 @@ use crate::record_range::RecordRange;
 use crate::scan_failure::ScanFailure;
 use crate::windowing::{nearest_mark, read_records_from};
 
-/// 塊 `chunks`（先頭から続く範囲）のレコードを順に読み、1 つずつ `fold` に渡す。塊を終えるたびに、渡した数を
-/// `report` に知らせ、`Break` なら止める。ファイルが範囲より先に終われば、そこで終わる。上限を超えるレコードが
+/// 塊 `chunks`（先頭から続く範囲）のレコードを順に読み、1 つずつ `fold` に渡す。`fold` がもう要らないと言えば
+/// （`RecordFold::is_done`）そこで終える。塊を終えるたびに、渡した数を `report` に知らせ、`Break` なら止める。ファイルが範囲より先に終われば、そこで終わる。上限を超えるレコードが
 /// あっても、索引が後ろを数えていれば窓は短くならない（GitHub Issue #13）ので、短い窓は索引の知る終わり。
 ///
 /// 次の塊は前の塊の最後のレコードの続きから切り進める（塊ごとに目印から切り直さない）。ただし索引の目印の方が
@@ -45,6 +45,9 @@ where
         }
         for (record, number) in records.iter().zip(chunk.first()..) {
             fold.record(number, record);
+            if fold.is_done() {
+                return Ok(ControlFlow::Continue(()));
+            }
         }
         let read = u64::try_from(records.len())?;
         done = done.saturating_add(read);

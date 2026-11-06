@@ -7,6 +7,9 @@
 
 mod dialect_doubt;
 mod dumping;
+mod find_bound;
+mod find_fold;
+mod finding;
 mod guessed;
 mod open_failure;
 mod open_palette;
@@ -21,6 +24,7 @@ mod totals_fold;
 mod viewer;
 mod workers;
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -35,24 +39,13 @@ fn main() -> ExitCode {
     if let [flag, file] = arguments.as_slice()
         && flag == "--dump"
     {
-        // コンソールの無い Windows の exe は、起動したコマンドプロンプトに結んで書く。
-        #[cfg(windows)]
-        nene_ledger_ui_win32::desktop::attach_console();
-        return match dumping::dump(&PathBuf::from(file)) {
-            Ok(cuts) => {
-                if let Some((count, first)) = cuts.summary() {
-                    warn(&format!(
-                        "1 MiB を超えるレコード {count} 件は先頭の 1 MiB だけを書いた（最初は {} 行目）",
-                        first.saturating_add(1)
-                    ));
-                }
-                ExitCode::SUCCESS
-            }
-            Err(failure) => {
-                report(&describe(&failure));
-                ExitCode::FAILURE
-            }
-        };
+        return dump_command(&PathBuf::from(file));
+    }
+    // 測定用: 頭から探し、最初に当たったセルを書く（ADR 0030 の決定 4・QLT-014）。見つからなければ終了コード 1。
+    if let [flag, text, file] = arguments.as_slice()
+        && flag == "--find"
+    {
+        return find_command(&text.to_string_lossy(), &PathBuf::from(file));
     }
     // 測定用: 開いて何も変えずに保存する（KEEP-02 の往復の実測・BIG-14・GitHub Issue #58）。
     if let [flag, file] = arguments.as_slice()
@@ -93,6 +86,49 @@ fn main() -> ExitCode {
         return ExitCode::from(2_u8);
     };
     open_and_show(&path, theme)
+}
+
+/// `--dump`：`path` を表として読み、タブ区切りで標準出力に書く。
+fn dump_command(path: &Path) -> ExitCode {
+    // コンソールの無い Windows の exe は、起動したコマンドプロンプトに結んで書く。
+    #[cfg(windows)]
+    nene_ledger_ui_win32::desktop::attach_console();
+    match dumping::dump(path) {
+        Ok(cuts) => {
+            if let Some((count, first)) = cuts.summary() {
+                warn(&format!(
+                    "1 MiB を超えるレコード {count} 件は先頭の 1 MiB だけを書いた（最初は {} 行目）",
+                    first.saturating_add(1)
+                ));
+            }
+            ExitCode::SUCCESS
+        }
+        Err(failure) => {
+            report(&describe(&failure));
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// `--find`：`path` を頭から `text` で探し、最初に当たったセルを標準出力に書く。見つからなければ終了コード 1。
+fn find_command(text: &str, path: &Path) -> ExitCode {
+    // コンソールの無い Windows の exe は、起動したコマンドプロンプトに結んで書く。
+    #[cfg(windows)]
+    nene_ledger_ui_win32::desktop::attach_console();
+    match finding::find_first(path, text) {
+        Ok(Some((record, column))) => {
+            let mut out = std::io::stdout().lock();
+            match writeln!(out, "{record} 行目 {column} 列目") {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(_failure) => ExitCode::FAILURE,
+            }
+        }
+        Ok(None) => ExitCode::from(1_u8),
+        Err(failure) => {
+            report(&describe(&failure));
+            ExitCode::FAILURE
+        }
+    }
 }
 
 /// `path` を開いて窓に出す。文字のファイルでないようなら、開くかを尋ねる。

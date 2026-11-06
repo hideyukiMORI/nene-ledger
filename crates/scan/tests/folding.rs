@@ -115,6 +115,48 @@ mod folding {
         assert_eq!(reports.last().copied(), u64::try_from(expected.len()).ok());
     }
 
+    /// レコードの番号 `stop` まで受け取ったら、もう要らないと言う。
+    #[derive(Debug, Default)]
+    struct Until {
+        stop: u64,
+        seen: Vec<u64>,
+    }
+
+    impl RecordFold for Until {
+        fn record(&mut self, number: u64, _record: &WindowRecord) {
+            self.seen.push(number);
+        }
+
+        fn is_done(&self) -> bool {
+            self.seen.last() == Some(&self.stop)
+        }
+    }
+
+    /// 畳み込みが「もう要らない」と言えば、塊の途中でも残りを読まずに終える（中止ではない・ADR 0030 の決定 4）。
+    #[test]
+    fn a_fold_that_is_done_ends_without_reading_the_rest() {
+        let plain = from("until", 3000, SparseIndex::empty());
+        let mut until = Until {
+            stop: 1234,
+            seen: Vec::new(),
+        };
+        let mut reports = Vec::new();
+        let flow = fold_range(
+            &plain,
+            RecordRange::new(1000, 2000).chunks(100),
+            &mut until,
+            |done| {
+                reports.push(done);
+                ControlFlow::Continue(())
+            },
+        );
+        assert_eq!(flow.unwrap(), ControlFlow::Continue(()));
+        assert_eq!(until.seen.first(), Some(&1000));
+        assert_eq!(until.seen.last(), Some(&1234));
+        assert_eq!(until.seen.len(), 235);
+        assert_eq!(reports.last(), Some(&200));
+    }
+
     #[test]
     fn a_break_stops_after_the_chunk() {
         let source = from("break", 100, SparseIndex::empty());
