@@ -28,6 +28,9 @@ fn find_status(notice: FindNotice) -> String {
         FindNotice::Stopped => "探すのをやめました",
         FindNotice::Failed => "ファイルを読めなかったので、探すのをやめました",
         FindNotice::NothingToRepeat => "続けて探すものがありません（Ctrl+F で探す）",
+        FindNotice::BrokenPattern => {
+            "正規表現の式が読めないので探しませんでした（Alt+R で文字どおりに）"
+        }
     })
 }
 

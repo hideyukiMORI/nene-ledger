@@ -1593,6 +1593,10 @@ impl Document {
         if query.is_empty() || self.closing != CloseState::Open {
             return DocumentEffect::Stay;
         }
+        if query.is_broken() {
+            self.notice = Some(Notice::Find(FindNotice::BrokenPattern));
+            return DocumentEffect::Stay;
+        }
         self.notice = None;
         self.commit_edit();
         let scope = self.find_scope(query.clone());
@@ -1620,6 +1624,10 @@ impl Document {
     /// 当たらなければ次を探すだけ（ADR 0030 の決定 6）。保存中は置き換えない。
     pub fn replace_one(&mut self, query: FindQuery, replacement: &str) -> DocumentEffect {
         if query.is_empty() || self.closing != CloseState::Open {
+            return DocumentEffect::Stay;
+        }
+        if query.is_broken() {
+            self.notice = Some(Notice::Find(FindNotice::BrokenPattern));
             return DocumentEffect::Stay;
         }
         if self.saving {
@@ -1662,6 +1670,10 @@ impl Document {
     /// 数え始める（ADR 0030 の決定 6）。数え終えたら件数を見せ、Enter で 1 手の束として置き換える。保存中は始めない。
     pub fn replace_all(&mut self, query: FindQuery, replacement: &str) -> DocumentEffect {
         if query.is_empty() || self.closing != CloseState::Open {
+            return DocumentEffect::Stay;
+        }
+        if query.is_broken() {
+            self.notice = Some(Notice::Find(FindNotice::BrokenPattern));
             return DocumentEffect::Stay;
         }
         if self.saving {
@@ -8409,6 +8421,28 @@ mod tests {
         document.apply(Intent::Undo, normal());
         assert_eq!(cell_text(&document, 1, 1), None, "1 つずつ戻る");
         assert_eq!(cell_text(&document, 1, 0), Some("x1"));
+    }
+
+    /// 読めない正規表現では探さず、置き換えず、そう知らせる（ADR 0031）。読める正規表現は探す。
+    #[test]
+    fn a_broken_regex_neither_finds_nor_replaces() {
+        let mut document = indexed_editable();
+        let options = FindOptions::standard().toggled_regex();
+        let broken = FindQuery::new("(b", options);
+        assert_eq!(document.find(broken.clone(), true), DocumentEffect::Stay);
+        text_at(
+            &document.frame(normal(), palette()),
+            "正規表現の式が読めないので探しませんでした（Alt+R で文字どおりに）",
+        );
+        assert_eq!(
+            document.replace_one(broken.clone(), "x"),
+            DocumentEffect::Stay
+        );
+        assert_eq!(document.replace_all(broken, "x"), DocumentEffect::Stay);
+        finding(&mut document, "b", true);
+        let effect = document.find(FindQuery::new(r"^c\d$", options), true);
+        finish_finding(&mut document, effect);
+        assert_eq!(document.selection().cursor(), CellPosition::new(2, 0));
     }
 
     /// 編集中の貼り付けは字のまま（引用を解かない・レビューで見つけた）。

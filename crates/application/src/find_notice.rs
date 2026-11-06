@@ -13,4 +13,6 @@ pub enum FindNotice {
     Failed,
     /// F3 で続けて探すものが無い（まだ探していない）。
     NothingToRepeat,
+    /// 正規表現の式が読めないので探さない（ADR 0031）。
+    BrokenPattern,
 }

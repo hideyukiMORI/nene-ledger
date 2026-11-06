@@ -69,11 +69,11 @@ const CLASS: PCWSTR = w!("NeNeLedger");
 const INITIAL_WIDTH: u32 = 1024;
 const INITIAL_HEIGHT: u32 = 640;
 /// `WM_MOUSELEAVE` と `WM_NCMOUSELEAVE`（winuser.h の 0x02A3・0x02A2）。
-/// `WM_SYSKEYDOWN` で受ける Alt のキー：Enter（セルの中の改行）・C・W（検索の欄の条件・ADR 0030 の決定 3）・A（全部の
-/// 置換・決定 6）。
-const ALT_KEYS: [u16; 4] = [VK_RETURN.0, 0x43, 0x57, 0x41];
+/// `WM_SYSKEYDOWN` で受ける Alt のキー：Enter（セルの中の改行）・C・W・R（検索の欄の条件・ADR 0030 の決定 3・ADR 0031）・
+/// A（全部の置換・決定 6）。
+const ALT_KEYS: [u16; 5] = [VK_RETURN.0, 0x43, 0x57, 0x52, 0x41];
 /// 受けた Alt のキーに続く `WM_SYSCHAR`（OS に渡すと警告の音が鳴る）。
-const ALT_CHARS: &[u8; 7] = b"\rcCwWaA";
+const ALT_CHARS: &[u8; 9] = b"\rcCwWrRaA";
 
 const WM_MOUSELEAVE: u32 = 0x02A3;
 const WM_NCMOUSELEAVE: u32 = 0x02A2;

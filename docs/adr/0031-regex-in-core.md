@@ -57,8 +57,8 @@ ADR 0030 の決定 5 は「`regex` クレートを scan に入れる」と決め
   - core の外部クレートは `regex-automata` だけ（CNF-013 の許可表・許可を書く前に `regex-automata への依存は crates/core/ に許されていない` で落ちることを確かめた・gate-proofs 第 80 節）。core が `std` に届かない（CNF-007 のまま）
   - 正規表現でも `matches` と `replaced` が同じ答え、ASCII の速い道と畳んだ写しの道が同じ答え（core のテスト `a_regex_replacement_agrees_with_matching`）。`\D` などを小文字に畳まない・全角を半角に畳む（`a_regex_matches_folded_cells_and_keeps_its_escapes`）。`$1`・`${name}` は元の字で埋める（`a_regex_replacement_fills_groups_with_the_original_characters`）。読めない式はどこにも当たらない（`a_broken_regex_matches_nothing_and_says_so`）
   - 病的な式（`(a*)*b`・`(x+x+)+y`）が 20 万字のセルで終わる（`pathological_patterns_finish_on_long_cells`・SEC-04。時間の数は画面の Issue で 1 GB と一緒に測る）
-- **planned（画面の Issue で active にする）**:
-  - Alt+R の切り替えと、読めない式の知らせ。1 GB を正規表現で探す時間（benchmarks）
+- **active**（GitHub Issue #173 で入れた）:
+  - Alt+R の切り替え（application のテスト `the_find_line_shows_the_regex_state`・ui-x11 の `find_keys`・ui-win32 の `find_keys`）。読めない式では探さず、置き換えず、知らせる（`a_broken_regex_neither_finds_nor_replaces`）。1 GB の時間（benchmarks 第 10 節・検索 4.2〜4.4 s・全部の置換の数え 6.9 s）
 
 ## 結果
 
