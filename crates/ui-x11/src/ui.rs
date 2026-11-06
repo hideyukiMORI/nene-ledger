@@ -18,6 +18,7 @@ use crate::chrome_action::ChromeAction;
 use crate::cursor_shape::CursorShape;
 use crate::frame_surface::{measure, paint};
 use crate::key_intent::button_intent;
+use crate::paste_receipt::PasteReceipt;
 use crate::pointer_at::PointerAt;
 use crate::screen::Screen;
 use crate::step::Step;
@@ -127,9 +128,13 @@ impl Ui {
         if let Some(step) = self.clipboard_event(event, screen)? {
             return Ok(step);
         }
-        if let Some(text) = self.window.pasted_text(event)? {
-            session.paste(&text, screen.view());
-            return Ok(Step::Redraw);
+        match self.window.pasted_text(event, screen.incoming_paste())? {
+            Some(PasteReceipt::Done(text)) => {
+                session.paste(&text, screen.view());
+                return Ok(Step::Redraw);
+            }
+            Some(PasteReceipt::Pending) => return Ok(Step::Wait),
+            None => {}
         }
         if self.window.is_wake(event) {
             session.refresh(screen.view());
@@ -183,6 +188,8 @@ impl Ui {
             if let Some(text) = screen.clipboard().map(|text| String::from(text.as_str())) {
                 session.paste(&text, screen.view());
             } else {
+                // 前の受け取りが途中で止まっていても、新しく求める（途中の中身は捨てる）。
+                *screen.incoming_paste() = None;
                 self.window.request_clipboard(time)?;
             }
             return Ok(Some(Step::Redraw));

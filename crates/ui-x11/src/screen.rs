@@ -6,6 +6,7 @@ use nene_ledger_application::zoom_level::ZoomLevel;
 use nene_ledger_core::glyph_metrics::GlyphMetrics;
 
 use crate::cursor_shape::CursorShape;
+use crate::incoming_paste::IncomingPaste;
 use crate::pointer::Pointer;
 use crate::viewport::Viewport;
 
@@ -19,6 +20,8 @@ pub(crate) struct Screen {
     zoom: ZoomLevel,
     content: GlyphMetrics,
     holding: bool,
+    /// 分けて受け取っている途中の貼り付け（`INCR`）。
+    incoming: Option<IncomingPaste>,
 }
 
 impl Screen {
@@ -32,6 +35,7 @@ impl Screen {
             zoom: ZoomLevel::hundred(),
             content: viewport.metrics(),
             holding: false,
+            incoming: None,
         }
     }
 
@@ -44,6 +48,11 @@ impl Screen {
     pub(crate) fn set_zoom(&mut self, zoom: ZoomLevel, content: GlyphMetrics) {
         self.zoom = zoom;
         self.content = content;
+    }
+
+    /// 分けて受け取っている途中の貼り付けの置き場。
+    pub(crate) fn incoming_paste(&mut self) -> &mut Option<IncomingPaste> {
+        &mut self.incoming
     }
 
     /// クリップボードに置いている中身（持ち主のときだけ）。

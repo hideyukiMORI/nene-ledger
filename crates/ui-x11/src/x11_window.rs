@@ -13,16 +13,19 @@ use x11rb::connection::{Connection, RequestConnection};
 use x11rb::protocol::Event;
 use x11rb::protocol::xproto::{
     AtomEnum, ChangeWindowAttributesAux, ClientMessageEvent, ConnectionExt, CreateGCAux,
-    CreateWindowAux, Cursor, EventMask, Gcontext, ImageFormat, ImageOrder, KeyButMask, PropMode,
-    SELECTION_NOTIFY_EVENT, SelectionNotifyEvent, SelectionRequestEvent, Window, WindowClass,
+    CreateWindowAux, Cursor, EventMask, Gcontext, GetPropertyReply, ImageFormat, ImageOrder,
+    KeyButMask, PropMode, Property, SELECTION_NOTIFY_EVENT, SelectionNotifyEvent,
+    SelectionRequestEvent, Window, WindowClass,
 };
 use x11rb::rust_connection::RustConnection;
 use x11rb::wrapper::ConnectionExt as _;
 
 use crate::chrome_action::{MOVERESIZE_MOVE, cursor_glyph, moveresize_direction};
 use crate::cursor_shape::CursorShape;
+use crate::incoming_paste::IncomingPaste;
 use crate::key_intent::key_intent;
 use crate::key_map::KeyMap;
+use crate::paste_receipt::PasteReceipt;
 use crate::pointer_at::PointerAt;
 use crate::ui_failure::UiFailure;
 use crate::window_atoms::WindowAtoms;
@@ -340,9 +343,28 @@ impl X11Window {
         Ok(())
     }
 
-    /// 求めた貼り付けの答えなら、受け取った文字列（断られた・分けて渡す大きな中身は空の文字列。貼る側は空を貼らない）。
-    /// 答えでなければ `None`。読んだ属性は消す。UTF-8 でないバイトは置き換える。
-    pub(crate) fn pasted_text(&self, event: &Event) -> Result<Option<String>, UiFailure> {
+    /// 求めた貼り付けの答えか、分けて渡される中身の続きなら、その受け取り（ICCCM の `INCR` も受ける）。
+    /// どちらでもなければ `None`。読んだ属性は消す（持ち主への「次を送ってよい」の合図にもなる）。断られたら空の文字列。
+    /// 分けて受け取っている途中の中身は `incoming` に溜める。
+    pub(crate) fn pasted_text(
+        &self,
+        event: &Event,
+        incoming: &mut Option<IncomingPaste>,
+    ) -> Result<Option<PasteReceipt>, UiFailure> {
+        if let Event::PropertyNotify(notify) = event
+            && notify.window == self.window
+            && notify.atom == self.atoms.paste()
+            && notify.state == Property::NEW_VALUE
+            && let Some(mut receiving) = incoming.take()
+        {
+            let part = self.take_paste_property()?;
+            if part.value.is_empty() {
+                return Ok(Some(PasteReceipt::Done(receiving.finish())));
+            }
+            receiving.push(&part.value);
+            *incoming = Some(receiving);
+            return Ok(Some(PasteReceipt::Pending));
+        }
         let Event::SelectionNotify(notify) = event else {
             return Ok(None);
         };
@@ -350,17 +372,33 @@ impl X11Window {
             return Ok(None);
         }
         if notify.property == x11rb::NONE {
-            return Ok(Some(String::new()));
+            return Ok(Some(PasteReceipt::Done(String::new())));
         }
-        let length = u32::try_from(self.connection.maximum_request_bytes() / 4).unwrap_or(u32::MAX);
-        let reply = self
-            .connection
-            .get_property(true, self.window, notify.property, AtomEnum::ANY, 0, length)?
-            .reply()?;
+        let reply = self.take_paste_property()?;
         if reply.type_ == self.atoms.incr() {
-            return Ok(Some(String::new()));
+            // 属性を消したので、持ち主が分けて書き始める（PropertyNotify の NewValue で届く）。
+            *incoming = Some(IncomingPaste::new());
+            return Ok(Some(PasteReceipt::Pending));
         }
-        Ok(Some(String::from_utf8_lossy(&reply.value).into_owned()))
+        Ok(Some(PasteReceipt::Done(
+            String::from_utf8_lossy(&reply.value).into_owned(),
+        )))
+    }
+
+    /// 貼り付けの属性を読んで消す。
+    fn take_paste_property(&self) -> Result<GetPropertyReply, UiFailure> {
+        let length = u32::try_from(self.connection.maximum_request_bytes() / 4).unwrap_or(u32::MAX);
+        Ok(self
+            .connection
+            .get_property(
+                true,
+                self.window,
+                self.atoms.paste(),
+                AtomEnum::ANY,
+                0,
+                length,
+            )?
+            .reply()?)
     }
 
     /// 別のアプリからの `CLIPBOARD` の求めに応える。`TARGETS` には渡せる形の一覧を、`UTF8_STRING` と
