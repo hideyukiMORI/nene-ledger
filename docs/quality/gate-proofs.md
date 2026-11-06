@@ -940,6 +940,12 @@ Windows の exe の `--version`（コマンドプロンプトに結んで書く�
 | 一覧から 1 行（`==== simdutf8 …`）を消して `notices-check` | `ADR 0032: THIRD-PARTY-NOTICES.txt が Cargo.lock の依存と食い違う。…作り直す`・終了 1 |
 | `make notices` で作り直す | 消す前と 1 バイトも違わない（`cmp`）・`notices-check` が通る |
 
+## 85. 配る zip（GitHub Issue #183・ADR 0032 の決定 2・3）
+
+`make dist`（`tools/dist.sh`）を手元で回した（2026-11-06・版 `0.1.0-preview.1`）。`notices-check` → `build-windows` → `dist/nene-ledger-0.1.0-preview.1-windows-x86_64.zip`（5,549,555 バイトを展開・10 項目：`nene-ledger.exe` 5,509,175 バイト・`LICENSE`・`THIRD-PARTY-NOTICES.txt`・`README.txt`・`samples/` の見本 4 つ）と `.sha256`。説明書の類は改行を CRLF にした（メモ帳で読めるように）。
+
+タグから GitHub Actions で同じ `make dist` を回して Releases に置く `.github/workflows/release.yml` は、タグを打つまで走らない（初めて走らせた結果は、タグを打った後にここへ足す）。
+
 ## 7. active の規則と、その証明
 
 CNF-009 は active の規則ごとに `| ID |` で始まる行がここにあることを要求する。
