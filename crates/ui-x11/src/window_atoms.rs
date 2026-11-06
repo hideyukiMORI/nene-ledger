@@ -22,7 +22,7 @@ pub(crate) struct WindowAtoms {
     clipboard: Atom,
     targets: Atom,
     text_plain_utf8: Atom,
-    paste: Atom,
+    paste: [Atom; 2],
     incr: Atom,
 }
 
@@ -47,7 +47,10 @@ impl WindowAtoms {
             clipboard: atom(b"CLIPBOARD")?,
             targets: atom(b"TARGETS")?,
             text_plain_utf8: atom(b"text/plain;charset=utf-8")?,
-            paste: atom(b"_NENE_LEDGER_PASTE")?,
+            paste: [
+                atom(b"_NENE_LEDGER_PASTE_0")?,
+                atom(b"_NENE_LEDGER_PASTE_1")?,
+            ],
             incr: atom(b"INCR")?,
         })
     }
@@ -112,9 +115,10 @@ impl WindowAtoms {
         self.clipboard
     }
 
-    /// 貼り付けで受け取る中身を書いてもらう、自分の窓の属性（`_NENE_LEDGER_PASTE`）。
-    pub(crate) fn paste(self) -> Atom {
-        self.paste
+    /// 貼り付けで受け取る中身を書いてもらう、自分の窓の属性（`_NENE_LEDGER_PASTE_0` と `_1`）。求めるたびに交互に使い、
+    /// 途中で止まった前の `INCR` の持ち主が書く分を、次の受け取りに混ぜない（GitHub Issue #144）。
+    pub(crate) fn paste(self, slot: usize) -> Atom {
+        self.paste.get(slot % 2).copied().unwrap_or(x11rb::NONE)
     }
 
     /// 大きな中身を分けて渡す印（`INCR`・ICCCM）。分けた受け取りはまだしない。

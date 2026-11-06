@@ -22,6 +22,8 @@ pub(crate) struct Screen {
     holding: bool,
     /// 分けて受け取っている途中の貼り付け（`INCR`）。
     incoming: Option<IncomingPaste>,
+    /// 今の貼り付けの求めに使う属性の番（0 か 1・GitHub Issue #144）。
+    paste_slot: usize,
 }
 
 impl Screen {
@@ -36,6 +38,7 @@ impl Screen {
             content: viewport.metrics(),
             holding: false,
             incoming: None,
+            paste_slot: 0,
         }
     }
 
@@ -48,6 +51,17 @@ impl Screen {
     pub(crate) fn set_zoom(&mut self, zoom: ZoomLevel, content: GlyphMetrics) {
         self.zoom = zoom;
         self.content = content;
+    }
+
+    /// 今の貼り付けの求めに使う属性の番。
+    pub(crate) fn paste_slot(&self) -> usize {
+        self.paste_slot
+    }
+
+    /// 新しく求めるので、属性の番を替えて返す。
+    pub(crate) fn next_paste_slot(&mut self) -> usize {
+        self.paste_slot = (self.paste_slot + 1) % 2;
+        self.paste_slot
     }
 
     /// 分けて受け取っている途中の貼り付けの置き場。
