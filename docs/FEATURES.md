@@ -55,12 +55,12 @@
 | 番号 | 機能 | フェーズ | 状態 | FR | 競合 | 根拠 |
 | --- | --- | --- | --- | --- | --- | --- |
 | KEEP-01 | セルは文字列のまま。型を推し量らない（先頭の 0・日付に見える値・長い数字・指数表記） | 1 | 確認済み | FR-003 | 一部 | 要望 1・文献・遺伝子名・値は文字列のまま見せる（gate-proofs 第 13 節の `00123`・`1.20E+03`、第 27 節の `0012`）。コピー（Issue #30）と集計（Issue #42）も値を変えない。Windows は Issue #59（gate-proofs 第 46 節）。日付に見える値・遺伝子名・16 進・前後の空白などの見本は Issue #65 のテスト（app の `values_that_look_like_dates_numbers_or_genes_are_kept_as_text`・`…_written_back_unchanged`、application の `…_drawn_as_they_are`） |
-| KEEP-02 | 読んで何も変えずに保存すると、バイト単位で同じファイル | 1 | 未着手 | FR-003 | 少 | 文献・全体の原則。保存の経路（store）と `--resave` の往復の実測は GitHub Issue #58（benchmarks 第 4 節）。画面からの保存はまだなので状態は変えない |
-| KEEP-03 | 触っていない行（目標はセル）は、保存で元のバイト列のまま | 1 | 未着手 | FR-003 | 少 | 要望・SmoothCSV / 討議 B |
-| KEEP-04 | BOM の有無・最終行の改行の有無・末尾の区切りを保つ | 1 | 未着手 | FR-003 | 少 | 文献・落とし穴 7 / 11 |
-| KEEP-05 | 「空のセル」と「セルが無い」、引用符つきの空と無しの空を区別して保つ | 1 | 未着手 | FR-003 | 無 | 文献・落とし穴 6 / 26。例外：列の数が足りない行のセルの無い所に書くと、間の列は空のセルで埋める（ADR 0024 の施主の判断 4・5・GitHub Issue #83） |
+| KEEP-02 | 読んで何も変えずに保存すると、バイト単位で同じファイル | 1 | 実装済み | FR-003 | 少 | 文献・全体の原則。保存の経路（store）と `--resave` の往復の実測は GitHub Issue #58（benchmarks 第 4 節）。画面からの保存（Ctrl+S）は GitHub Issue #71 から入り、2026-11-06 の #130 で書き方を一時ファイルに直に流す形に替えた後も、実データ 382 ファイルの写しの `--resave` は元と違う 0（PR #131 のコメント）。Windows の実機での往復はまだなので `確認済み` にしない |
+| KEEP-03 | 触っていない行（目標はセル）は、保存で元のバイト列のまま | 1 | 実装済み | FR-003 | 少 | 要望・SmoothCSV / 討議 B・書き換えた行の触っていないセル・触っていない行・足し消しした行の前後は原本のバイト列を写す（application の `random_edits_change_only_the_edited_cells`・`random_row_insertions_and_removals_keep_the_other_rows_byte_for_byte`・`random_column_changes_rebuild_rows_with_the_same_values`・`untouched_cells_keep_bom_quotes_blanks_spaces_and_the_missing_end`・GitHub Issue #138）。1 GB で列を足した保存のバイト列は期待と `cmp` で一致（benchmarks 第 5 節） |
+| KEEP-04 | BOM の有無・最終行の改行の有無・末尾の区切りを保つ | 1 | 実装済み | FR-003 | 少 | 文献・落とし穴 7 / 11・BOM・最後の行の改行の無さ・末尾の区切りは、書き換えた行でも列を足して組み立て直しても保つ（application の `untouched_cells_keep_bom_quotes_blanks_spaces_and_the_missing_end`・最初の行を消しても BOM は残るテスト・`rows_added_after_an_unterminated_last_row_start_on_a_new_line`・GitHub Issue #138） |
+| KEEP-05 | 「空のセル」と「セルが無い」、引用符つきの空と無しの空を区別して保つ | 1 | 実装済み | FR-003 | 無 | 文献・落とし穴 6 / 26。例外：列の数が足りない行のセルの無い所に書くと、間の列は空のセルで埋める（ADR 0024 の施主の判断 4・5・GitHub Issue #83）・保存では引用符つきの空（`""`）と無しの空・短い行のセルの無い所を保つ（application の `untouched_cells_keep_bom_quotes_blanks_spaces_and_the_missing_end`・GitHub Issue #138）。表の中で「空のセル」と「セルが無い」を区別するのは core の `CellValue`（RS-004） |
 | KEEP-06 | 見出しの重複・空を許し、勝手に改名しない（列は番号で指す） | 1 | 確認済み | FR-003 | 無 | 文献・落とし穴 8・見出しは原本のレコードのまま出し、列は位置で扱う（Issue #26・#48）。重複・空の見出しは Issue #61 のテスト（app の `duplicate_and_empty_headers_are_kept_as_they_are`・application の `duplicate_and_empty_headers_are_drawn_as_they_are_and_pointed_by_position`。2 つめの同じ名前の見出しを押すとその位置の列が選ばれ、コピーもその列） |
-| KEEP-07 | 前後の空白を保つ（削るのは明示の操作） | 1 | 未着手 | FR-003 | 一部 | 文献・落とし穴 25 |
+| KEEP-07 | 前後の空白を保つ（削るのは明示の操作） | 1 | 実装済み | FR-003 | 一部 | 文献・落とし穴 25・前後の空白は見せるときも保存でも削らない（app の `values_that_look_like_dates_numbers_or_genes_are_kept_as_text` の ` 7 `・application の `untouched_cells_keep_bom_quotes_blanks_spaces_and_the_missing_end` の ` a `・`" q "`・GitHub Issue #138）。空白を削る操作はまだ無い |
 | KEEP-08 | 列ごとの「見方」（文字列 / 数 / 日付）は比較・統計・表示だけに効き、保存に効かない。読める率を示して提案するが自動で適用しない | 1 | 未着手 | FR-009 | 無 | 討議 A・文献・CSVW |
 
 ## 3. 巨大なファイルと速さ（BIG）
@@ -80,7 +80,7 @@
 | BIG-11 | 速さの測定を公表（最初の画面・索引・集計・メモリの倍率・正しく読めた率。保存の往復は BIG-14、並べ替えと絞り込みは BIG-15・Issue #51） | 1 | 未着手 | FR-004 | 無 | 速さ・空白 1〜9・正しく読めた率は Pollock で記録した（Issue #24・#25、benchmarks 第 1 節）。最初の画面・索引・集計・メモリの倍率と、比較相手（DuckDB・qsv・xsv）との比較はまだ |
 | BIG-12 | 行の索引を作り終わる前から編集できる（BIG-02 から分けた） | 1 | 未着手 | FR-004 | 少 | 速さ・EmEditor・Issue #51 |
 | BIG-13 | 編集してもメモリは差分に比例（全体を記憶に読み込まない・BIG-04 から分けた） | 1 | 未着手 | FR-004 | 少 | 速さ・ADR 0005・Issue #51 |
-| BIG-14 | 保存の往復の時間を測って公表（BIG-11 から分けた） | 1 | 未着手 | FR-004 | 無 | 速さ・空白 3・Issue #51。保存の経路（store）と `--resave` の往復の実測は GitHub Issue #58（benchmarks 第 4 節）。画面からの保存はまだなので状態は変えない |
+| BIG-14 | 保存の往復の時間を測って公表（BIG-11 から分けた） | 1 | 実装済み | FR-004 | 無 | 速さ・空白 3・Issue #51。保存の経路（store）と `--resave` の往復の実測は GitHub Issue #58（benchmarks 第 4 節）。画面からの保存は benchmarks 第 5 節（2026-11-06・1 GB でセル 1.04 s・行 0.99 s・列 18.23 s と記憶・GitHub Issue #130）。比較相手との同じファイルでの比べと Windows の実機はまだ |
 | BIG-15 | 並べ替えと絞り込みの時間を測って公表（BIG-11 から分けた） | 1 | 未着手 | FR-004 | 無 | 速さ・Issue #51 |
 
 ## 4. 表示（VIEW）
