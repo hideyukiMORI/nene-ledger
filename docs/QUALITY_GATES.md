@@ -117,7 +117,7 @@ PR に「確認する退行」「対象・依存」「検証結果（コマン�
 単体テストは X サーバ・Windows・実機・実 OS 資源を必要としない。単体テストが通ったことを「実機で動く」の証拠として扱わない。
 Xvfb の上での表示確認は「仮想の X サーバでの確認」であり、WSLg や Windows の実機での確認とは別に記録する。
 **Windows で動かすまで「Windows で動く」と書かない。** ビルドが通ることは動くことの証拠ではない（NeNeDocket の Windows 版は組み立てただけで、長く Windows で動いていなかった）。
-2026-10-22 時点で Windows の exe は当面組み立てない（Issue #7）。画面の確かめ方は [DEVELOPMENT_WORKFLOW.md](DEVELOPMENT_WORKFLOW.md) 第 9 節。
+Windows の exe は `make build-windows` で組み立て、施主の実機で確かめて gate-proofs に記録する（2026-10-27 から・第 42 節。2026-10-22 の検疫（公開前の Issue #7）はこの exe では起きていない）。配る exe は ADR 0032 のとおりタグから GitHub Actions で作る。画面の確かめ方は [DEVELOPMENT_WORKFLOW.md](DEVELOPMENT_WORKFLOW.md) 第 9 節。
 
 - 機械強制: **planned**
 

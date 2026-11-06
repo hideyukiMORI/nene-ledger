@@ -214,4 +214,4 @@ Wine での目安の確認は、要るときに施主の判断で入れる（Win
 ## 10. リリース
 
 製品の版入力は `Cargo.toml` の `[workspace.package] version` だけとする。画面の表示はここから導出する。
-配布の手順は別の焦点 Issue とする。
+配布の手順は [ADR 0032](adr/0032-preview-release-on-github.md)（プレビュー版：Windows の exe の zip を、タグから GitHub Actions で作って GitHub Releases に置く）。0.1.0 の配布は M4 で決め直す。
