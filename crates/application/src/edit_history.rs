@@ -1,7 +1,7 @@
 //! 元に戻す・やり直すの履歴（UNDO-01・ADR 0024 の決定 5）。
 //!
-//! 1 手は書き換えの束（今は確定 1 回で 1 つのセル。一括の入力・置換・貼り付けでは束が大きくなる）か、行の足し消し
-//! （ADR 0027）。数は限らない（FR-006）。
+//! 1 手は書き換えの束（確定 1 回で 1 つのセル。一括の入力・置換・貼り付けでは束が大きくなる）か、行の足し消し
+//! （ADR 0027）か、それらをまとめた束（貼り付け・ADR 0029）。数は限らない（FR-006）。
 //! 触ったセルの「ファイルの今の値」も覚えておき、戻した値がそれと同じなら差分を消す（保存すればバイト列まで元に戻る）。
 //! 保存のときは、覚えたファイルの値を保存した値に進める。これで保存の後も履歴を残せる。
 
@@ -64,13 +64,66 @@ impl EditHistory {
         self.undone.clear();
     }
 
-    /// 1 手戻す。戻した手（セルなら戻した後の値への書き換え）を返す。戻すものが無ければ `None`。
+    /// 行と列の足し消し `steps`（並びにはもう行った）とセルの書き換え `cells`（書き換えと、そのセルのファイルの今の値）を、
+    /// 1 手の束として積む（貼り付け・ADR 0029 の決定 3）。書き換えは差分 `edits` に入れ、束の最後の手にする。ファイルの値は
+    /// 初めて触ったセルだけ覚える。何も無ければ積まない。やり直しの列は捨てる。
+    pub fn record_batch(
+        &mut self,
+        mut steps: Vec<EditStep>,
+        cells: Vec<(CellChange, String)>,
+        edits: &mut CellEdits,
+    ) {
+        let changes: Vec<CellChange> = cells
+            .into_iter()
+            .map(|(change, source)| {
+                self.sources
+                    .entry((change.row(), change.column()))
+                    .or_insert(source);
+                change
+            })
+            .collect();
+        for change in &changes {
+            self.apply(change, edits);
+        }
+        if !changes.is_empty() {
+            steps.push(EditStep::Cells(changes));
+        }
+        if steps.is_empty() {
+            return;
+        }
+        self.done.push(EditStep::Batch(steps));
+        self.undone.clear();
+    }
+
+    /// 1 手戻す。戻した手（セルなら戻した後の値への書き換え・束なら戻した順の中の手）を返す。戻すものが無ければ `None`。
     pub fn undo(
         &mut self,
         (edits, order, columns): (&mut CellEdits, &mut RowOrder, &mut ColumnOrder),
     ) -> Option<EditStep> {
         let step = self.done.pop()?;
-        let taken = match &step {
+        let taken = self.undo_step(&step, (edits, order, columns));
+        self.undone.push(step);
+        Some(taken)
+    }
+
+    /// 戻した 1 手をやり直す。やり直した手を返す。やり直すものが無ければ `None`。
+    pub fn redo(
+        &mut self,
+        (edits, order, columns): (&mut CellEdits, &mut RowOrder, &mut ColumnOrder),
+    ) -> Option<EditStep> {
+        let step = self.undone.pop()?;
+        self.redo_step(&step, (edits, order, columns));
+        self.done.push(step.clone());
+        Some(step)
+    }
+
+    /// 手 `step` を戻し、戻した手を返す。束は中の手を逆の順に戻し、戻した順に並べて返す。
+    fn undo_step(
+        &self,
+        step: &EditStep,
+        (edits, order, columns): (&mut CellEdits, &mut RowOrder, &mut ColumnOrder),
+    ) -> EditStep {
+        match step {
             EditStep::Cells(changes) => {
                 let reversed: Vec<CellChange> =
                     changes.iter().rev().map(CellChange::reversed).collect();
@@ -87,18 +140,23 @@ impl EditHistory {
                 change.undo(columns);
                 step.clone()
             }
-        };
-        self.undone.push(step);
-        Some(taken)
+            EditStep::Batch(steps) => EditStep::Batch(
+                steps
+                    .iter()
+                    .rev()
+                    .map(|inner| self.undo_step(inner, (&mut *edits, &mut *order, &mut *columns)))
+                    .collect(),
+            ),
+        }
     }
 
-    /// 戻した 1 手をやり直す。やり直した手を返す。やり直すものが無ければ `None`。
-    pub fn redo(
-        &mut self,
+    /// 手 `step` をもう一度行う。束は中の手を順に行う。
+    fn redo_step(
+        &self,
+        step: &EditStep,
         (edits, order, columns): (&mut CellEdits, &mut RowOrder, &mut ColumnOrder),
-    ) -> Option<EditStep> {
-        let step = self.undone.pop()?;
-        match &step {
+    ) {
+        match step {
             EditStep::Cells(changes) => {
                 for change in changes {
                     self.apply(change, edits);
@@ -106,18 +164,18 @@ impl EditHistory {
             }
             EditStep::Rows(change) => change.redo(order),
             EditStep::Columns(change) => change.redo(columns),
+            EditStep::Batch(steps) => {
+                for inner in steps {
+                    self.redo_step(inner, (&mut *edits, &mut *order, &mut *columns));
+                }
+            }
         }
-        self.done.push(step.clone());
-        Some(step)
     }
 
     /// 行か列の足し消しの手を持つか。持っていれば、保存の後は原本のレコードと列の番号が変わるので履歴を残せない。
     #[must_use]
     pub fn has_row_steps(&self) -> bool {
-        self.done
-            .iter()
-            .chain(&self.undone)
-            .any(|step| matches!(step, EditStep::Rows(_) | EditStep::Columns(_)))
+        self.done.iter().chain(&self.undone).any(changes_order)
     }
 
     /// 保存した。触ったセルのファイルの値を、保存した値（差分があればその値）に進める。差分は呼ぶ側が空にする。
@@ -153,6 +211,15 @@ impl EditHistory {
         } else {
             edits.set(row, column, CellValue::Text(String::from(change.after())))
         };
+    }
+}
+
+/// 手 `step` が行か列の足し消しを含むか（束は中を見る）。
+fn changes_order(step: &EditStep) -> bool {
+    match step {
+        EditStep::Rows(_) | EditStep::Columns(_) => true,
+        EditStep::Cells(_) => false,
+        EditStep::Batch(steps) => steps.iter().any(changes_order),
     }
 }
 

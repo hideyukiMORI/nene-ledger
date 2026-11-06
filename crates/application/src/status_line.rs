@@ -11,11 +11,44 @@ use crate::columns_notice::ColumnsNotice;
 use crate::format_summary::FormatSummary;
 use crate::job_state::JobState;
 use crate::notice::Notice;
+use crate::paste_notice::PasteNotice;
 use crate::rows_notice::RowsNotice;
 use crate::save_problem::SaveProblem;
 use crate::selection_stats::SelectionStats;
 use crate::selection_totals::SelectionTotals;
 use nene_ledger_core::decimal::Decimal;
+
+/// 表への貼り付けの知らせ。
+fn paste_status(notice: PasteNotice) -> String {
+    match notice {
+        PasteNotice::Pasted {
+            rows,
+            columns,
+            added_rows,
+            added_columns,
+        } => pasted_status(rows, columns, (added_rows, added_columns)),
+        PasteNotice::TooLarge => {
+            String::from("貼り付けが大きすぎるので貼りませんでした（100 万セル・64 MiB まで）")
+        }
+        PasteNotice::AwaitIndex => String::from(
+            "表の終わりを越えるかもしれないので、行を数え終えてから貼ってください（索引を作っています）",
+        ),
+    }
+}
+
+/// 貼った知らせ。表の端を越えて足した行と列があれば添える。
+fn pasted_status(rows: u64, columns: usize, (added_rows, added_columns): (u64, usize)) -> String {
+    let shape = format!("{} 行 × {columns} 列を貼りました", group_digits(rows));
+    match (added_rows, added_columns) {
+        (0, 0) => shape,
+        (0, added) => format!("{shape}（{added} 列を足しました）"),
+        (added, 0) => format!("{shape}（{} 行を足しました）", group_digits(added)),
+        (rows_added, columns_added) => format!(
+            "{shape}（{} 行と {columns_added} 列を足しました）",
+            group_digits(rows_added)
+        ),
+    }
+}
 
 /// 索引の状態を、窓の下の行の文言にする。🔴 表示言語の文言の表（ADR 0011）を入れるまでの仮の日本語。
 #[must_use]
@@ -128,10 +161,7 @@ pub fn notice_status(notice: Notice) -> String {
         Notice::StillSaving => String::from("保存しています。終わるまで直せません"),
         Notice::SaveFailed(problem) => save_problem_status(problem),
         Notice::NewWindowFailed => String::from("新しい表の窓を開けませんでした"),
-        Notice::PasteManyCells { rows, columns } => format!(
-            "{} 行 × {columns} 列の貼り付けはまだできません（1 つのセルか、編集中の欄には貼れます）",
-            group_digits(u64::try_from(rows).unwrap_or(u64::MAX))
-        ),
+        Notice::Paste(paste) => paste_status(paste),
         Notice::ReopenFailed => {
             String::from("保存しました。開き直せなかったので、表示は保存の前のままです")
         }

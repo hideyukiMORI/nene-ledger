@@ -15,6 +15,7 @@ use nene_ledger_application::notice::Notice;
 use nene_ledger_application::palette_layout::PaletteLayout;
 use nene_ledger_application::palette_mode::PaletteMode;
 use nene_ledger_application::palette_outcome::PaletteOutcome;
+use nene_ledger_application::paste_request::PasteRequest;
 use nene_ledger_application::pointer_shape::PointerShape;
 use nene_ledger_application::reading_aspect::ReadingAspect;
 use nene_ledger_application::reading_choice::ReadingChoice;
@@ -329,6 +330,20 @@ impl Viewer {
                 }
                 None
             }
+        }
+    }
+
+    /// 表に貼る。貼る行を読んでから書く（書く前の値と原本の値を履歴に残す・ADR 0029）。読めなければ貼らない。
+    fn paste_into_table(&mut self, text: &str, view: WindowView) {
+        let PasteRequest::Read { first_line, count } = self.document.paste(text) else {
+            return;
+        };
+        let lines = usize::try_from(count)
+            .ok()
+            .and_then(|count| self.read_lines(first_line, count).ok());
+        if let Some((rows, cuts)) = lines {
+            let effect = self.document.paste_rows(first_line, (&rows, &cuts), view);
+            let _clipboard = self.effect(effect);
         }
     }
 
@@ -733,7 +748,7 @@ impl Session for Viewer {
 
     fn paste(&mut self, text: &str, view: WindowView) {
         if self.palette.is_none() {
-            self.document.paste(text);
+            self.paste_into_table(text, view);
             self.refresh_totals();
             return;
         }
