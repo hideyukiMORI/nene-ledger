@@ -81,8 +81,9 @@ M2 は「探して置き換え、壊れた行を直す」束を含む（ROADMAP�
   - 足した行の中も探し、前へ探しても足した行から原本の行へ戻る（application のテスト `finding_uses_edited_values_and_added_rows`）
   - 次を探し、F3 で続け、端から反対の端へ回って知らせる。前へも探せる（application のテスト `finding_moves_to_the_next_match_and_wraps_around`）。F3 は問いが無ければ知らせ、探している間の Esc は止める（`find_again_needs_a_query_and_escape_stops_a_search`）
   - 探す段のキーと条件の切り替え（application のテスト `the_find_step_searches_both_ways_and_toggles_its_options`・ui-x11 と ui-win32 の `find_keys`）
+- **active**（GitHub Issue #157 で入れた）:
+  - 裏の検索を索引の目印で分けて並列にしても、結果はスレッドの数と分け方に依らない（scan のテスト `a_split_fold_merges_to_the_same_result_for_any_number_of_parts`・`a_split_search_finds_the_earliest_match_for_any_number_of_parts`・1・2・3・4・8 個に分けて同じ答え）
 - **planned（実装の Issue で active にする）**:
-  - 裏の検索を並列にしても、結果はスレッドの数に依らない（QLT-008）
   - 全部の置換の 1 手を戻すと、すべて元に戻る（application のテスト）
   - 正規表現の逆戻りで止まらない（病的な式と入力の時間を測る・gate-proofs）
   - 1 GB の表で、最後の行にだけある値を見つける時間を DuckDB / qsv / EmEditor と同じファイルで記録（QLT-014。`grep` と `rg` との比べは benchmarks 第 8 節）

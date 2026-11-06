@@ -22,6 +22,8 @@ mod folding {
     use nene_ledger_scan::record_range::RecordRange;
     use nene_ledger_scan::source::Source;
     use nene_ledger_scan::sparse_index::SparseIndex;
+    use nene_ledger_scan::split_fold::SplitFold;
+    use nene_ledger_scan::split_job::SplitJob;
     use nene_ledger_scan::window_record::WindowRecord;
     use nene_ledger_scan::windowing::read_records;
 
@@ -34,8 +36,44 @@ mod folding {
     }
 
     /// 渡されたレコードの番号と中身を残す。
-    #[derive(Debug, Default, PartialEq, Eq)]
+    #[derive(Debug, Default, Clone, PartialEq, Eq)]
     struct Collect(Vec<(u64, Vec<u8>)>);
+
+    impl SplitFold for Collect {
+        fn merged(mut self, later: Self) -> Self {
+            self.0.extend(later.0);
+            self
+        }
+    }
+
+    /// `from` 以降で最初の、番号が `step` の倍数のレコードを探して止まる。
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct FirstMultiple {
+        from: u64,
+        step: u64,
+        found: Option<u64>,
+    }
+
+    impl RecordFold for FirstMultiple {
+        fn record(&mut self, number: u64, _record: &WindowRecord) {
+            if self.found.is_none() && number >= self.from && number.is_multiple_of(self.step) {
+                self.found = Some(number);
+            }
+        }
+
+        fn is_done(&self) -> bool {
+            self.found.is_some()
+        }
+    }
+
+    impl SplitFold for FirstMultiple {
+        fn merged(self, later: Self) -> Self {
+            Self {
+                found: self.found.or(later.found),
+                ..self
+            }
+        }
+    }
 
     impl RecordFold for Collect {
         fn record(&mut self, number: u64, record: &WindowRecord) {
@@ -113,6 +151,71 @@ mod folding {
         assert_eq!(collect.0, expected, "塊 {size}");
         assert!(reports.windows(2).all(|pair| pair[0] < pair[1]));
         assert_eq!(reports.last().copied(), u64::try_from(expected.len()).ok());
+    }
+
+    /// 30 万行を索引付きで書いた原本（分けて畳み込む見本）。
+    fn indexed_split() -> IndexedSource {
+        let rows = 300_000;
+        let plain = from("split", rows, SparseIndex::empty());
+        let built = build_index(plain.source(), utf8(), BlockSize::MEBIBYTE, |_| {
+            ControlFlow::Continue(())
+        });
+        match built.unwrap() {
+            nene_ledger_scan::index_outcome::IndexOutcome::Finished(index) => {
+                from("split", rows, index)
+            }
+            nene_ledger_scan::index_outcome::IndexOutcome::Cancelled => panic!("止まった"),
+        }
+    }
+
+    /// `fold` を `parts` 個までに分けて、`first` から終わりまで畳み込み、分けた数と結果を返す。
+    fn split_run<F: SplitFold>(
+        source: &IndexedSource,
+        first: u64,
+        (fold, parts): (F, usize),
+    ) -> (usize, F) {
+        let wakeup: Arc<dyn Wakeup> = Arc::new(Quiet);
+        let range = RecordRange::new(first, usize::MAX);
+        let mut job = SplitJob::spawn(source, range, (fold, parts), &wakeup).unwrap();
+        let outcome = loop {
+            if let Some(outcome) = job.take_result() {
+                break outcome;
+            }
+            std::thread::yield_now();
+        };
+        match outcome.unwrap() {
+            RangeOutcome::Finished(merged) => (job.part_count(), merged),
+            RangeOutcome::Cancelled => panic!("止めていない"),
+        }
+    }
+
+    /// 範囲をいくつに分けて並列に畳み込んでも、合わせた結果は 1 つのスレッドで先頭から畳み込んだのと同じ
+    /// （QLT-008・ADR 0030 の決定 4）。
+    #[test]
+    fn a_split_fold_merges_to_the_same_result_for_any_number_of_parts() {
+        let source = indexed_split();
+        let (one, whole) = split_run(&source, 10, (Collect::default(), 1));
+        assert_eq!(one, 1);
+        for parts in [2, 3, 8] {
+            let (count, split) = split_run(&source, 10, (Collect::default(), parts));
+            assert!(count > 1, "{parts} に分けたはず");
+            assert_eq!(split, whole);
+        }
+    }
+
+    /// 前の部分で見つければ、後ろの部分の結果は使わない。答えは分けた数に依らない。
+    #[test]
+    fn a_split_search_finds_the_earliest_match_for_any_number_of_parts() {
+        let source = indexed_split();
+        let first = FirstMultiple {
+            from: 200_001,
+            step: 9_973,
+            found: None,
+        };
+        for parts in [1, 2, 4, 8] {
+            let (_, fold) = split_run(&source, 0, (first.clone(), parts));
+            assert_eq!(fold.found, Some(209_433), "{parts}");
+        }
     }
 
     /// レコードの番号 `stop` まで受け取ったら、もう要らないと言う。

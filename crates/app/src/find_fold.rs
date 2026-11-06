@@ -7,6 +7,7 @@ use nene_ledger_core::text_format::TextFormat;
 use nene_ledger_core::value::value;
 use nene_ledger_scan::decoding::decode;
 use nene_ledger_scan::record_fold::RecordFold;
+use nene_ledger_scan::split_fold::SplitFold;
 use nene_ledger_scan::window_record::WindowRecord;
 
 use nene_ledger_application::find_bound::FindBound;
@@ -14,7 +15,7 @@ use nene_ledger_application::find_bound::FindBound;
 /// 原本のレコードを順に照らす。境（`FindBound`）より後ろを探すときは最初に当たった所で止まり、前を探すときは最後まで
 /// 読んで最後に当たった所を残す。見出しのレコードと、
 /// 並びから消したレコードは照らさない。足した行は application が探す（原本に無い）。
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct FindFold {
     scope: FindScope,
     format: TextFormat,
@@ -99,6 +100,17 @@ impl RecordFold for FindFold {
             FindBound::After(_) => self.found.is_some(),
             FindBound::Before(_) => false,
         }
+    }
+}
+
+impl SplitFold for FindFold {
+    /// 前へ探すときは前の部分の当たりを、後ろへ探すときは後ろの部分の当たりを残す（分け方に依らない・QLT-008）。
+    fn merged(self, later: Self) -> Self {
+        let found = match self.bound {
+            FindBound::After(_) => self.found.or(later.found),
+            FindBound::Before(_) => later.found.or(self.found),
+        };
+        Self { found, ..self }
     }
 }
 
