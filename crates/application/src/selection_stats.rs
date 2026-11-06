@@ -4,15 +4,16 @@ use alloc::string::String;
 use core::ops::RangeInclusive;
 
 use nene_ledger_core::decimal::Decimal;
+use nene_ledger_core::decimal_sum::DecimalSum;
 use nene_ledger_core::number_reading::read_number;
 
 /// 選んだ範囲の集計。件数（空でないセル）・数の個数・合計（桁あふれなら `None`）・数として読めないセルの数。
-/// 空のセルとセルが無いは数えない（RS-004）。数は 10 進で正確に足す。
+/// 空のセルとセルが無いは数えない（RS-004）。数は 10 進で正確に、足す順に依らずに足す（GitHub Issue #42）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SelectionStats {
     cells: u64,
     numbers: u64,
-    sum: Option<Decimal>,
+    sum: DecimalSum,
     not_numbers: u64,
 }
 
@@ -35,7 +36,7 @@ impl SelectionStats {
         Self {
             cells: 0,
             numbers: 0,
-            sum: Some(Decimal::ZERO),
+            sum: DecimalSum::ZERO,
             not_numbers: 0,
         }
     }
@@ -61,7 +62,7 @@ impl SelectionStats {
         match read_number(value) {
             Some(number) => {
                 self.numbers = self.numbers.saturating_add(1);
-                self.sum = self.sum.and_then(|sum| sum.checked_add(number));
+                self.sum.add(number);
             }
             None => self.not_numbers = self.not_numbers.saturating_add(1),
         }
@@ -82,13 +83,13 @@ impl SelectionStats {
     /// 合計。桁あふれなら `None`。
     #[must_use]
     pub fn sum(self) -> Option<Decimal> {
-        self.sum
+        self.sum.total()
     }
 
     /// 平均（数の個数で割る・小数 6 桁で四捨五入して末尾の 0 を落とす）。数が無いか桁あふれなら `None`。
     #[must_use]
     pub fn average(self) -> Option<Decimal> {
-        self.sum?.average(self.numbers).map(Decimal::trimmed)
+        self.sum()?.average(self.numbers).map(Decimal::trimmed)
     }
 
     /// 数として読めなかったセルの数（空でないもの）。
@@ -148,5 +149,23 @@ mod tests {
         assert_eq!(figures.numbers(), 2);
         assert_eq!(figures.sum(), None);
         assert_eq!(figures.average(), None);
+    }
+
+    /// 合計は足す順に依らない（GitHub Issue #42。前は 1e21・1e-18・-1e21 の順で「桁あふれ」）。
+    #[test]
+    fn the_sum_does_not_depend_on_the_order_of_the_cells() {
+        let (huge, tiny, minus) = (
+            "1000000000000000000000",
+            "0.000000000000000001",
+            "-1000000000000000000000",
+        );
+        for order in [[huge, tiny, minus], [huge, minus, tiny]] {
+            let figures = stats(&[&[order[0]], &[order[1]], &[order[2]]], 0..=0);
+            assert_eq!(
+                figures.sum().map(Decimal::to_plain),
+                Some(String::from("0.000000000000000001")),
+                "{order:?}"
+            );
+        }
     }
 }

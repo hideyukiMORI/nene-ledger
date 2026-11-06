@@ -26,6 +26,7 @@ pub mod column_widths;
 pub mod contrast;
 pub mod csv_writing;
 pub mod decimal;
+pub mod decimal_sum;
 pub mod delimiter;
 pub mod detecting;
 pub mod detection;

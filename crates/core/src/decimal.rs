@@ -56,9 +56,10 @@ impl Decimal {
         if count == 0 {
             return None;
         }
-        let (numerator, divisor) = if self.scale <= AVERAGE_SCALE {
-            (self.rescaled(AVERAGE_SCALE)?, i128::from(count))
-        } else {
+        if self.scale <= AVERAGE_SCALE {
+            return self.average_widened(count);
+        }
+        let (numerator, divisor) = {
             let extra = 10_i128.checked_pow(self.scale.saturating_sub(AVERAGE_SCALE))?;
             (self.mantissa, i128::from(count).checked_mul(extra)?)
         };
@@ -70,6 +71,25 @@ impl Decimal {
         let mantissa = if numerator < 0 { -rounded } else { rounded };
         Some(Self {
             mantissa,
+            scale: AVERAGE_SCALE,
+        })
+    }
+
+    /// 小数点以下が [`AVERAGE_SCALE`] 桁以下の数の平均。先に割ってから桁を広げる（合計の仮数 × 10^6 が i128 を
+    /// 越える大きな合計でも、平均が表せれば出す・GitHub Issue #42）。
+    fn average_widened(self, count: u64) -> Option<Self> {
+        let divisor = i128::from(count);
+        let factor = 10_i128.checked_pow(AVERAGE_SCALE.checked_sub(self.scale)?)?;
+        let (quotient, remainder) = (self.mantissa / divisor, self.mantissa % divisor);
+        // 余りを広げて割り、0.5 は 0 から遠い側へ（余りは |余り| < count なので広げても収まる）。
+        let widened = remainder.checked_abs()?.checked_mul(factor)?;
+        let rounded = widened
+            .checked_mul(2)?
+            .checked_add(divisor)?
+            .checked_div(divisor.checked_mul(2)?)?;
+        let signed = if self.mantissa < 0 { -rounded } else { rounded };
+        Some(Self {
+            mantissa: quotient.checked_mul(factor)?.checked_add(signed)?,
             scale: AVERAGE_SCALE,
         })
     }
@@ -161,5 +181,27 @@ mod tests {
         assert_eq!(number(2_000_000, 6).trimmed().to_plain(), "2");
         assert_eq!(number(0, 0).to_plain(), "0");
         assert_eq!(number(-5, 1).to_plain(), "-0.5");
+    }
+
+    /// 合計の仮数 × 10^6 が i128 を越えても、平均が表せれば出す（GitHub Issue #42。前は |合計| が約 1.7e32 を越えると消えた）。
+    #[test]
+    fn the_average_of_a_huge_sum_is_still_given() {
+        // 4e32 × 10^6 は i128 を越えるが、平均 1e32 × 10^6 は収まる。
+        let huge = Decimal::new(4 * 10_i128.pow(32), 0);
+        assert_eq!(huge.average(4), Some(Decimal::new(10_i128.pow(38), 6)));
+        assert_eq!(
+            Decimal::new(10, 0).average(3),
+            Some(Decimal::new(3_333_333, 6))
+        );
+        assert_eq!(
+            Decimal::new(-10, 0).average(3),
+            Some(Decimal::new(-3_333_333, 6))
+        );
+        assert_eq!(
+            Decimal::new(5, 0).average(2),
+            Some(Decimal::new(2_500_000, 6))
+        );
+        assert_eq!(Decimal::new(-1, 6).average(2), Some(Decimal::new(-1, 6)));
+        assert_eq!(Decimal::new(1, 6).average(3), Some(Decimal::new(0, 6)));
     }
 }
