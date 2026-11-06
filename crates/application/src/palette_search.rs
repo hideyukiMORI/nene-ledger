@@ -170,6 +170,7 @@ mod tests {
                 PaletteItem::Theme(_)
                 | PaletteItem::Reading(_)
                 | PaletteItem::Key(_)
+                | PaletteItem::About(_)
                 | PaletteItem::Candidate(_) => None,
             })
             .collect()

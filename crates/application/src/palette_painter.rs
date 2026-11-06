@@ -155,6 +155,7 @@ impl<'state> PalettePainter<'state> {
             PaletteMode::GoTo
             | PaletteMode::Find
             | PaletteMode::Replace { .. }
+            | PaletteMode::About
             | PaletteMode::SaveAs { .. } => None,
             PaletteMode::Commands => Some(CommandId::ALL.len()),
             PaletteMode::Keys => Some(key_list("").len()),
@@ -197,7 +198,8 @@ impl<'state> PalettePainter<'state> {
                 "試し中: {}　Enter で開き直す・Esc で戻す",
                 ReadingChoice::dialect(candidate.dialect()).name()
             ),
-            Some(&PaletteItem::Command(_) | &PaletteItem::Key(_)) | None => String::new(),
+            Some(&PaletteItem::Command(_) | &PaletteItem::Key(_) | &PaletteItem::About(_))
+            | None => String::new(),
         };
         self.text_at(
             from_left(hint, hint.origin().x()),
@@ -227,6 +229,7 @@ impl<'state> PalettePainter<'state> {
             | PaletteMode::Commands
             | PaletteMode::SaveAs { .. } => "操作",
             PaletteMode::Keys => "キー",
+            PaletteMode::About => "行",
             PaletteMode::Themes { .. } => "配色",
             PaletteMode::Reading { aspect, .. } => aspect.noun(),
             PaletteMode::Candidates { .. } => "候補",
@@ -346,6 +349,7 @@ impl<'state> PalettePainter<'state> {
                 (choice.name(), aside)
             }
             PaletteItem::Key(guide) => (String::from(guide.name()), String::from(guide.keys())),
+            PaletteItem::About(line) => (line.text(), String::new()),
             PaletteItem::Theme(position) => {
                 left = self.swatches(row, left, position);
                 let seed = at(position);
@@ -386,6 +390,7 @@ impl<'state> PalettePainter<'state> {
             | PaletteMode::Find
             | PaletteMode::Replace { .. }
             | PaletteMode::Keys
+            | PaletteMode::About
             | PaletteMode::SaveAs { .. }
             | PaletteMode::Themes { .. } => false,
         }
@@ -536,6 +541,7 @@ fn placeholder(mode: PaletteMode) -> &'static str {
         PaletteMode::Replace { with: true } => "置き換える文字（空なら当たった所を消す）",
         PaletteMode::SaveAs { .. } => "保存先のファイルの道筋（例: /srv/data/表.csv）",
         PaletteMode::Keys => "キーか操作の名前で絞る（例: ctrl, shift, kopi-）",
+        PaletteMode::About => "このアプリについて（Esc で閉じる）",
         PaletteMode::Themes { .. } => "配色の名前を英字で（例: solarized）",
         PaletteMode::Reading {
             aspect: ReadingAspect::Delimiter,
@@ -549,8 +555,10 @@ fn placeholder(mode: PaletteMode) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::about_line::AboutLine;
     use crate::cursor_step::CursorStep;
     use crate::intent::Intent;
+    use crate::palette_outcome::PaletteOutcome;
     use crate::theme_state::ThemeState;
     use crate::window_view::WindowView;
     use alloc::vec;
@@ -598,7 +606,7 @@ mod tests {
         let commands = palette.paint(view(), colors(), DetailPane::Open);
         let shown = texts(&commands);
         assert!(shown.contains(&"操作の名前を英字かローマ字で（例: theme, haishoku）"));
-        assert!(shown.contains(&"41 / 41"));
+        assert!(shown.contains(&"42 / 42"));
         assert!(shown.contains(&"詳細ペインを閉じる") && shown.contains(&"Ctrl+Shift+U"));
         assert!(shown.contains(&"文字を大きくする") && shown.contains(&"Ctrl+0"));
         // 選んでいる最初の行は選択の色で塗り、左に強調の色の 3px の帯。
@@ -649,7 +657,7 @@ mod tests {
         let commands = palette.paint(view(), colors(), DetailPane::Closed);
         let shown = texts(&commands);
         assert!(shown.contains(&"“xyz” に合う操作は無い"));
-        assert!(shown.contains(&"0 / 41") && shown.contains(&"xyz"));
+        assert!(shown.contains(&"0 / 42") && shown.contains(&"xyz"));
         assert!(fills(&commands, colors().selection()).is_empty());
     }
 
@@ -743,6 +751,26 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// 「このアプリについて…」で版・著作権・ライセンスの行を出す。どの行もパレットの幅に収まる（ADR 0032・Issue #179）。
+    #[test]
+    fn the_about_step_shows_the_version_and_the_license() {
+        let mut palette = CommandPalette::open();
+        for character in "about".chars() {
+            palette.handle(Intent::Type(character), 0);
+        }
+        assert_eq!(palette.handle(Intent::Confirm, 0), PaletteOutcome::Stay);
+        assert_eq!(palette.mode(), PaletteMode::About);
+        let commands = palette.paint(view(), colors(), DetailPane::Closed);
+        let shown = texts(&commands);
+        for line in AboutLine::ALL {
+            let text = line.text();
+            assert!(shown.contains(&text.as_str()), "{text:?} が無い: {shown:?}");
+            assert!(display_columns(&text) <= GUIDE_COLUMNS, "{text:?}");
+        }
+        assert!(shown.contains(&format!("NeNe Ledger {}", env!("CARGO_PKG_VERSION")).as_str()));
+        assert_eq!(palette.handle(Intent::Cancel, 0), PaletteOutcome::Close);
     }
 
     /// 判別の候補の段（カンマ 87%・6 列が今の読み方、タブ・引用なし 12%・1 列）。

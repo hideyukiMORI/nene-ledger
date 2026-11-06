@@ -28,6 +28,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use nene_ledger_application::about_line::AboutLine;
 use nene_ledger_application::file_stamp::FileStamp;
 use nene_ledger_application::theme_state::ThemeState;
 use nene_ledger_scan::source::Source;
@@ -36,6 +37,12 @@ use crate::open_failure::OpenFailure;
 
 fn main() -> ExitCode {
     let arguments: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
+    // 版を書いて終わる（`Cargo.toml` の版・ADR 0032・DEVELOPMENT_WORKFLOW 第 10 節）。
+    if let [flag] = arguments.as_slice()
+        && flag == "--version"
+    {
+        return version_command();
+    }
     if let [flag, file] = arguments.as_slice()
         && flag == "--dump"
     {
@@ -86,6 +93,18 @@ fn main() -> ExitCode {
         return ExitCode::from(2_u8);
     };
     open_and_show(&path, theme)
+}
+
+/// `--version`：名前と版を標準出力に書く。
+fn version_command() -> ExitCode {
+    // コンソールの無い Windows の exe は、起動したコマンドプロンプトに結んで書く。
+    #[cfg(windows)]
+    nene_ledger_ui_win32::desktop::attach_console();
+    let mut out = std::io::stdout().lock();
+    match writeln!(out, "{}", AboutLine::Version.text()) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(_failure) => ExitCode::FAILURE,
+    }
 }
 
 /// `--dump`：`path` を表として読み、タブ区切りで標準出力に書く。

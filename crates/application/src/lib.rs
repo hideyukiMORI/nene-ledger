@@ -5,6 +5,7 @@
 
 extern crate alloc;
 
+pub mod about_line;
 pub mod added_row_shape;
 pub mod bar_hit;
 pub mod bar_marks;

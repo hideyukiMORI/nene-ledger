@@ -96,11 +96,13 @@ pub enum CommandId {
     RemoveColumns,
     /// キーの一覧を見る（2 段目・Issue #63）。
     ShowKeys,
+    /// このアプリについて（版・著作権・ライセンス・2 段目・ADR 0032）。
+    ShowAbout,
 }
 
 impl CommandId {
     /// すべての操作（何も打たないときの順）。
-    pub const ALL: [Self; 41] = [
+    pub const ALL: [Self; 42] = [
         Self::Top,
         Self::Bottom,
         Self::GoTo,
@@ -142,6 +144,7 @@ impl CommandId {
         Self::InsertColumnsRight,
         Self::RemoveColumns,
         Self::ShowKeys,
+        Self::ShowAbout,
     ];
 
     /// 表示名（「対象を＋動詞」の言い切り。次に選ぶものがあれば「…」）。開閉は今の状態で名前が変わる。
@@ -193,6 +196,7 @@ impl CommandId {
             Self::InsertColumnsRight => "右に列を足す",
             Self::RemoveColumns => "列を消す",
             Self::ShowKeys => "キーの一覧を見る…",
+            Self::ShowAbout => "このアプリについて…",
         }
     }
 
@@ -241,6 +245,7 @@ impl CommandId {
             Self::InsertColumnsRight => "みぎにれつをたす",
             Self::RemoveColumns => "れつをけす",
             Self::ShowKeys => "きーのいちらんをみる",
+            Self::ShowAbout => "このあぷりについて",
         }
     }
 
@@ -296,6 +301,7 @@ impl CommandId {
             Self::InsertColumnsRight => &["insert column right", "add column", "new column"],
             Self::RemoveColumns => &["delete column", "remove column"],
             Self::ShowKeys => &["keys", "shortcuts", "keyboard", "help"],
+            Self::ShowAbout => &["about", "version", "license", "kono", "apuri"],
         }
     }
 
@@ -327,6 +333,7 @@ impl CommandId {
             | Self::FreezeColumns
             | Self::UnfreezeColumns
             | Self::ShowKeys
+            | Self::ShowAbout
             | Self::InsertRowsBelow
             | Self::AppendRow
             | Self::InsertColumnsRight => None,
@@ -391,7 +398,8 @@ impl CommandId {
             | Self::InsertColumnsLeft
             | Self::InsertColumnsRight
             | Self::RemoveColumns
-            | Self::ShowKeys => None,
+            | Self::ShowKeys
+            | Self::ShowAbout => None,
         }
     }
 
@@ -419,7 +427,8 @@ impl CommandId {
             | Self::ChooseDelimiter
             | Self::ChooseQuoting
             | Self::ChooseHeader
-            | Self::ShowKeys => None,
+            | Self::ShowKeys
+            | Self::ShowAbout => None,
             Self::MoveColumnsLeft => Some(Intent::MoveColumns(ColumnShift::Left)),
             Self::MoveColumnsRight => Some(Intent::MoveColumns(ColumnShift::Right)),
             Self::ResetColumns => Some(Intent::ResetColumns),
@@ -462,6 +471,7 @@ mod tests {
             let opens_a_list = command == CommandId::ChooseTheme
                 || command == CommandId::ChooseDialect
                 || command == CommandId::ShowKeys
+                || command == CommandId::ShowAbout
                 || command.reading_aspect().is_some();
             assert_eq!(command.intent().is_none(), opens_a_list);
             assert!(!opens_a_list || command.keys().is_none());
