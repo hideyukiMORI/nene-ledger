@@ -134,6 +134,9 @@ pub fn notice_status(notice: Notice) -> String {
         Notice::ReopenFailed => {
             String::from("保存しました。開き直せなかったので、表示は保存の前のままです")
         }
+        Notice::ReadingNeedsFile => {
+            String::from("新しい表は読み方を変えられません（名前を付けて保存してから）")
+        }
         Notice::ReadingNeedsSave => {
             String::from("変えた所がある間は読み方を変えられません（先に Ctrl+S で保存）")
         }

@@ -360,6 +360,11 @@ unsafe extern "system" fn procedure(
         follow_suggested(window, lparam);
         return LRESULT(0);
     }
+    // 状態を借りられない間（名前を付けて保存の画面などを出している間）の閉じる頼みは受けない。既定の手続きに渡すと、
+    // 未保存を尋ねずに窓を壊す。
+    if message == WM_CLOSE && cell.is_some_and(|cell| cell.try_borrow_mut().is_err()) {
+        return LRESULT(0);
+    }
     match handled {
         Some(result) => result,
         // SAFETY: 既定の手続きにそのまま渡す。借用は上で手放してある。
