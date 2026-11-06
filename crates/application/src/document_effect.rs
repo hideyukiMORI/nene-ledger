@@ -23,6 +23,11 @@ pub enum DocumentEffect {
     Find,
     /// 裏の検索をやめる（Esc）。やめたら `Document::find_stopped` を呼ぶ。
     StopFinding,
+    /// 全部の置換の当たりを裏で数える（`Document::take_replace_pass` で問いを取り、数えた書き換えを
+    /// `Document::replace_counted` に返す・ADR 0030 の決定 6）。
+    Replace,
+    /// 裏の数えをやめる（Esc）。やめたら `Document::replace_stopped` を呼ぶ。
+    StopReplacing,
     /// 裏の集計を止める（Esc）。
     StopTotals,
     /// 行の並びの位置 `first_line` から `count` 行を読んで `Document::copy_text` に渡す（コピー）。

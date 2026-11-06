@@ -3,6 +3,7 @@
 use crate::columns_notice::ColumnsNotice;
 use crate::find_notice::FindNotice;
 use crate::paste_notice::PasteNotice;
+use crate::replace_notice::ReplaceNotice;
 use crate::rows_notice::RowsNotice;
 use crate::save_problem::SaveProblem;
 use crate::zoom_level::ZoomLevel;
@@ -67,6 +68,8 @@ pub enum Notice {
     Paste(PasteNotice),
     /// 検索（ADR 0030）。
     Find(FindNotice),
+    /// 置換（ADR 0030 の決定 6）。
+    Replace(ReplaceNotice),
     /// 新しい表の窓を開けなかった（自分の exe を起こせない・ADR 0028 の決定 1）。
     NewWindowFailed,
     /// 新しい表は、読み方を変えられない（名前を付けて保存してから・ADR 0028 の決定 3）。

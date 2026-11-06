@@ -4,6 +4,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::ops::Range;
 
+use nene_ledger_core::cell_change::CellChange;
 use nene_ledger_core::cell_edits::CellEdits;
 use nene_ledger_core::cell_value::CellValue;
 use nene_ledger_core::column_id::ColumnId;
@@ -72,6 +73,37 @@ impl FindScope {
             .into_iter()
             .rev()
             .find(|&display| self.hits(row, display, &source))
+    }
+
+    /// 行 `row` の表示の `display` 列目のセルの当たった所を `replacement` に置き換える書き換えと、そのセルのファイルの今の値
+    /// （置換・ADR 0030 の決定 6）。`source` は原本の `n` 列目の値。当たらないか、置き換えても見えている値が変わらなければ
+    /// `None`。照らすセルは `first_in_row` と同じ（書き換えた値・「セルが無い」と足した列の書き換えていないセルは当たらない）。
+    pub fn replaced_cell<S: Fn(usize) -> Option<String>>(
+        &self,
+        (row, display): (RowId, usize),
+        source: &S,
+        replacement: &str,
+    ) -> Option<(CellChange, String)> {
+        let &column = self.columns.get(display)?;
+        let file = match column {
+            ColumnId::Source(index) => source(index),
+            ColumnId::Added(_) => None,
+        };
+        let shown = match self.edits.get(row, column) {
+            Some(CellValue::Text(value)) => value.clone(),
+            Some(CellValue::Absent) => return None,
+            None => match column {
+                ColumnId::Source(_) => file.clone()?,
+                ColumnId::Added(_) => return None,
+            },
+        };
+        let after = self.query.replaced(&shown, replacement)?;
+        (after != shown).then(|| {
+            (
+                CellChange::new(row, column, shown, after),
+                file.unwrap_or_default(),
+            )
+        })
     }
 
     /// 行 `row` の表示の `display` 列目のセルが当たるか。
@@ -146,5 +178,37 @@ mod tests {
             scope("kyoto", edits).first_in_row(row, 0..3, cells),
             Some(1)
         );
+    }
+
+    /// 置き換えは当たるセルと同じセルに、見えている値（書き換えた値）を元に書く。ファイルの値も添える。
+    #[test]
+    fn replacing_writes_over_the_shown_value_of_matching_cells() {
+        let row = RowId::Source(4);
+        let plain = scope("o", CellEdits::empty());
+        let (change, file) = plain.replaced_cell((row, 0), &cells, "0").unwrap();
+        assert_eq!(
+            change,
+            CellChange::new(
+                row,
+                ColumnId::Source(1),
+                String::from("osaka"),
+                String::from("0saka")
+            )
+        );
+        assert_eq!(file, "osaka");
+        // 足した列の書き換えていないセルと、置き換えても変わらないセルは書かない。
+        assert_eq!(plain.replaced_cell((row, 2), &cells, "0"), None);
+        assert_eq!(plain.replaced_cell((row, 0), &cells, "o"), None);
+        let mut edits = CellEdits::empty();
+        let _kyoto = edits.set(
+            row,
+            ColumnId::Source(0),
+            CellValue::Text(String::from("kyoto")),
+        );
+        let (edited, original) = scope("kyo", edits)
+            .replaced_cell((row, 1), &cells, "X")
+            .unwrap();
+        assert_eq!(edited.after(), "Xto");
+        assert_eq!(original, "tokyo");
     }
 }

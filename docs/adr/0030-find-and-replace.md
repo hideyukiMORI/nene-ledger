@@ -83,8 +83,11 @@ M2 は「探して置き換え、壊れた行を直す」束を含む（ROADMAP�
   - 探す段のキーと条件の切り替え（application のテスト `the_find_step_searches_both_ways_and_toggles_its_options`・ui-x11 と ui-win32 の `find_keys`）
 - **active**（GitHub Issue #157 で入れた）:
   - 裏の検索を索引の目印で分けて並列にしても、結果はスレッドの数と分け方に依らない（scan のテスト `a_split_fold_merges_to_the_same_result_for_any_number_of_parts`・`a_split_search_finds_the_earliest_match_for_any_number_of_parts`・1・2・3・4・8 個に分けて同じ答え）
+- **active**（GitHub Issue #161・#163 で入れた）:
+  - 置き換えは検索と同じ条件で当たった所だけを替え、当たらない所の字は元のまま残す。置き換えの有無は照合と同じ答え（core のテスト `replacing_keeps_the_unmatched_characters_as_they_were`・`replacing_agrees_with_matching`・`origins_point_back_to_the_source_bytes`）
+  - 全部の置換は件数を見せてから Enter で 1 手の束として書き、Ctrl+Z 1 回ですべて戻る（application のテスト `replacing_all_shows_the_count_first_and_undoes_in_one_step`）。ほかの意図・Esc でやめ、数えている間に表が変われば書かない・100 万セルを越えれば書かない（`replacing_all_can_be_declined_stopped_or_outdated`）。足した行も置き換え、1 MiB で切り詰めた行は飛ばして数を知らせる（`replacing_all_reaches_added_rows_and_reports_nothing_found`）。1 つずつの置換は 1 手ずつ戻る（`replacing_one_rewrites_the_cursor_cell_then_finds_the_next`）
+  - 裏の数えは塊の大きさと分け方に依らず、見出し・書き換えた値・消した行の扱いが検索と同じ（app のテスト `matching_cells_are_collected_in_record_order_over_shown_values`・`edits_removed_rows_and_the_limit_are_respected`）
 - **planned（実装の Issue で active にする）**:
-  - 全部の置換の 1 手を戻すと、すべて元に戻る（application のテスト）
   - 正規表現の逆戻りで止まらない（病的な式と入力の時間を測る・gate-proofs）
   - 1 GB の表で、最後の行にだけある値を見つける時間を DuckDB / qsv / EmEditor と同じファイルで記録（QLT-014。`grep` と `rg` との比べは benchmarks 第 8 節）
 
