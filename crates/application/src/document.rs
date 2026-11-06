@@ -2882,7 +2882,8 @@ impl Document {
             .first_body()
             .saturating_add(u64::try_from(self.view.rows().len()).unwrap_or(u64::MAX));
         let estimate = match self.index {
-            JobState::Finished(summary) => self.body_lines(summary.records()),
+            // 作り終えていれば正しい数（足し消しを戻した直後の古い表示の行の数を混ぜない・GitHub Issue #147）。
+            JobState::Finished(summary) => return self.body_lines(summary.records()),
             JobState::Running(progress) | JobState::CancelRequested(progress) => {
                 let records = u128::from(progress.records()) * u128::from(progress.total())
                     / u128::from(progress.done().max(1));
@@ -7137,5 +7138,21 @@ mod tests {
         );
         assert!(document.has_unsaved());
         assert!(!document.is_saving());
+    }
+
+    /// 末尾に足した行を戻すと、カーソルは表の最後の行に戻る。読み直す前の古い表示の行の数を使わない（GitHub Issue #147）。
+    #[test]
+    fn undoing_rows_added_at_the_end_leaves_the_cursor_on_a_real_row() {
+        let mut document = indexed_editable();
+        document.apply(moving(CursorStep::Down), normal());
+        document.apply(moving(CursorStep::Down), normal());
+        document.apply(Intent::InsertRows(RowPlace::End), normal());
+        // 合成ルートは足した行を含めて読み直す（足した行はセルの無い行）。
+        let mut shown = editable_rows();
+        shown.push(Vec::new());
+        document.show(0, &shown);
+        assert_eq!(document.selection().cursor(), CellPosition::new(3, 0));
+        document.apply(Intent::Undo, normal());
+        assert_eq!(document.selection().cursor(), CellPosition::new(2, 0));
     }
 }
