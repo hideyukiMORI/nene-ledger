@@ -12,7 +12,7 @@ use nene_ledger_core::window_placement::WindowPlacement;
 use x11rb::connection::{Connection, RequestConnection};
 use x11rb::protocol::Event;
 use x11rb::protocol::xproto::{
-    AtomEnum, ChangeWindowAttributesAux, ClientMessageEvent, ConnectionExt, CreateGCAux,
+    Atom, AtomEnum, ChangeWindowAttributesAux, ClientMessageEvent, ConnectionExt, CreateGCAux,
     CreateWindowAux, Cursor, EventMask, Gcontext, GetPropertyReply, ImageFormat, ImageOrder,
     KeyButMask, PropMode, Property, SELECTION_NOTIFY_EVENT, SelectionNotifyEvent,
     SelectionRequestEvent, Window, WindowClass,
@@ -331,12 +331,12 @@ impl X11Window {
 
     /// `CLIPBOARD` の中身を `UTF8_STRING` で、自分の窓の属性に書いてもらうよう求める（貼り付け・CLIP-01）。
     /// 答えは `SelectionNotify` で届く（[`Self::pasted_text`]）。`time` は Ctrl+V のキーの時刻。
-    pub(crate) fn request_clipboard(&self, time: u32) -> Result<(), UiFailure> {
+    pub(crate) fn request_clipboard(&self, time: u32, property: Atom) -> Result<(), UiFailure> {
         self.connection.convert_selection(
             self.window,
             self.atoms.clipboard(),
             self.atoms.utf8_string(),
-            self.atoms.paste(),
+            property,
             time,
         )?;
         self.connection.flush()?;
@@ -349,15 +349,15 @@ impl X11Window {
     pub(crate) fn pasted_text(
         &self,
         event: &Event,
-        incoming: &mut Option<IncomingPaste>,
+        (incoming, property): (&mut Option<IncomingPaste>, Atom),
     ) -> Result<Option<PasteReceipt>, UiFailure> {
         if let Event::PropertyNotify(notify) = event
             && notify.window == self.window
-            && notify.atom == self.atoms.paste()
+            && notify.atom == property
             && notify.state == Property::NEW_VALUE
             && let Some(mut receiving) = incoming.take()
         {
-            let part = self.take_paste_property()?;
+            let part = self.take_paste_property(property)?;
             if part.value.is_empty() {
                 return Ok(Some(PasteReceipt::Done(receiving.finish())));
             }
@@ -374,7 +374,11 @@ impl X11Window {
         if notify.property == x11rb::NONE {
             return Ok(Some(PasteReceipt::Done(String::new())));
         }
-        let reply = self.take_paste_property()?;
+        // 前の求めへの遅れた答え（別の属性）は読まない。
+        if notify.property != property {
+            return Ok(Some(PasteReceipt::Pending));
+        }
+        let reply = self.take_paste_property(property)?;
         if reply.type_ == self.atoms.incr() {
             // 属性を消したので、持ち主が分けて書き始める（PropertyNotify の NewValue で届く）。
             *incoming = Some(IncomingPaste::new());
@@ -385,19 +389,17 @@ impl X11Window {
         )))
     }
 
+    /// 番 `slot` の貼り付けの属性。
+    pub(crate) fn paste_property(&self, slot: usize) -> Atom {
+        self.atoms.paste(slot)
+    }
+
     /// 貼り付けの属性を読んで消す。
-    fn take_paste_property(&self) -> Result<GetPropertyReply, UiFailure> {
+    fn take_paste_property(&self, property: Atom) -> Result<GetPropertyReply, UiFailure> {
         let length = u32::try_from(self.connection.maximum_request_bytes() / 4).unwrap_or(u32::MAX);
         Ok(self
             .connection
-            .get_property(
-                true,
-                self.window,
-                self.atoms.paste(),
-                AtomEnum::ANY,
-                0,
-                length,
-            )?
+            .get_property(true, self.window, property, AtomEnum::ANY, 0, length)?
             .reply()?)
     }
 

@@ -128,7 +128,11 @@ impl Ui {
         if let Some(step) = self.clipboard_event(event, screen)? {
             return Ok(step);
         }
-        match self.window.pasted_text(event, screen.incoming_paste())? {
+        let property = self.window.paste_property(screen.paste_slot());
+        match self
+            .window
+            .pasted_text(event, (screen.incoming_paste(), property))?
+        {
             Some(PasteReceipt::Done(text)) => {
                 session.paste(&text, screen.view());
                 return Ok(Step::Redraw);
@@ -190,7 +194,9 @@ impl Ui {
             } else {
                 // 前の受け取りが途中で止まっていても、新しく求める（途中の中身は捨てる）。
                 *screen.incoming_paste() = None;
-                self.window.request_clipboard(time)?;
+                let slot = screen.next_paste_slot();
+                self.window
+                    .request_clipboard(time, self.window.paste_property(slot))?;
             }
             return Ok(Some(Step::Redraw));
         }
