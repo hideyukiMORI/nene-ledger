@@ -44,6 +44,7 @@ use nene_ledger_scan::index_outcome::IndexOutcome;
 use nene_ledger_scan::range_job::RangeJob;
 use nene_ledger_scan::range_outcome::RangeOutcome;
 use nene_ledger_scan::scan_failure::ScanFailure;
+use nene_ledger_scan::split_job::SplitJob;
 use nene_ledger_store::save_job::SaveJob;
 
 use crate::find_fold::FindFold;
@@ -71,7 +72,7 @@ pub(crate) struct Viewer {
     palette: Option<OpenPalette>,
     totals: Option<RangeJob<TotalsFold>>,
     /// 裏で回っている検索の 1 回分（ADR 0030 の決定 4）。
-    finding: Option<RangeJob<FindFold>>,
+    finding: Option<SplitJob<FindFold>>,
     /// 読み方を試している間の、元の画面（Esc で戻す・Issue #52）。
     trial: Option<Document>,
     /// 裏で回っている保存（ADR 0026 の決定 6）。
@@ -459,7 +460,7 @@ impl Viewer {
             pass.bound(),
         );
         let count = usize::try_from(pass.count()).unwrap_or(usize::MAX);
-        match self.reader.spawn_fold(pass.first(), count, fold) {
+        match self.reader.spawn_split(pass.first(), count, fold) {
             Ok(job) => self.finding = Some(job),
             Err(_failure) => self.document.find_stopped(true),
         }

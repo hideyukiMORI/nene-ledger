@@ -31,5 +31,7 @@ mod scan_state;
 pub mod source;
 mod source_origin;
 pub mod sparse_index;
+pub mod split_fold;
+pub mod split_job;
 pub mod window_record;
 pub mod windowing;

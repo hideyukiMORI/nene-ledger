@@ -18,6 +18,8 @@ use nene_ledger_scan::record_range::RecordRange;
 use nene_ledger_scan::scan_failure::ScanFailure;
 use nene_ledger_scan::source::Source;
 use nene_ledger_scan::sparse_index::SparseIndex;
+use nene_ledger_scan::split_fold::SplitFold;
+use nene_ledger_scan::split_job::{SplitJob, usual_parts};
 use nene_ledger_store::stamping::stamp_of;
 
 use crate::opening::detect;
@@ -174,6 +176,23 @@ impl Reader {
             &self.index,
             self.format,
             RecordRange::new(first, count),
+        )
+    }
+
+    /// `first` からの `count` 個の行を、索引の目印で分けて裏のいくつかのスレッドで `fold` の写しに畳み込み始める
+    /// （索引を作り終える前は 1 つ・ADR 0030 の決定 4）。
+    pub(crate) fn spawn_split<F: SplitFold>(
+        &self,
+        first: u64,
+        count: usize,
+        fold: F,
+    ) -> Result<SplitJob<F>, ScanFailure> {
+        let from = IndexedSource::new(self.source.try_clone()?, self.index.clone(), self.format);
+        SplitJob::spawn(
+            &from,
+            RecordRange::new(first, count),
+            (fold, usual_parts()),
+            &self.wakeup,
         )
     }
 
