@@ -1,6 +1,8 @@
 //! 検索で比べる前に、条件で区別しない違いを畳む（ADR 0030 の決定 3）。
 
 use alloc::string::String;
+use alloc::vec::Vec;
+use core::ops::Range;
 
 use crate::find_options::FindOptions;
 
@@ -22,38 +24,89 @@ const HALF_SEMI_VOICED: char = '\u{FF9F}';
 /// カタカナを区別しなければカタカナをひらがなに。
 #[must_use]
 pub fn fold_for_find(text: &str, options: FindOptions) -> String {
+    // 検索の熱い道なので、元の範囲を数えずに畳む（範囲を数える `fold_steps` と同じ字を出すことはテストで固定）。
     let mut folded = String::with_capacity(text.len());
-    let mut chars = text.chars().peekable();
-    while let Some(character) = chars.next() {
-        let mut character = character;
-        if !options.match_width() {
-            character = narrowed(character);
-            if let Some(full) = widened_kana(character) {
-                character = joined_with_mark(full, &mut chars);
-            }
-        }
-        if !options.match_kana() {
-            character = hiragana(character);
-        }
-        if options.match_case() {
-            folded.push(character);
-        } else {
-            folded.extend(character.to_lowercase());
-        }
+    // 位置は使わないので数えない（`char_indices` より速い）。
+    let mut chars = text
+        .chars()
+        .map(|character| (0_usize, character))
+        .peekable();
+    while let Some((start, first)) = chars.next() {
+        let character = fold_one(first, start, &mut chars, options).0;
+        push_folded(&mut folded, character, options);
     }
     folded
 }
 
-/// 半角カタカナを全角にした `full` に、続く半角の濁点・半濁点 `rest` の頭を合わせた字（合わせたら印を読み進める）。
-fn joined_with_mark(full: char, rest: &mut core::iter::Peekable<core::str::Chars<'_>>) -> char {
-    let Some(mark @ (HALF_VOICED | HALF_SEMI_VOICED)) = rest.peek().copied() else {
-        return full;
+/// `fold_for_find` と同じ写しと、写しの字ごとの元の範囲（写しの何バイト目から、元の `text` のどのバイトの範囲か）。
+/// 写しで当たった所を元の文字列に戻すのに使う（置換・ADR 0030 の決定 6）。範囲は写しの順に並び、重ならない。
+#[must_use]
+pub fn fold_with_origins(text: &str, options: FindOptions) -> (String, Vec<(usize, Range<usize>)>) {
+    let mut folded = String::with_capacity(text.len());
+    let mut origins = Vec::with_capacity(text.len());
+    for (character, range) in fold_steps(text, options) {
+        origins.push((folded.len(), range));
+        push_folded(&mut folded, character, options);
+    }
+    (folded, origins)
+}
+
+/// 畳んだ字 `character` を写し `folded` に足す（大文字小文字を区別しなければ小文字にして）。
+fn push_folded(folded: &mut String, character: char, options: FindOptions) {
+    if options.match_case() {
+        folded.push(character);
+    } else {
+        folded.extend(character.to_lowercase());
+    }
+}
+
+/// `text` を前から 1 字ずつ畳む（小文字にする前の字と、元の `text` のバイトの範囲）。半角カタカナと後ろの濁点・半濁点は
+/// 合わせて 1 字になる。
+fn fold_steps(text: &str, options: FindOptions) -> impl Iterator<Item = (char, Range<usize>)> + '_ {
+    let mut chars = text.char_indices().peekable();
+    core::iter::from_fn(move || {
+        let (start, first) = chars.next()?;
+        let (character, end) = fold_one(first, start, &mut chars, options);
+        Some((character, start..end))
+    })
+}
+
+/// 元の `start` バイト目の字 `first` を畳んだ字（小文字にする前）と、元の範囲の終わり。続く濁点・半濁点は `rest` から読む。
+fn fold_one<I: Iterator<Item = (usize, char)>>(
+    first: char,
+    start: usize,
+    rest: &mut core::iter::Peekable<I>,
+    options: FindOptions,
+) -> (char, usize) {
+    let mut character = first;
+    let mut end = start.saturating_add(first.len_utf8());
+    if !options.match_width() {
+        character = narrowed(character);
+        if let Some(full) = widened_kana(character) {
+            (character, end) = joined_with_mark(full, end, rest);
+        }
+    }
+    if !options.match_kana() {
+        character = hiragana(character);
+    }
+    (character, end)
+}
+
+/// 半角カタカナを全角にした `full`（元の範囲の終わり `end`）に、続く半角の濁点・半濁点 `rest` の頭を合わせた字と、
+/// 合わせた後の終わり（合わせたら印を読み進める）。
+fn joined_with_mark<I: Iterator<Item = (usize, char)>>(
+    full: char,
+    end: usize,
+    rest: &mut core::iter::Peekable<I>,
+) -> (char, usize) {
+    let Some(&(at, mark @ (HALF_VOICED | HALF_SEMI_VOICED))) = rest.peek() else {
+        return (full, end);
     };
     let Some(joined) = voiced(full, mark == HALF_SEMI_VOICED) else {
-        return full;
+        return (full, end);
     };
     let _mark = rest.next();
-    joined
+    (joined, at.saturating_add(mark.len_utf8()))
 }
 
 /// 全角の英数字・記号（U+FF01〜U+FF5E）と全角の空白を半角に。ほかはそのまま。
@@ -102,6 +155,7 @@ fn hiragana(character: char) -> char {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::vec;
 
     fn standard(text: &str) -> String {
         fold_for_find(text, FindOptions::standard())
@@ -128,5 +182,20 @@ mod tests {
             "かたかなとかな"
         );
         assert_eq!(fold_for_find("ｶﾞ", options.toggled_kana()), "が");
+    }
+
+    /// 写しの字ごとの元の範囲。半角カタカナと濁点は 2 字で 1 つの範囲、全角の英字は 3 バイトで 1 バイトの字。
+    #[test]
+    fn origins_point_back_to_the_source_bytes() {
+        let (folded, origins) = fold_with_origins("Ａｶﾞx", FindOptions::standard());
+        assert_eq!(folded, "aガx");
+        assert_eq!(origins, vec![(0, 0..3), (1, 3..9), (4, 9..10)]);
+        for text in ["ＡＢｃ１２３　Ｘ", "ｶﾞｷﾞｸﾞ ﾊﾟﾋﾟ", "ÄÖÜ", "plain", ""]
+        {
+            let (copy, ranges) = fold_with_origins(text, FindOptions::standard());
+            assert_eq!(copy, standard(text));
+            let covered: usize = ranges.iter().map(|(_, range)| range.len()).sum();
+            assert_eq!(covered, text.len());
+        }
     }
 }
