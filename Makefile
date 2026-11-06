@@ -6,7 +6,7 @@
 #    全件は限定した検証で影響を覆えない理由を REASON= に添えたときだけ回す（QLT-001 / ADR 0003）。
 CARGO ?= cargo
 
-.PHONY: all notices notices-check check ci fmt fmt-check lint lint-windows build-windows test conformance validate-git coverage deny doc-check build prove screenshot bench-pollock fetch-corpus bench-corpus doctor clean
+.PHONY: all dist notices notices-check check ci fmt fmt-check lint lint-windows build-windows test conformance validate-git coverage deny doc-check build prove screenshot bench-pollock fetch-corpus bench-corpus doctor clean
 
 all: doctor
 
@@ -55,6 +55,10 @@ test:
 ## conformance — このリポジトリ固有の規約検査（CNF-0xx / xtask）。
 conformance:
 	$(CARGO) run --quiet -p xtask --locked -- conformance
+
+## dist — 配る zip（Windows の exe・LICENSE・著作権表示・説明書・見本）を dist/ に作る（ADR 0032）。release の workflow も同じ入口。
+dist:
+	bash tools/dist.sh
 
 ## notices — 配る exe に入る外部クレートの著作権表示の一覧（THIRD-PARTY-NOTICES.txt）を Cargo.lock から作り直す（ADR 0032）。
 ## notices-check — 一覧が Cargo.lock の依存と食い違えば落とす。依存を変えたら notices で作り直す。

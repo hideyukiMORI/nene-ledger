@@ -1,0 +1,59 @@
+name: Release
+
+# タグ v* を押すと、そのソースから Windows の exe の zip を作り、GitHub Releases にプレリリースとして置く（ADR 0032）。
+# 🔴 判定と組み立ては make dist（tools/dist.sh）にあり、ここは呼ぶだけ（QLT-005）。手元と同じ入口。
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      # 版は rust-toolchain.toml が決める（Windows のターゲットもそこに書いてある・QLT-011）。
+      - name: Show toolchain
+        run: |
+          rustc --version
+          cargo --version
+      - name: Install mingw-w64 and zip
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends mingw-w64 zip
+      # タグと Cargo.toml の版が違えば止める（版の入力は Cargo.toml だけ・DEVELOPMENT_WORKFLOW 第 10 節）。
+      - name: Check the tag matches the version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version="$(cargo pkgid -p nene-ledger | sed 's/.*@//')"
+          if [ "v${version}" != "${TAG}" ]; then
+            echo "タグ ${TAG} と Cargo.toml の版 ${version} が違う"
+            exit 1
+          fi
+          test -f "docs/release/${version}.md"
+      - name: make dist
+        run: make dist
+      - name: Publish the pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          version="${TAG#v}"
+          name="nene-ledger-${version}-windows-x86_64"
+          gh release create "${TAG}" \
+            --prerelease \
+            --title "NeNe Ledger ${version}" \
+            --notes-file "docs/release/${version}.md" \
+            "dist/${name}.zip" "dist/${name}.zip.sha256"
