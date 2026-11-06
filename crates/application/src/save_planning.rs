@@ -1069,4 +1069,29 @@ mod tests {
         );
         assert_eq!(stopped, Err(SavePlanFailure::Stopped));
     }
+
+    /// 書き換えた行でも、触っていないセルの見た目のバイト列を保つ：BOM・最後の行の改行の無さ・末尾の区切り・
+    /// 引用符つきの空（`""`）と無しの空・セルの無い所（短い行）・前後の空白（KEEP-03・04・05・07）。列を足して全部の行を
+    /// 組み立て直しても同じ（足した列のほかは原本のバイト列。短い行には、足した列までを空のセルで足す・ADR 0027）。
+    #[test]
+    fn untouched_cells_keep_bom_quotes_blanks_spaces_and_the_missing_end() {
+        let input = b"\xEF\xBB\xBF a ,\"\",,x,\r\nshort\r\n\" q \",last";
+        let mut edits = CellEdits::empty();
+        edits.set(RowId::Source(0), ColumnId::Source(3), text("Y"));
+        assert_eq!(
+            saved(input, &edits),
+            b"\xEF\xBB\xBF a ,\"\",,Y,\r\nshort\r\n\" q \",last"
+        );
+        let order = RowOrder::whole();
+        let mut columns = ColumnOrder::whole();
+        let added = columns.insert(2, 1);
+        let mut inserted = CellEdits::empty();
+        inserted.set(RowId::Source(2), added[0], text("n"));
+        let shape = AddedRowShape::new(6, LineEnding::CrLf);
+        let plan = plan_with_columns(input, (&order, &columns), (&inserted, shape)).unwrap();
+        assert_eq!(
+            apply(input, &plan),
+            b"\xEF\xBB\xBF a ,\"\",,,x,\r\nshort,,\r\n\" q \",last,n"
+        );
+    }
 }
