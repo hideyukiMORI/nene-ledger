@@ -9,9 +9,10 @@ use nene_ledger_scan::decoding::decode;
 use nene_ledger_scan::record_fold::RecordFold;
 use nene_ledger_scan::window_record::WindowRecord;
 
-use crate::find_bound::FindBound;
+use nene_ledger_application::find_bound::FindBound;
 
-/// 原本のレコードを順に照らし、境（`FindBound`）より後ろで最初に当たったレコードの番号と表示の列を覚えて止まる。見出しのレコードと、
+/// 原本のレコードを順に照らす。境（`FindBound`）より後ろを探すときは最初に当たった所で止まり、前を探すときは最後まで
+/// 読んで最後に当たった所を残す。見出しのレコードと、
 /// 並びから消したレコードは照らさない。足した行は application が探す（原本に無い）。
 #[derive(Debug)]
 pub(crate) struct FindFold {
@@ -81,12 +82,22 @@ impl RecordFold for FindFold {
                     self.found = Some((number, column));
                 }
             }
+            FindBound::Before(before) => {
+                let end = match before {
+                    Some((at, column)) if at == number => column,
+                    Some(_) | None => width,
+                };
+                if let Some(column) = self.scope.last_in_row(row, 0..end, source) {
+                    self.found = Some((number, column));
+                }
+            }
         }
     }
 
     fn is_done(&self) -> bool {
         match self.bound {
             FindBound::After(_) => self.found.is_some(),
+            FindBound::Before(_) => false,
         }
     }
 }
@@ -167,6 +178,11 @@ mod tests {
         );
         // 全角半角を区別しない（原本は全角の「ソース」・問いは半角）。
         assert_eq!(find("ｿｰｽ", plain(), FindBound::After(None)), Some((3, 1)));
+        assert_eq!(find("表", plain(), FindBound::Before(None)), Some((2, 1)));
+        assert_eq!(
+            find("表", plain(), FindBound::Before(Some((2, 1)))),
+            Some((1, 1))
+        );
     }
 
     #[test]

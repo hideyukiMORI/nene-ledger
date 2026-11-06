@@ -30,6 +30,8 @@ use nene_ledger_application::ticker::Ticker;
 use nene_ledger_application::totals_request::TotalsRequest;
 use nene_ledger_application::window_view::WindowView;
 use nene_ledger_application::zoom_level::ZoomLevel;
+use nene_ledger_core::find_options::FindOptions;
+use nene_ledger_core::find_query::FindQuery;
 use std::path::PathBuf;
 
 use nene_ledger_core::frame::Frame;
@@ -44,6 +46,7 @@ use nene_ledger_scan::range_outcome::RangeOutcome;
 use nene_ledger_scan::scan_failure::ScanFailure;
 use nene_ledger_store::save_job::SaveJob;
 
+use crate::find_fold::FindFold;
 use crate::open_palette::OpenPalette;
 use crate::preferences::Preferences;
 use crate::reader::Reader;
@@ -67,6 +70,8 @@ pub(crate) struct Viewer {
     preferences: Preferences,
     palette: Option<OpenPalette>,
     totals: Option<RangeJob<TotalsFold>>,
+    /// 裏で回っている検索の 1 回分（ADR 0030 の決定 4）。
+    finding: Option<RangeJob<FindFold>>,
     /// 読み方を試している間の、元の画面（Esc で戻す・Issue #52）。
     trial: Option<Document>,
     /// 裏で回っている保存（ADR 0026 の決定 6）。
@@ -94,6 +99,7 @@ impl Viewer {
             preferences,
             palette: None,
             totals: None,
+            finding: None,
             trial: None,
             saving: None,
             saving_as: None,
@@ -324,6 +330,16 @@ impl Viewer {
                 self.choose_save_target();
                 None
             }
+            DocumentEffect::Find => {
+                self.start_find_pass();
+                None
+            }
+            DocumentEffect::StopFinding => {
+                if let Some(job) = &self.finding {
+                    job.cancel();
+                }
+                None
+            }
             DocumentEffect::StopSaving => {
                 if let Some(job) = &self.saving {
                     job.cancel();
@@ -405,6 +421,76 @@ impl Viewer {
         }
     }
 
+    /// 検索の欄を開く。前に探した文字と条件を入れておく（ADR 0030 の決定 1・3）。
+    fn open_find(&mut self) {
+        let (text, options) = self
+            .document
+            .find_query()
+            .map_or((String::new(), FindOptions::standard()), |query| {
+                (String::from(query.text()), query.options())
+            });
+        let colors = self.preferences.theme().palette();
+        self.palette = Some(OpenPalette::new(
+            CommandPalette::open_find(&text, options),
+            colors,
+        ));
+    }
+
+    /// 検索の欄で Enter（`forward`）か Shift+Enter：打った文字を今の条件で探し始める（欄は開いたまま）。
+    fn find_entered(&mut self, forward: bool) -> Option<ClipboardText> {
+        let query = self.palette.as_ref().map(|open| {
+            let state = open.state();
+            FindQuery::new(state.query(), state.find_options())
+        })?;
+        let effect = self.document.find(query, forward);
+        self.effect(effect)
+    }
+
+    /// 検索の次の 1 回分を裏で探し始める（前の 1 回分は手放す）。始められなければ止まったと知らせる。
+    fn start_find_pass(&mut self) {
+        self.finding = None;
+        let Some((scope, pass)) = self.document.take_find_pass() else {
+            return;
+        };
+        let fold = FindFold::new(
+            scope,
+            (self.reader.format(), self.document.header_record()),
+            self.document.changes().order().clone(),
+            pass.bound(),
+        );
+        let count = usize::try_from(pass.count()).unwrap_or(usize::MAX);
+        match self.reader.spawn_fold(pass.first(), count, fold) {
+            Ok(job) => self.finding = Some(job),
+            Err(_failure) => self.document.find_stopped(true),
+        }
+    }
+
+    /// 裏の検索の 1 回分が終わっていれば答えを渡し（続きがあれば次を始める）、まだなら進み具合を渡す。
+    fn finding_report(&mut self, view: WindowView) {
+        let Some(job) = self.finding.as_mut() else {
+            return;
+        };
+        let effect = match job.take_result() {
+            Some(Ok(RangeOutcome::Finished(fold))) => self.document.found(fold.found(), view),
+            Some(Ok(RangeOutcome::Cancelled)) => {
+                self.document.find_stopped(false);
+                DocumentEffect::Stay
+            }
+            Some(Err(_failure)) => {
+                self.document.find_stopped(true);
+                DocumentEffect::Stay
+            }
+            None => {
+                let progress = job.progress();
+                self.document
+                    .find_progress(progress.done(), progress.total());
+                return;
+            }
+        };
+        self.finding = None;
+        let _clipboard = self.effect(effect);
+    }
+
     /// 裏の集計の今の知らせ。終わっていれば結果、まだなら進み具合。仕事が無ければ `None`。
     fn totals_report(&mut self) -> Option<SelectionTotals> {
         let job = self.totals.as_mut()?;
@@ -465,6 +551,7 @@ impl Viewer {
                 self.save_as_entered(overwrite);
                 None
             }
+            PaletteOutcome::Find { forward } => self.find_entered(forward),
             PaletteOutcome::Run(intent) => {
                 self.palette = None;
                 self.intent(intent, view)
@@ -659,6 +746,7 @@ impl Session for Viewer {
         if let Some(totals) = self.totals_report() {
             self.document.totals_report(totals);
         }
+        self.finding_report(view);
         let ticks = self.ticker.take();
         if ticks > 0 {
             let effect = self.document.tick(ticks, view);
@@ -684,6 +772,10 @@ impl Session for Viewer {
         if self.palette.is_some() {
             self.palette_took_last = true;
             return self.palette_intent(intent, view);
+        }
+        if intent == Intent::OpenFind {
+            self.open_find();
+            return None;
         }
         if intent == Intent::OpenGoTo {
             let colors = self.preferences.theme().palette();

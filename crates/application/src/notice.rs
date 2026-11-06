@@ -1,6 +1,7 @@
 //! 状態の行に一度だけ出す知らせ。
 
 use crate::columns_notice::ColumnsNotice;
+use crate::find_notice::FindNotice;
 use crate::paste_notice::PasteNotice;
 use crate::rows_notice::RowsNotice;
 use crate::save_problem::SaveProblem;
@@ -64,6 +65,8 @@ pub enum Notice {
     ReopenFailed,
     /// 表への貼り付け（ADR 0029）。
     Paste(PasteNotice),
+    /// 検索（ADR 0030）。
+    Find(FindNotice),
     /// 新しい表の窓を開けなかった（自分の exe を起こせない・ADR 0028 の決定 1）。
     NewWindowFailed,
     /// 新しい表は、読み方を変えられない（名前を付けて保存してから・ADR 0028 の決定 3）。

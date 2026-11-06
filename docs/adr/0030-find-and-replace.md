@@ -77,8 +77,11 @@ M2 は「探して置き換え、壊れた行を直す」束を含む（ROADMAP�
   - 書き換えたセルは書き換えた値で探し、元の値では見つからない。並びから消した行は探さない。足した列は書き換えた値で探す（application のテスト `rows_are_searched_in_the_shown_order_with_edits_over_the_source`・app のテスト `edited_values_and_removed_rows_are_respected`）
   - 裏の検索の結果は塊の大きさに依らない（app のテスト `the_first_match_after_the_bound_is_found_in_shown_values` が 1・2・100 レコードの塊で同じ答えを見る。今は 1 つのスレッド）。見つけた所で残りを読まずに止まる（scan のテスト `a_fold_that_is_done_ends_without_reading_the_rest`）
   - 既定の条件と切り替え（core のテスト `the_standard_ignores_case_and_width_and_keeps_kana_and_toggles_flip_one_each`・`options_make_the_match_stricter_or_looser`）。ASCII の速い道は畳んで比べる遅い道と同じ答え（`the_ascii_shortcut_agrees_with_folding`・`a_record_is_ruled_out_only_when_no_cell_can_match`）
+- **active**（GitHub Issue #152 で入れた）:
+  - 足した行の中も探し、前へ探しても足した行から原本の行へ戻る（application のテスト `finding_uses_edited_values_and_added_rows`）
+  - 次を探し、F3 で続け、端から反対の端へ回って知らせる。前へも探せる（application のテスト `finding_moves_to_the_next_match_and_wraps_around`）。F3 は問いが無ければ知らせ、探している間の Esc は止める（`find_again_needs_a_query_and_escape_stops_a_search`）
+  - 探す段のキーと条件の切り替え（application のテスト `the_find_step_searches_both_ways_and_toggles_its_options`・ui-x11 と ui-win32 の `find_keys`）
 - **planned（実装の Issue で active にする）**:
-  - 足した行の中も探す（画面につなぐ GitHub Issue #152 の application のテスト）
   - 裏の検索を並列にしても、結果はスレッドの数に依らない（QLT-008）
   - 全部の置換の 1 手を戻すと、すべて元に戻る（application のテスト）
   - 正規表現の逆戻りで止まらない（病的な式と入力の時間を測る・gate-proofs）

@@ -150,7 +150,7 @@ impl<'state> PalettePainter<'state> {
     /// 段の候補の全部の数（検索欄の右端の「該当 / 全部」）。飛ぶ先の段は数を出さない。
     fn total(&self) -> Option<usize> {
         match self.palette.mode() {
-            PaletteMode::GoTo | PaletteMode::SaveAs { .. } => None,
+            PaletteMode::GoTo | PaletteMode::Find | PaletteMode::SaveAs { .. } => None,
             PaletteMode::Commands => Some(CommandId::ALL.len()),
             PaletteMode::Keys => Some(key_list("").len()),
             PaletteMode::Themes { .. } => Some(COUNT),
@@ -193,12 +193,19 @@ impl<'state> PalettePainter<'state> {
             self.go_to_line();
             return;
         }
+        if self.palette.mode() == PaletteMode::Find {
+            self.find_line();
+            return;
+        }
         if let PaletteMode::SaveAs { overwrite } = self.palette.mode() {
             self.save_as_line(overwrite);
             return;
         }
         let kind = match self.palette.mode() {
-            PaletteMode::GoTo | PaletteMode::Commands | PaletteMode::SaveAs { .. } => "操作",
+            PaletteMode::GoTo
+            | PaletteMode::Find
+            | PaletteMode::Commands
+            | PaletteMode::SaveAs { .. } => "操作",
             PaletteMode::Keys => "キー",
             PaletteMode::Themes { .. } => "配色",
             PaletteMode::Reading { aspect, .. } => aspect.noun(),
@@ -219,6 +226,27 @@ impl<'state> PalettePainter<'state> {
         let text = GoToTarget::parse(query).map_or_else(
             || String::from("数字で行の番号を（列も選ぶなら 1200,3）"),
             |target| format!("Enter で {} へ", target.describe()),
+        );
+        let row = self.layout.row(0);
+        let left = row.origin().x().saturating_add(self.px(TEXT_INSET));
+        self.text_at(from_left(row, left), text, self.colors.gutter_text());
+    }
+
+    /// 探す段の 1 行。今の条件と切り替えるキー（ADR 0030 の決定 3・全角半角は区別しない）。
+    fn find_line(&mut self) {
+        let options = self.palette.find_options();
+        let text = format!(
+            "Alt+C 大文字小文字を{} · Alt+W {}",
+            if options.match_case() {
+                "区別する"
+            } else {
+                "区別しない"
+            },
+            if options.whole_cell() {
+                "セル全体"
+            } else {
+                "部分一致"
+            },
         );
         let row = self.layout.row(0);
         let left = row.origin().x().saturating_add(self.px(TEXT_INSET));
@@ -312,6 +340,7 @@ impl<'state> PalettePainter<'state> {
             }
             PaletteMode::Commands
             | PaletteMode::GoTo
+            | PaletteMode::Find
             | PaletteMode::Keys
             | PaletteMode::SaveAs { .. }
             | PaletteMode::Themes { .. } => false,
@@ -458,6 +487,7 @@ fn placeholder(mode: PaletteMode) -> &'static str {
     match mode {
         PaletteMode::Commands => "操作の名前を英字かローマ字で（例: theme, haishoku）",
         PaletteMode::GoTo => "行の番号（例: 1200、列も選ぶなら 1200,3）",
+        PaletteMode::Find => "探す文字（Enter で次・Shift+Enter で前）",
         PaletteMode::SaveAs { .. } => "保存先のファイルの道筋（例: /srv/data/表.csv）",
         PaletteMode::Keys => "キーか操作の名前で絞る（例: ctrl, shift, kopi-）",
         PaletteMode::Themes { .. } => "配色の名前を英字で（例: solarized）",
@@ -520,7 +550,7 @@ mod tests {
         let commands = palette.paint(view(), colors(), DetailPane::Open);
         let shown = texts(&commands);
         assert!(shown.contains(&"操作の名前を英字かローマ字で（例: theme, haishoku）"));
-        assert!(shown.contains(&"37 / 37"));
+        assert!(shown.contains(&"40 / 40"));
         assert!(shown.contains(&"詳細ペインを閉じる") && shown.contains(&"Ctrl+Shift+U"));
         assert!(shown.contains(&"文字を大きくする") && shown.contains(&"Ctrl+0"));
         // 選んでいる最初の行は選択の色で塗り、左に強調の色の 3px の帯。
@@ -571,7 +601,7 @@ mod tests {
         let commands = palette.paint(view(), colors(), DetailPane::Closed);
         let shown = texts(&commands);
         assert!(shown.contains(&"“xyz” に合う操作は無い"));
-        assert!(shown.contains(&"0 / 37") && shown.contains(&"xyz"));
+        assert!(shown.contains(&"0 / 40") && shown.contains(&"xyz"));
         assert!(fills(&commands, colors().selection()).is_empty());
     }
 

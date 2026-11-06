@@ -5,7 +5,8 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
-use core::ops::RangeInclusive;
+use core::cmp::Ordering;
+use core::ops::{Range, RangeInclusive};
 
 use crate::added_row_shape::AddedRowShape;
 use crate::bar_hit::BarHit;
@@ -39,6 +40,11 @@ use crate::edit_history::EditHistory;
 use crate::edit_mode::EditMode;
 use crate::edit_step::EditStep;
 use crate::editing_cell::EditingCell;
+use crate::find_bound::FindBound;
+use crate::find_notice::FindNotice;
+use crate::find_pass::FindPass;
+use crate::find_run::FindRun;
+use crate::find_scope::FindScope;
 use crate::fixed_parts::FixedParts;
 use crate::format_summary::FormatSummary;
 use crate::frame_painter::FramePainter;
@@ -92,6 +98,7 @@ use nene_ledger_core::column_order::ColumnOrder;
 use nene_ledger_core::column_widths::{ColumnWidths, MAX_RESIZED_COLUMNS, MIN_COLUMN_COLUMNS};
 use nene_ledger_core::display_width::display_columns;
 use nene_ledger_core::draw_command::DrawCommand;
+use nene_ledger_core::find_query::FindQuery;
 use nene_ledger_core::frame::Frame;
 use nene_ledger_core::glyph_metrics::GlyphMetrics;
 use nene_ledger_core::line_ending::LineEnding;
@@ -165,6 +172,10 @@ pub struct Document {
     pasting: Option<PendingPaste>,
     /// 切り取りの枠（ADR 0029 の決定 5）。表を変える操作・Esc・編集で消える。
     cut: Option<CutMark>,
+    /// 前に探した問い（F3 で続けて探す・ADR 0030 の決定 1）。
+    find_query: Option<FindQuery>,
+    /// 進んでいる検索。
+    finding: Option<FindRun>,
     /// 求めたコピーが切り取りなら、その範囲（`copy_text` で枠を作る）。
     cutting: Option<Selection>,
 }
@@ -278,6 +289,8 @@ impl Document {
             save_progress: None,
             pasting: None,
             cut: None,
+            find_query: None,
+            finding: None,
             cutting: None,
         }
     }
@@ -391,6 +404,9 @@ impl Document {
             | Intent::UnfreezeColumns
             | Intent::Copy
             | Intent::Cut
+            | Intent::OpenFind
+            | Intent::FindAgain { .. }
+            | Intent::FindToggle(_)
             | Intent::ToggleDetail
             | Intent::Theme(_)
             | Intent::Zoom(_)
@@ -718,6 +734,13 @@ impl Document {
         if !keeps_cut(intent) {
             self.cut = None;
         }
+        // 探している間の Esc は、探すのをやめる（ADR 0030 の決定 4）。
+        if self.finding.is_some() && intent == Intent::Cancel && self.editor.is_none() {
+            return DocumentEffect::StopFinding;
+        }
+        if let Intent::FindAgain { forward } = intent {
+            return self.find_again(forward);
+        }
         // 保存の途中の Esc は、保存をやめる（SAVE-02・ADR 0025 の施主の判断 4）。
         if self.saving && intent == Intent::Cancel && self.editor.is_none() {
             return DocumentEffect::StopSaving;
@@ -770,16 +793,16 @@ impl Document {
         if let Some(effect) = self.early_effect(intent, window) {
             return effect;
         }
-        if intent == Intent::ToggleDetail {
-            self.detail = self.detail.toggled();
-        }
         let page = self.page_rows(window);
         let current = self.view.first_body();
         let target = match intent {
             Intent::Copy => return self.copy_request(),
             Intent::Cut => return self.cut_request(),
-            // 配色・文字の大きさ・パレット・文字の入力は合成ルートが受ける（ここに来たら何もしない。表に字を打つ編集は M2）。
-            Intent::Theme(_)
+            // 配色・文字の大きさ・パレット・字の入力・検索の欄は合成ルートが、続けて探すのは `apply` が受ける。
+            Intent::OpenFind
+            | Intent::FindAgain { .. }
+            | Intent::FindToggle(_)
+            | Intent::Theme(_)
             | Intent::Zoom(_)
             | Intent::OpenPalette
             | Intent::Type(_)
@@ -813,13 +836,13 @@ impl Document {
             | Intent::ResetColumns
             | Intent::ResetWidths
             | Intent::FreezeColumns
-            | Intent::UnfreezeColumns => {
-                self.arrange(intent, window);
-                current
-            }
+            | Intent::UnfreezeColumns => self.arrange(intent, window),
             Intent::GoTo(target) => self.jump(target, page, window),
-            // 開閉はすでに済ませた。ペインの分だけ表が狭まるので、カーソルが見えるように縦の表示を動かす。
-            Intent::ToggleDetail => reveal_row(current, self.selection.cursor().body(), page),
+            // 開閉する。ペインの分だけ表が狭まるので、カーソルが見えるように縦の表示を動かす。
+            Intent::ToggleDetail => {
+                self.detail = self.detail.toggled();
+                reveal_row(current, self.selection.cursor().body(), page)
+            }
             Intent::Scroll(scroll) => self.wheel(scroll, current, window),
             Intent::Move { step, mode } => self.move_cursor((step, mode), page, window),
             Intent::Point { at, mode } => {
@@ -870,6 +893,9 @@ impl Document {
             | Intent::UnfreezeColumns
             | Intent::Copy
             | Intent::Cut
+            | Intent::OpenFind
+            | Intent::FindAgain { .. }
+            | Intent::FindToggle(_)
             | Intent::ToggleDetail
             | Intent::Theme(_)
             | Intent::Zoom(_)
@@ -916,8 +942,9 @@ impl Document {
             }
             Intent::Confirm => return Some(self.committed_move(CursorStep::Down)),
             Intent::Advance(step) => return Some(self.committed_move(step)),
-            // 別のセル・別の行への移動と、表の並びを変える操作は、確定してから（保存と元に戻すは `apply` が先に受ける）。
-            Intent::Save
+            // 別のセル・別の行への移動と、表の並びを変える操作と、続けて探すのは、確定してから（保存と元に戻すは `apply` が先に受ける）。
+            Intent::FindAgain { .. }
+            | Intent::Save
             | Intent::SaveAs
             | Intent::NewTable
             | Intent::Paste
@@ -945,7 +972,9 @@ impl Document {
                 return Some(intent);
             }
             // 表示だけを動かすものは、編集を続けたまま。
-            Intent::Scroll(_)
+            Intent::OpenFind
+            | Intent::FindToggle(_)
+            | Intent::Scroll(_)
             | Intent::Drag { .. }
             | Intent::Release
             | Intent::ToggleDetail
@@ -1008,14 +1037,8 @@ impl Document {
                 None
             }
             Intent::BreakLine => None,
-            Intent::Confirm => Some(Intent::Move {
-                step: CursorStep::Down,
-                mode: SelectionMode::Collapse,
-            }),
-            Intent::Advance(step) => Some(Intent::Move {
-                step,
-                mode: SelectionMode::Collapse,
-            }),
+            Intent::Confirm => Some(plain_move(CursorStep::Down)),
+            Intent::Advance(step) => Some(plain_move(step)),
             Intent::Scroll(_)
             | Intent::Move { .. }
             | Intent::Point { .. }
@@ -1034,6 +1057,9 @@ impl Document {
             | Intent::UnfreezeColumns
             | Intent::Copy
             | Intent::Cut
+            | Intent::OpenFind
+            | Intent::FindAgain { .. }
+            | Intent::FindToggle(_)
             | Intent::ToggleDetail
             | Intent::Theme(_)
             | Intent::Zoom(_)
@@ -1530,6 +1556,225 @@ impl Document {
         DocumentEffect::Read { first_body: first }
     }
 
+    /// 問い `query` で、カーソルのセルの次（`forward`）か前のセルから探し始める（パレットの Enter / Shift+Enter・ADR 0030
+    /// の決定 1）。見えている値（原本 ＋ 書き換え ＋ 列の並び）で照らす。原本の行は合成ルートが裏で探す（`DocumentEffect::Find`）。
+    /// 空の問いは何もしない。
+    pub fn find(&mut self, query: FindQuery, forward: bool) -> DocumentEffect {
+        if query.is_empty() || self.closing != CloseState::Open {
+            return DocumentEffect::Stay;
+        }
+        self.notice = None;
+        self.commit_edit();
+        let columns = (0..self.widths.columns().len())
+            .map(|display| self.column_id(self.source_column(display)))
+            .collect();
+        let scope = FindScope::new(query.clone(), columns, self.edits.clone());
+        self.find_query = Some(query);
+        let cursor = self.selection.cursor();
+        let mut run = FindRun::new(
+            scope,
+            forward,
+            (self.line_of(cursor.body()), cursor.column()),
+        );
+        run.set_pending(self.find_pass(&run));
+        self.finding = Some(run);
+        DocumentEffect::Find
+    }
+
+    /// F3 / Shift+F3：前に探した問いで続けて探す。まだ探していなければ知らせる。
+    fn find_again(&mut self, forward: bool) -> DocumentEffect {
+        let Some(query) = self.find_query.clone() else {
+            self.notice = Some(Notice::Find(FindNotice::NothingToRepeat));
+            return DocumentEffect::Stay;
+        };
+        self.find(query, forward)
+    }
+
+    /// 前に探した問い（検索の欄を開くときに入れておく）。
+    #[must_use]
+    pub const fn find_query(&self) -> Option<&FindQuery> {
+        self.find_query.as_ref()
+    }
+
+    /// 裏で探す 1 回分と、探す問い・列・書き換えの写し（合成ルートが裏の仕事を始める）。無ければ `None`。
+    pub fn take_find_pass(&mut self) -> Option<(FindScope, FindPass)> {
+        let run = self.finding.as_mut()?;
+        let pass = run.take_pending()?;
+        Some((run.scope().clone(), pass))
+    }
+
+    /// 裏の検索の進み具合（読んだレコードの数・読む見込み）。
+    pub fn find_progress(&mut self, done: u64, total: u64) {
+        if let Some(run) = self.finding.as_mut() {
+            run.set_progress(done, total);
+        }
+    }
+
+    /// 裏の検索が止まった（やめた・`failed` なら読めなかった）。
+    pub fn find_stopped(&mut self, failed: bool) {
+        if self.finding.take().is_some() {
+            self.notice = Some(Notice::Find(if failed {
+                FindNotice::Failed
+            } else {
+                FindNotice::Stopped
+            }));
+        }
+    }
+
+    /// 裏の 1 回分の答え（当たったレコードと表示の列・無ければ `None`）。足した行の当たりと比べて近い方へカーソルを動かす。
+    /// どちらにも無ければ、反対の端から始めたセルまでを 1 度だけ続けて探す（`DocumentEffect::Find`）。それでも無ければ知らせる。
+    pub fn found(&mut self, found: Option<(u64, usize)>, window: WindowView) -> DocumentEffect {
+        let Some(mut run) = self.finding.take() else {
+            return DocumentEffect::Stay;
+        };
+        let source = found.and_then(|(record, column)| {
+            self.rows
+                .position_of(RowId::Source(record))
+                .map(|line| (line, column))
+        });
+        let added = self.added_match(&run);
+        let best = match (source, added) {
+            (Some(left), Some(right)) => Some(if run.forward() {
+                left.min(right)
+            } else {
+                left.max(right)
+            }),
+            (Some(one), None) | (None, Some(one)) => Some(one),
+            (None, None) => None,
+        };
+        if let Some((line, column)) = best {
+            if run.wrapped() {
+                self.notice = Some(Notice::Find(FindNotice::Wrapped));
+            }
+            return self.reveal_found(line, column, window);
+        }
+        if run.wrapped() {
+            self.notice = Some(Notice::Find(FindNotice::NotFound));
+            return DocumentEffect::Stay;
+        }
+        run.wrap();
+        run.set_pending(self.find_pass(&run));
+        self.finding = Some(run);
+        DocumentEffect::Find
+    }
+
+    /// 検索の今の 1 回分（向きと、反対の端から続けているか）で、原本のどのレコードをどう探すか。
+    fn find_pass(&self, run: &FindRun) -> FindPass {
+        let (line, column) = run.start();
+        let records = self.records();
+        let rest = |first: u64| records.map_or(u64::MAX, |total| total.saturating_sub(first));
+        let here = match self.rows.row_at(line) {
+            Some(RowId::Source(record)) => Some(record),
+            Some(RowId::Added(_)) | None => None,
+        };
+        let after = here.or_else(|| self.nearest_source(line, true));
+        let before = here.or_else(|| self.nearest_source(line, false));
+        let at_cursor = here.map(|record| (record, column));
+        match (run.forward(), run.wrapped()) {
+            (true, false) => after.map_or(FindPass::new(0, 0, FindBound::After(None)), |first| {
+                FindPass::new(first, rest(first), FindBound::After(at_cursor))
+            }),
+            (true, true) => FindPass::new(
+                0,
+                before.map_or(0, |last| last.saturating_add(1)),
+                FindBound::After(None),
+            ),
+            (false, false) => FindPass::new(
+                0,
+                before.map_or(0, |last| last.saturating_add(1)),
+                FindBound::Before(at_cursor),
+            ),
+            (false, true) => after.map_or(FindPass::new(0, 0, FindBound::Before(None)), |first| {
+                FindPass::new(first, rest(first), FindBound::Before(None))
+            }),
+        }
+    }
+
+    /// 行の並びの位置 `line` 以降（`after`）か以前で、いちばん近い原本の行のレコード。
+    fn nearest_source(&self, line: u64, after: bool) -> Option<u64> {
+        let segments = self.source_segments();
+        if after {
+            return segments.iter().find_map(|&(start, length, first)| {
+                (line < start.saturating_add(length))
+                    .then(|| first.saturating_add(line.max(start).saturating_sub(start)))
+            });
+        }
+        segments.iter().rev().find_map(|&(start, length, first)| {
+            let last = start.saturating_add(length).checked_sub(1)?;
+            (start <= line && length > 0)
+                .then(|| first.saturating_add(line.min(last).saturating_sub(start)))
+        })
+    }
+
+    /// 行の並びの区間を、最初の位置・行の数と組にした並び（原本の終わりまでの区間は索引の数か、分からなければ果てまで）。
+    fn positioned_runs(&self) -> Vec<(u64, u64, &OrderRun)> {
+        let records = self.records().unwrap_or(u64::MAX);
+        let mut position = 0_u64;
+        self.rows
+            .runs()
+            .iter()
+            .map(|run| {
+                let length = run.len(records);
+                let start = position;
+                position = position.saturating_add(length);
+                (start, length, run)
+            })
+            .collect()
+    }
+
+    /// 原本の行の区間（最初の位置・行の数・最初のレコード）。
+    fn source_segments(&self) -> Vec<(u64, u64, u64)> {
+        self.positioned_runs()
+            .into_iter()
+            .filter_map(|(start, length, run)| match run {
+                OrderRun::Source { first, .. } => Some((start, length, *first)),
+                OrderRun::Added(_) => None,
+            })
+            .collect()
+    }
+
+    /// 足した行（位置と通し番号）。
+    fn added_rows(&self) -> Vec<(u64, u64)> {
+        self.positioned_runs()
+            .into_iter()
+            .flat_map(|(start, _, run)| match run {
+                OrderRun::Added(ids) => ids.iter().zip(start..).map(|(&id, at)| (at, id)).collect(),
+                OrderRun::Source { .. } => Vec::new(),
+            })
+            .collect()
+    }
+
+    /// 足した行のうち、今の 1 回分の範囲で当たる、いちばん近いセル（行の並びの位置・表示の列）。
+    fn added_match(&self, run: &FindRun) -> Option<(u64, usize)> {
+        let (line, column) = run.start();
+        let width = self.widths.columns().len();
+        let hits = self.added_rows().into_iter().filter_map(|(at, id)| {
+            let columns = find_columns(run, (at, line), (column, width));
+            let row = RowId::Added(id);
+            let hit = if run.forward() {
+                run.scope().first_in_row(row, columns, |_| None)
+            } else {
+                run.scope().last_in_row(row, columns, |_| None)
+            };
+            hit.map(|found| (at, found))
+        });
+        if run.forward() {
+            hits.min()
+        } else {
+            hits.max()
+        }
+    }
+
+    /// 見つけたセル（行の並びの位置 `line`・表示の列 `column`）へカーソルを動かし、見えるように表示を動かす。
+    fn reveal_found(&mut self, line: u64, column: usize, window: WindowView) -> DocumentEffect {
+        let body = body_of(line, self.header_line());
+        let page = self.page_rows(window);
+        let current = self.view.first_body();
+        self.select(CellPosition::new(body, column), SelectionMode::Collapse);
+        self.first_column = self.reveal_column(column, window);
+        self.go_to(reveal_row(current, body, page), page)
+    }
+
     /// IME の確定（ADR 0026 の決定 4）。欄に挿し、確定前の文字列は消える。編集していなければ入力の状態で編集に入る。
     /// 尋ねる画面では受けない。保存中は知らせるだけ。
     pub fn commit_text(&mut self, text: &str) {
@@ -1994,7 +2239,8 @@ impl Document {
     }
 
     /// 縦の表示を動かさない、すべて・行全体・列全体の選択と、列の並びの意図（Issue #62）。ほかの意図は何もしない。
-    fn arrange(&mut self, intent: Intent, window: WindowView) {
+    /// 縦の表示の先頭（動かない）を返す。
+    fn arrange(&mut self, intent: Intent, window: WindowView) -> u64 {
         match intent {
             Intent::SelectAll => self.select_line(LineHit::All, SelectionMode::Collapse),
             Intent::SelectRows => self.select_whole_rows(),
@@ -2019,6 +2265,9 @@ impl Document {
             | Intent::OpenGoTo
             | Intent::Copy
             | Intent::Cut
+            | Intent::OpenFind
+            | Intent::FindAgain { .. }
+            | Intent::FindToggle(_)
             | Intent::ToggleDetail
             | Intent::Theme(_)
             | Intent::Zoom(_)
@@ -2044,6 +2293,7 @@ impl Document {
             | Intent::InsertHere
             | Intent::RemoveHere => {}
         }
+        self.view.first_body()
     }
 
     /// セルの上の `at` を押した。そのセルを選び（`mode` で畳む・広げる・足す）、離すまでドラッグを数える。
@@ -2221,6 +2471,9 @@ impl Document {
             | Intent::Move { .. }
             | Intent::Copy
             | Intent::Cut
+            | Intent::OpenFind
+            | Intent::FindAgain { .. }
+            | Intent::FindToggle(_)
             | Intent::ToggleDetail
             | Intent::Theme(_)
             | Intent::Zoom(_)
@@ -2787,7 +3040,9 @@ impl Document {
             | DocumentEffect::StopTotals
             | DocumentEffect::Save
             | DocumentEffect::SaveAs
-            | DocumentEffect::StopSaving => current,
+            | DocumentEffect::StopSaving
+            | DocumentEffect::Find
+            | DocumentEffect::StopFinding => current,
         };
         self.extend_to(at, first, window);
         effect
@@ -3855,6 +4110,9 @@ impl Document {
         if self.saving {
             return saving_status(self.save_progress);
         }
+        if let Some(run) = &self.finding {
+            return finding_status(run.progress());
+        }
         if let Some(editor) = &self.editor {
             return String::from(match editor.mode() {
                 EditMode::Entering => EDITING_HINT_ENTERING,
@@ -3964,6 +4222,17 @@ fn passed(scrollbar: ScrollBar, side: TrackSide, along: i64) -> bool {
     }
 }
 
+/// 探している間の状態の行。進み具合が分かれば割合と、やめ方を添える。
+fn finding_status(progress: Option<(u64, u64)>) -> String {
+    match progress {
+        Some((done, total)) if total > 0 && total < u64::MAX => {
+            let percent = u128::from(done).saturating_mul(100) / u128::from(total);
+            format!("探しています… {}%（Esc でやめる）", percent.min(99))
+        }
+        Some(_) | None => String::from("探しています…（Esc でやめる）"),
+    }
+}
+
 /// 保存の途中の状態の行。進み具合が分かれば割合（書き終える前は 99% で止める）と、やめ方を添える。
 fn saving_status(progress: Option<(u64, u64)>) -> String {
     match progress {
@@ -3972,6 +4241,38 @@ fn saving_status(progress: Option<(u64, u64)>) -> String {
             format!("保存しています… {}%（Esc でやめる）", percent.min(99))
         }
         Some(_) | None => String::from("保存しています…（Esc でやめる）"),
+    }
+}
+
+/// 選択を畳んで `step` の向きへ動く意図（編集していないときの Enter・Tab）。
+const fn plain_move(step: CursorStep) -> Intent {
+    Intent::Move {
+        step,
+        mode: SelectionMode::Collapse,
+    }
+}
+
+/// 検索の 1 回分（`run`）で、行の並びの位置 `at` の行のどの列を照らすか（始めたセルは位置 `line`・列 `column`、表の幅
+/// `width`）。前へ探す最初の回は始めたセルより後ろ、反対の端から続ける回は始めたセルまで（後ろへ探すときは逆）。
+fn find_columns(
+    run: &FindRun,
+    (at, line): (u64, u64),
+    (column, width): (usize, usize),
+) -> Range<usize> {
+    let after = column.saturating_add(1).min(width);
+    match (run.forward(), run.wrapped(), at.cmp(&line)) {
+        (true, false, Ordering::Greater)
+        | (true, true, Ordering::Less)
+        | (false, false, Ordering::Less)
+        | (false, true, Ordering::Greater) => 0..width,
+        (true, false, Ordering::Equal) => after..width,
+        (true, true, Ordering::Equal) => 0..after,
+        (false, false, Ordering::Equal) => 0..column.min(width),
+        (false, true, Ordering::Equal) => column.min(width)..width,
+        (true, false, Ordering::Less)
+        | (true, true, Ordering::Greater)
+        | (false, false, Ordering::Greater)
+        | (false, true, Ordering::Less) => 0..0,
     }
 }
 
@@ -3999,7 +4300,10 @@ const fn keeps_cut(intent: Intent) -> bool {
         | Intent::Confirm
         | Intent::Advance(_)
         | Intent::NewTable
-        | Intent::Paste => true,
+        | Intent::Paste
+        | Intent::OpenFind
+        | Intent::FindAgain { .. }
+        | Intent::FindToggle(_) => true,
         Intent::Copy
         | Intent::Cut
         | Intent::Cancel
@@ -4091,6 +4395,8 @@ mod tests {
             hovered,
         )
     }
+
+    use nene_ledger_core::find_options::FindOptions;
 
     fn normal() -> WindowView {
         view(400, 300, WindowPlacement::Normal)
@@ -7548,6 +7854,145 @@ mod tests {
             &document.frame(normal(), palette()),
             "貼り付けが大きすぎるので貼りませんでした（100 万セル・64 MiB まで）",
         );
+    }
+
+    /// 裏の検索の 1 回分を、表 `editable_rows` の原本で済ませる（合成ルートと app の `FindFold` の代わり）。
+    fn finish_finding(document: &mut Document, first: DocumentEffect) -> DocumentEffect {
+        let mut effect = first;
+        while effect == DocumentEffect::Find {
+            let (scope, pass) = document.take_find_pass().unwrap();
+            let found = scan_pass(document, &scope, pass);
+            effect = document.found(found, normal());
+        }
+        effect
+    }
+
+    /// 1 回分 `pass` の範囲のレコードを順に照らす（前へは最初、後ろへは最後の当たり）。
+    fn scan_pass(document: &Document, scope: &FindScope, pass: FindPass) -> Option<(u64, usize)> {
+        let rows = editable_rows();
+        let end = pass
+            .first()
+            .saturating_add(pass.count())
+            .min(u64::try_from(rows.len()).unwrap());
+        let hits = (pass.first()..end)
+            .filter(|&record| document.rows.position_of(RowId::Source(record)).is_some())
+            .filter_map(|record| {
+                let cells = rows[usize::try_from(record).unwrap()].clone();
+                record_hit(scope, pass.bound(), record, &cells).map(|column| (record, column))
+            });
+        match pass.bound() {
+            FindBound::After(_) => hits.min(),
+            FindBound::Before(_) => hits.max(),
+        }
+    }
+
+    /// レコード `record`（セル `cells`）で、境 `bound` の内側で当たる列。
+    fn record_hit(
+        scope: &FindScope,
+        bound: FindBound,
+        record: u64,
+        cells: &[String],
+    ) -> Option<usize> {
+        let row = RowId::Source(record);
+        let source = |index: usize| cells.get(index).cloned();
+        let width = scope.width();
+        match bound {
+            FindBound::After(after) => {
+                let from = after
+                    .filter(|&(at, _)| at == record)
+                    .map_or(0, |(_, column)| column + 1);
+                scope.first_in_row(row, from..width, source)
+            }
+            FindBound::Before(before) => {
+                let to = before
+                    .filter(|&(at, _)| at == record)
+                    .map_or(width, |(_, column)| column);
+                scope.last_in_row(row, 0..to, source)
+            }
+        }
+    }
+
+    fn finding(document: &mut Document, text: &str, forward: bool) {
+        let query = FindQuery::new(text, FindOptions::standard());
+        let effect = document.find(query, forward);
+        finish_finding(document, effect);
+    }
+
+    fn again(document: &mut Document, forward: bool) {
+        let effect = document.apply(Intent::FindAgain { forward }, normal());
+        finish_finding(document, effect);
+    }
+
+    /// 次を探し、F3 で続け、表の終わりから頭へ回って知らせる。前へも探せる（ADR 0030 の決定 1）。
+    #[test]
+    fn finding_moves_to_the_next_match_and_wraps_around() {
+        let mut document = indexed_editable();
+        finding(&mut document, "B", true);
+        assert_eq!(document.selection().cursor(), CellPosition::new(1, 0));
+        again(&mut document, true);
+        assert_eq!(document.selection().cursor(), CellPosition::new(1, 1));
+        again(&mut document, true);
+        assert_eq!(document.selection().cursor(), CellPosition::new(1, 0));
+        text_at(
+            &document.frame(normal(), palette()),
+            "表の端まで探して、反対の端から続けて見つけました",
+        );
+        again(&mut document, false);
+        assert_eq!(document.selection().cursor(), CellPosition::new(1, 1));
+        finding(&mut document, "zzz", true);
+        assert_eq!(document.selection().cursor(), CellPosition::new(1, 1));
+        text_at(&document.frame(normal(), palette()), "見つかりませんでした");
+    }
+
+    /// 書き換えた値で探し、元の値では見つからない。足した行の中も探す（ADR 0030 の決定 2）。
+    #[test]
+    fn finding_uses_edited_values_and_added_rows() {
+        let mut document = indexed_editable();
+        document.apply(moving(CursorStep::Down), normal());
+        document.apply(moving(CursorStep::Down), normal());
+        typed(&mut document, "edited");
+        document.apply(Intent::Confirm, normal());
+        document.apply(moving(CursorStep::Top), normal());
+        finding(&mut document, "c1", true);
+        text_at(&document.frame(normal(), palette()), "見つかりませんでした");
+        finding(&mut document, "EDIT", true);
+        assert_eq!(document.selection().cursor(), CellPosition::new(2, 0));
+        document.apply(Intent::InsertRows(RowPlace::End), normal());
+        // 合成ルートは足した行を含めて読み直す（足した行はセルの無い行）。
+        let mut shown = editable_rows();
+        shown.push(Vec::new());
+        document.show(0, &shown);
+        typed(&mut document, "tail");
+        document.apply(Intent::Confirm, normal());
+        document.apply(moving(CursorStep::Top), normal());
+        finding(&mut document, "tai", true);
+        assert_eq!(document.selection().cursor(), CellPosition::new(3, 0));
+        // 前へ探しても、足した行から原本の行へ戻れる。
+        finding(&mut document, "0012", false);
+        assert_eq!(document.selection().cursor(), CellPosition::new(0, 0));
+    }
+
+    /// F3 はまだ探していなければ知らせ、探している間の Esc は止める。
+    #[test]
+    fn find_again_needs_a_query_and_escape_stops_a_search() {
+        let mut document = indexed_editable();
+        assert_eq!(
+            document.apply(Intent::FindAgain { forward: true }, normal()),
+            DocumentEffect::Stay
+        );
+        text_at(
+            &document.frame(normal(), palette()),
+            "続けて探すものがありません（Ctrl+F で探す）",
+        );
+        let query = FindQuery::new("b", FindOptions::standard());
+        assert_eq!(document.find(query, true), DocumentEffect::Find);
+        assert!(document.take_find_pass().is_some());
+        assert_eq!(
+            document.apply(Intent::Cancel, normal()),
+            DocumentEffect::StopFinding
+        );
+        document.find_stopped(false);
+        text_at(&document.frame(normal(), palette()), "探すのをやめました");
     }
 
     /// 編集中の貼り付けは字のまま（引用を解かない・レビューで見つけた）。

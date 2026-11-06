@@ -30,6 +30,8 @@ pub enum PaletteMode {
         /// 上書きを尋ねているか。
         overwrite: bool,
     },
+    /// 探す文字を打つ段（Ctrl+F・ADR 0030 の決定 1）。条件は `CommandPalette::find_options`。
+    Find,
     /// 配色の一覧。`original` は開いたときの配色の、表の中の位置（Esc で戻す先）。
     Themes {
         /// 開いたときの配色の位置。
@@ -43,7 +45,7 @@ impl PaletteMode {
     pub fn tries_the_selection(self) -> bool {
         match self {
             Self::Themes { .. } | Self::Reading { .. } | Self::Candidates { .. } => true,
-            Self::Commands | Self::GoTo | Self::Keys | Self::SaveAs { .. } => false,
+            Self::Commands | Self::GoTo | Self::Find | Self::Keys | Self::SaveAs { .. } => false,
         }
     }
 }
