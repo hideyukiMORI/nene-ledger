@@ -883,6 +883,19 @@ PR の枝の exe を Xvfb に出し、`xdotool` で操作して `xprop _NET_WM_N
 
 前は開いたときに 1 度だけ付けていて、自前のタイトルバーの `●` が OS の側（タスクバー・Alt+Tab・窓の管理者）に出なかった。同じ日の測りで、OS の窓の名前の `●` を待つ script が 120 s の上限まで待って気づいた。Windows（`SetWindowTextW`）は `make build-windows` と `make lint-windows` まで・実機はまだ。
 
+## 80. core に `regex-automata` を足す（GitHub Issue #171・ADR 0031・ARC-013・CNF-013）
+
+許可を書く前と後で回した（実ファイル・本物の依存・2026-11-06）:
+
+| 検査 | 許可を書く前 | 許可を書いた後 |
+| --- | --- | --- |
+| CNF-013 | `crates/core/Cargo.toml` に `regex-automata` → `crates/core/Cargo.toml:16 — regex-automata への依存は crates/core/ に許されていない（ARC-002 / ARC-013）`・終了 1 | xtask の許可表（`ALLOWED_DEPENDENCIES` の `crates/core/`）に足す → `規約違反なし` |
+| `make deny` | — | `advisories ok, bans ok, licenses ok, sources ok`（`MIT OR Apache-2.0` は既に許可。重複の版なし） |
+
+`cargo tree -p nene-ledger-core -e normal`: `regex-automata` 0.4.18 が `regex-syntax` 0.8.11 だけを連れてくる（`alloc`・`syntax`・`meta`・`unicode`。速い道の `perf-literal-*` を入れないので `aho-corasick`・`memchr` は来ない）。core の `#![no_std]` のまま組み立つ（CNF-007 は変わらず通る）。
+
+release の exe：2,603,088 → 4,180,800 バイト（+1.58 MB）。正規表現を使わない検索の速さ：ASCII でないセルだけの 42 MB で `--find` の CPU 時間を 8 回ずつ交互に測り、main 0.885 s・この枝 0.899 s（ばらつきの中）。
+
 ## 7. active の規則と、その証明
 
 CNF-009 は active の規則ごとに `| ID |` で始まる行がここにあることを要求する。

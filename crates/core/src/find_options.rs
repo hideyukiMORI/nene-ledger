@@ -15,6 +15,8 @@ const WHOLE_CELL: u8 = 0b0010;
 const MATCH_WIDTH: u8 = 0b0100;
 /// ひらがなとカタカナを区別する。
 const MATCH_KANA: u8 = 0b1000;
+/// 問いを正規表現として読む（ADR 0030 の決定 5・ADR 0031）。
+const REGEX: u8 = 0b1_0000;
 
 impl FindOptions {
     /// 既定の条件（ADR 0030 の決定 3）。
@@ -45,6 +47,28 @@ impl FindOptions {
     #[must_use]
     pub const fn match_kana(self) -> bool {
         self.bits & MATCH_KANA != 0
+    }
+
+    /// 問いを正規表現として読むか。
+    #[must_use]
+    pub const fn regex(self) -> bool {
+        self.bits & REGEX != 0
+    }
+
+    /// 大文字と小文字を区別する条件（ほかはそのまま）。正規表現の式を畳むときに使う（大文字小文字は式の設定で扱う）。
+    #[must_use]
+    pub const fn matching_case(self) -> Self {
+        Self {
+            bits: self.bits | MATCH_CASE,
+        }
+    }
+
+    /// 正規表現として読むかを切り替えた条件（Alt+R）。
+    #[must_use]
+    pub const fn toggled_regex(self) -> Self {
+        Self {
+            bits: self.bits ^ REGEX,
+        }
     }
 
     /// 大文字と小文字の区別を切り替えた条件（Alt+C）。
@@ -111,5 +135,7 @@ mod tests {
             (true, true, true, false)
         );
         assert_eq!(toggled.toggled_case().toggled_case(), toggled);
+        assert!(!standard.regex() && standard.toggled_regex().regex());
+        assert!(standard.matching_case().match_case() && toggled.matching_case() == toggled);
     }
 }

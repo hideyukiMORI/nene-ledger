@@ -88,7 +88,7 @@ NeNe Ledger で特に守る経路:
 🔑 中核クレートは `#![no_std]` ＋ `extern crate alloc` で書く。`std::fs` / `std::env` / `std::time` / `std::thread` が
 lint 違反ではなく**名前解決エラー**になる。宣言そのものが消えていないことは CNF-007 が見る。
 
-- 機械強制: **active**（`#![no_std]` の宣言＝CNF-007、外部クレートの禁止＝CNF-013。Issue #9 で `crates/core` の実ファイルで `#![no_std]` を外して CNF-007 を、`std::time` を書いて CNF-012 と E0433 を、`regex` を足して CNF-013 を発火させた。[gate-proofs](quality/gate-proofs.md) 第 8 節）
+- 機械強制: **active**（`#![no_std]` の宣言＝CNF-007、外部クレートの禁止＝CNF-013。Issue #9 で `crates/core` の実ファイルで `#![no_std]` を外して CNF-007 を、`std::time` を書いて CNF-012 と E0433 を、`regex` を足して CNF-013 を発火させた。[gate-proofs](quality/gate-proofs.md) 第 8 節。core に許した外部クレートは `no_std` の `regex-automata` だけ（[ADR 0031](adr/0031-regex-in-core.md)・GitHub Issue #171・gate-proofs 第 80 節）。core と application が `std` に届かないことは変わらない）
 
 ### ARC-004 — 状態には唯一の所有者がいる
 
@@ -190,7 +190,7 @@ UI 層は、application が作った値を描き、利用者の操作を意図�
 
 ### ARC-013 — 外部依存は許可制
 
-- 依存を足すときは ADR を 1 本立てる。いま許可された外部クレートは scan と store の `encoding_rs`（[ADR 0015](adr/0015-encodings-with-encoding-rs.md)・Issue #18・store は [ADR 0025](adr/0025-save-by-replacement-and-windows-locks.md)・GitHub Issue #58）と ui-x11 の `x11rb`・`cairo-rs`（[ADR 0016](adr/0016-ui-dependencies-x11rb-cairo-windows.md)・Issue #20）。表は [CODING_RULES](CODING_RULES.md) 第 5 節
+- 依存を足すときは ADR を 1 本立てる。いま許可された外部クレートは core の `regex-automata`（正規表現の照合・`no_std`・[ADR 0031](adr/0031-regex-in-core.md)・GitHub Issue #171）と、scan と store の `encoding_rs`（[ADR 0015](adr/0015-encodings-with-encoding-rs.md)・Issue #18・store は [ADR 0025](adr/0025-save-by-replacement-and-windows-locks.md)・GitHub Issue #58）と ui-x11 の `x11rb`・`cairo-rs`（[ADR 0016](adr/0016-ui-dependencies-x11rb-cairo-windows.md)・Issue #20）。表は [CODING_RULES](CODING_RULES.md) 第 5 節
 - 予定: X11 と描画は `x11rb` と `cairo-rs`、Windows は `windows`（[ADR 0002](adr/0002-no-toolkit-x11rb-cairo-win32-direct2d.md)）。ファイルの写像は `memmap2` か OS の直呼び（[ADR 0006](adr/0006-confined-unsafe-for-scan.md)）。いずれも導入の Issue で ADR と実測をそろえる
 - 分析エンジン（DuckDB 等）は組み込まない（[ADR 0007](adr/0007-own-engine-and-external-benchmarks.md)）
 - バージョンに `*` を書かない（`clippy::wildcard_dependencies`）。版の固定は `Cargo.lock` の仕事であり、マニフェストに `=` を書かない

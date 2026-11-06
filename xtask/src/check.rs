@@ -536,9 +536,10 @@ pub(crate) fn scan_does_not_write(file: &SourceFile) -> Vec<Violation> {
 }
 
 /// クレート間で許された依存（ARC-002）。鍵はディレクトリ名、値は依存してよいパッケージ名。
-/// 🔴 外部クレートを足すのは ADR と deny.toml と、この表の仕事（ARC-013）。いまの外部クレートは scan と store の `encoding_rs` だけ（ADR 0015・Issue #18・ADR 0025・GitHub Issue #58）。
+/// 🔴 外部クレートを足すのは ADR と deny.toml と、この表の仕事（ARC-013）。中核の外部クレートは scan と store の `encoding_rs`
+/// （ADR 0015・Issue #18・ADR 0025・GitHub Issue #58）と、core の `regex-automata`（正規表現の照合・ADR 0031・GitHub Issue #171）。
 const ALLOWED_DEPENDENCIES: [(&str, &[&str]); 10] = [
-    ("crates/core/", &[]),
+    ("crates/core/", &["regex-automata"]),
     ("crates/application/", &["nene-ledger-core"]),
     (
         "crates/scan/",
