@@ -270,7 +270,8 @@ impl Viewer {
         match self.job.take_result() {
             Some(Ok(IndexOutcome::Finished(index))) => {
                 let summary =
-                    IndexSummary::new(index.records(), index.unclosed_quotes().first().copied());
+                    IndexSummary::new(index.records(), index.unclosed_quotes().first().copied())
+                        .with_line_endings(index.line_endings());
                 self.reader.use_index(index);
                 JobReport::Finished(summary)
             }

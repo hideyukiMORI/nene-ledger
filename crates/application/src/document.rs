@@ -3021,6 +3021,12 @@ impl Document {
     /// 無いまま読んだので、1 MiB を超えるレコードで窓が短く止まっていることがある（GitHub Issue #32）。
     pub fn report(&mut self, report: JobReport) -> DocumentEffect {
         let finished_before = self.records().is_some();
+        // 索引がファイル全体で数えた改行の内訳に替える（開くときは先頭の標本だけで数えている・OPEN-08）。
+        if let JobReport::Finished(summary) = report
+            && let Some(endings) = summary.line_endings()
+        {
+            self.format = FormatSummary::new(self.format.format(), endings);
+        }
         self.index = self.index.apply(report);
         // ファイルの終わりまでの選択は、行の数が決まったとき 1 度だけ数え直す（見積もりで切っていた）。
         if !finished_before
@@ -6516,5 +6522,18 @@ mod tests {
                 .editor()
                 .is_some_and(|editor| editor.field().text() == "0012\"abc\"")
         );
+    }
+
+    /// 索引を作り終えたら、状態の行の改行の内訳はファイル全体で数えたもの（先頭の標本が LF だけでも、後ろに CRLF が
+    /// あれば混在と出す・OPEN-08）。
+    #[test]
+    fn the_whole_file_line_endings_replace_the_sample() {
+        let mut document = editable();
+        let mixed = LineEndingCounts::new(5, 1_000_000, 0);
+        document.report(JobReport::Finished(
+            IndexSummary::new(1_000_005, None).with_line_endings(mixed),
+        ));
+        assert_eq!(document.format_summary().line_endings(), mixed);
+        assert!(document.format_summary().line_endings().mixed());
     }
 }

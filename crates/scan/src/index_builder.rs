@@ -92,11 +92,14 @@ impl IndexBuilder {
     #[must_use]
     pub fn finish(mut self) -> SparseIndex {
         self.unclosed_quotes.extend(self.starts.unclosed_quote());
+        // 改行は、UTF-16 の残りの 1 バイト（終わり方の無いレコード）を数える前のレコードで数える。
+        let endings = self.starts.line_endings(self.records);
         if let Some(start) = self.starts.finish_input() {
             self.count_record(start);
         }
         SparseIndex::new(self.marks, self.records, self.bytes)
             .with_unclosed_quotes(self.unclosed_quotes)
+            .with_line_endings(endings)
     }
 }
 
@@ -104,6 +107,7 @@ impl IndexBuilder {
 mod tests {
     use super::*;
     use nene_ledger_core::delimiter::Delimiter;
+    use nene_ledger_core::line_ending_counts::LineEndingCounts;
     use nene_ledger_core::quoting::Quoting;
     use nene_ledger_core::record::Record;
     use nene_ledger_core::records::Records;
@@ -116,6 +120,8 @@ mod tests {
         let mut marks = Vec::new();
         let mut records = 0_u64;
         let mut quotes = Vec::new();
+        let endings =
+            LineEndingCounts::tally(Records::new(input, dialect).map(|record| record.terminator()));
         for record in Records::new(input, dialect) {
             if records.is_multiple_of(MARK_INTERVAL) {
                 marks.push(u64::try_from(record.raw().start()).unwrap());
@@ -125,6 +131,7 @@ mod tests {
         }
         SparseIndex::new(marks, records, u64::try_from(input.len()).unwrap())
             .with_unclosed_quotes(quotes)
+            .with_line_endings(endings)
     }
 
     /// 参照実装のレコードの中で、閉じなかった引用符（`ToEnd`）か文字として読んだ引用符（`Literal`）の位置。

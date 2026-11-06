@@ -1,5 +1,7 @@
 //! まばらな行の索引。
 
+use nene_ledger_core::line_ending_counts::LineEndingCounts;
+
 use crate::mark::Mark;
 
 /// 目印を置く間隔（レコードの数）。ADR 0017 の決定 2。
@@ -14,6 +16,7 @@ pub struct SparseIndex {
     records: u64,
     bytes: u64,
     unclosed_quotes: Vec<u64>,
+    line_endings: LineEndingCounts,
 }
 
 impl SparseIndex {
@@ -25,6 +28,7 @@ impl SparseIndex {
             records,
             bytes,
             unclosed_quotes: Vec::new(),
+            line_endings: LineEndingCounts::new(0, 0, 0),
         }
     }
 
@@ -42,6 +46,21 @@ impl SparseIndex {
             unclosed_quotes,
             ..self
         }
+    }
+
+    /// ファイル全体のレコードの改行の内訳を添える（OPEN-08）。
+    #[must_use]
+    pub(crate) fn with_line_endings(self, line_endings: LineEndingCounts) -> Self {
+        Self {
+            line_endings,
+            ..self
+        }
+    }
+
+    /// ファイル全体のレコードの改行の内訳（引用の中の改行は数えない・OPEN-08）。作り始める前の索引は 0。
+    #[must_use]
+    pub fn line_endings(&self) -> LineEndingCounts {
+        self.line_endings
     }
 
     /// 目印のバイト位置。`i` 番目はレコード `i × MARK_INTERVAL` の始まり。

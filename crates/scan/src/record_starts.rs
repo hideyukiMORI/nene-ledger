@@ -1,6 +1,7 @@
 //! 1 バイトずつ進んで、レコードの始まりを見つける。
 
 use nene_ledger_core::dialect::Dialect;
+use nene_ledger_core::line_ending_counts::LineEndingCounts;
 use nene_ledger_core::quoting::Quoting;
 use nene_ledger_core::text_units::TextUnits;
 use nene_ledger_core::unclosed_quote::UnclosedQuote;
@@ -29,6 +30,9 @@ pub(crate) struct RecordStarts {
     position: u64,
     open_quote: u64,
     phase: CharPhase,
+    /// 引用の外で数えたレコードの改行のうち `\r\n` と `\r` だけの数（OPEN-08）。`\n` は、終わったレコードの数から
+    /// 引いて出す（1 バイトごとに数えない・1 GB の索引の時間を増やさない）。
+    endings: [usize; 2],
 }
 
 impl RecordStarts {
@@ -40,7 +44,25 @@ impl RecordStarts {
             position,
             open_quote: position,
             phase: CharPhase::Head,
+            endings: [0; 2],
         }
+    }
+
+    /// ここで入力が終わったときのレコードの改行の内訳。`records` はここまでに数えたレコードの数。最後の `\r` の後ろに
+    /// 何も無ければ、それも `\r` と数える。改行で終わったレコードの数から `\r\n` と `\r` を引いた残りが `\n`。
+    pub(crate) fn line_endings(&self, records: u64) -> LineEndingCounts {
+        let [crlf, cr] = self.endings;
+        let trailing = self.state == ScanState::AfterCarriageReturn;
+        let cr = cr.saturating_add(usize::from(trailing));
+        let ended_last = trailing || self.state == ScanState::RecordStart;
+        let records = usize::try_from(records).unwrap_or(usize::MAX);
+        let terminated = if ended_last {
+            records
+        } else {
+            records.saturating_sub(1)
+        };
+        let lf = terminated.saturating_sub(crlf).saturating_sub(cr);
+        LineEndingCounts::new(crlf, lf, cr)
     }
 
     /// 次に受け取るバイトの位置。
@@ -155,6 +177,14 @@ impl RecordStarts {
             ScanState::QuoteInQuoted if byte == self.dialect.quote() => (ScanState::Quoted, false),
             ScanState::QuoteInQuoted | ScanState::AfterClose => (self.after_close(byte), false),
         };
+        // `\r` の次のバイトで、そのレコードの改行が `\r\n` か `\r` だけかが決まる（参照実装の `Record::terminator`
+        // と同じ・引用の中の `\r` はこの状態にならない）。
+        if self.state == ScanState::AfterCarriageReturn {
+            let kind = usize::from(next != ScanState::RecordStart || byte != b'\n');
+            if let Some(count) = self.endings.get_mut(kind) {
+                *count = count.saturating_add(1);
+            }
+        }
         self.state = next;
         starts
     }
