@@ -1,0 +1,150 @@
+//! 何を探すか（ADR 0030 の決定 2）：見えている値で、行の中の列を左から右へ照らす。
+
+use alloc::string::String;
+use alloc::vec::Vec;
+use core::ops::Range;
+
+use nene_ledger_core::cell_edits::CellEdits;
+use nene_ledger_core::cell_value::CellValue;
+use nene_ledger_core::column_id::ColumnId;
+use nene_ledger_core::find_query::FindQuery;
+use nene_ledger_core::row_id::RowId;
+
+/// 探す問いと、表示の順の列（同一性）と、書き換えの写し。裏の検索のスレッドにも渡す（原本の行は scan が読む）。
+/// 書き換えたセルは書き換えた値で照らし、元の値では当たらない。「セルが無い」にしたセルと、足した列の書き換えていない
+/// セル（空）は当たらない。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FindScope {
+    query: FindQuery,
+    columns: Vec<ColumnId>,
+    edits: CellEdits,
+}
+
+impl FindScope {
+    /// 問い `query` を、表示の順の列 `columns` と書き換え `edits` で照らす。
+    #[must_use]
+    pub fn new(query: FindQuery, columns: Vec<ColumnId>, edits: CellEdits) -> Self {
+        Self {
+            query,
+            columns,
+            edits,
+        }
+    }
+
+    /// 問い。
+    #[must_use]
+    pub const fn query(&self) -> &FindQuery {
+        &self.query
+    }
+
+    /// 表示の列の数。
+    #[must_use]
+    pub fn width(&self) -> usize {
+        self.columns.len()
+    }
+
+    /// 原本の行 `row` を、ASCII だけのレコードのバイト列 `raw` から照らさずに除けるか（書き換えた行は除かない）。
+    #[must_use]
+    pub fn skips_ascii_record(&self, row: RowId, raw: &[u8]) -> bool {
+        !self.edits.touches_row(row) && raw.is_ascii() && self.query.rules_out_ascii(raw)
+    }
+
+    /// 行 `row` の表示の列 `columns` のうち、左から見て最初に当たる列。`source` は原本の `n` 列目の値（無ければ `None`）。
+    pub fn first_in_row<S: Fn(usize) -> Option<String>>(
+        &self,
+        row: RowId,
+        columns: Range<usize>,
+        source: S,
+    ) -> Option<usize> {
+        columns
+            .into_iter()
+            .find(|&display| self.hits(row, display, &source))
+    }
+
+    /// 行 `row` の表示の列 `columns` のうち、右から見て最初に当たる列（前へ探すとき）。
+    pub fn last_in_row<S: Fn(usize) -> Option<String>>(
+        &self,
+        row: RowId,
+        columns: Range<usize>,
+        source: S,
+    ) -> Option<usize> {
+        columns
+            .into_iter()
+            .rev()
+            .find(|&display| self.hits(row, display, &source))
+    }
+
+    /// 行 `row` の表示の `display` 列目のセルが当たるか。
+    fn hits<S: Fn(usize) -> Option<String>>(&self, row: RowId, display: usize, source: &S) -> bool {
+        let Some(&column) = self.columns.get(display) else {
+            return false;
+        };
+        match self.edits.get(row, column) {
+            Some(CellValue::Text(value)) => self.query.matches(value),
+            Some(CellValue::Absent) => false,
+            None => match column {
+                ColumnId::Source(index) => {
+                    source(index).is_some_and(|value| self.query.matches(&value))
+                }
+                ColumnId::Added(_) => false,
+            },
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloc::vec;
+    use nene_ledger_core::find_options::FindOptions;
+
+    fn scope(text: &str, edits: CellEdits) -> FindScope {
+        FindScope::new(
+            FindQuery::new(text, FindOptions::standard()),
+            vec![ColumnId::Source(1), ColumnId::Source(0), ColumnId::Added(0)],
+            edits,
+        )
+    }
+
+    fn cells(index: usize) -> Option<String> {
+        ["tokyo", "osaka"]
+            .get(index)
+            .map(|&value| String::from(value))
+    }
+
+    #[test]
+    fn rows_are_searched_in_the_shown_order_with_edits_over_the_source() {
+        let row = RowId::Source(4);
+        // 表示の順は osaka・tokyo・足した列。
+        assert_eq!(
+            scope("o", CellEdits::empty()).first_in_row(row, 0..3, cells),
+            Some(0)
+        );
+        assert_eq!(
+            scope("o", CellEdits::empty()).last_in_row(row, 0..3, cells),
+            Some(1)
+        );
+        assert_eq!(
+            scope("tok", CellEdits::empty()).first_in_row(row, 0..1, cells),
+            None
+        );
+        let mut edits = CellEdits::empty();
+        let _kyoto = edits.set(
+            row,
+            ColumnId::Source(0),
+            CellValue::Text(String::from("kyoto")),
+        );
+        let _tokyo = edits.set(
+            row,
+            ColumnId::Added(0),
+            CellValue::Text(String::from("Tokyo")),
+        );
+        // 書き換えた値で当たり、元の値（tokyo）では当たらない。
+        let edited = scope("tok", edits.clone());
+        assert_eq!(edited.first_in_row(row, 0..3, cells), Some(2));
+        assert_eq!(
+            scope("kyoto", edits).first_in_row(row, 0..3, cells),
+            Some(1)
+        );
+    }
+}

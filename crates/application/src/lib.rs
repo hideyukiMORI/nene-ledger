@@ -44,6 +44,7 @@ pub mod edit_mode;
 pub mod edit_step;
 mod editing_cell;
 pub mod file_stamp;
+pub mod find_scope;
 pub mod fixed_parts;
 pub mod format_summary;
 mod frame_painter;

@@ -42,6 +42,18 @@ impl TextEncoding {
         }
     }
 
+    /// ASCII の字を ASCII の 1 バイトで書き、ASCII だけのバイト列が ASCII の字だけを表す文字コードか（UTF-16 でない）。
+    /// 検索で、ASCII だけのレコードを復号せずに照らせる（ADR 0030 の決定 4）。
+    #[must_use]
+    pub const fn keeps_ascii(self) -> bool {
+        match self {
+            Self::Utf16LeWithBom | Self::Utf16BeWithBom | Self::Utf16Le | Self::Utf16Be => false,
+            Self::Utf8 | Self::Utf8WithBom | Self::ShiftJis | Self::EucJp | Self::Windows1252 => {
+                true
+            }
+        }
+    }
+
     /// 値 `text` をこの文字コードで書いたときのバイト数（BOM を除く）。表を引かず、文字の範囲だけで数える。
     /// このファイルから復号した値なら原本のバイト数と一致する。ただし、読めないバイトの代わりの `U+FFFD` と、EUC-JP の
     /// 3 バイトの補助漢字（JIS X 0212）は 2 バイトとして数える（Issue #59）。
