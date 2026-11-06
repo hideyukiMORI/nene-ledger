@@ -1,18 +1,36 @@
 //! 検索の問い（ADR 0030 の決定 2・3）。
 
+use alloc::format;
 use alloc::string::String;
+use alloc::vec::Vec;
+use core::ops::Range;
+
+use regex_automata::meta::Regex;
+use regex_automata::util::interpolate;
+use regex_automata::util::primitives::PatternID;
+use regex_automata::util::syntax;
 
 use crate::find_folding::{fold_for_find, fold_with_origins};
 use crate::find_options::FindOptions;
 
 /// 探す文字列と条件。セルの値（見えている値の文字列）が当たるかを決める。値は文字列のまま比べる（数や日付として
-/// 比べない・KEEP-01）。
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// 比べない・KEEP-01）。正規表現の条件なら式を組み立てて持つ（ADR 0031）。読めない式はどのセルにも当たらない。
+/// 等しさは打った文字列と条件で決める（式はそこから作るので）。
+#[derive(Debug, Clone)]
 pub struct FindQuery {
     text: String,
     folded: String,
     options: FindOptions,
+    regex: Option<Regex>,
 }
+
+impl PartialEq for FindQuery {
+    fn eq(&self, other: &Self) -> bool {
+        self.text == other.text && self.options == other.options
+    }
+}
+
+impl Eq for FindQuery {}
 
 impl FindQuery {
     /// `text` を条件 `options` で探す問い。
@@ -22,7 +40,14 @@ impl FindQuery {
             text: String::from(text),
             folded: fold_for_find(text, options),
             options,
+            regex: compiled(text, options),
         }
+    }
+
+    /// 正規表現の条件で、式が読めないか（どのセルにも当たらない・画面はそう知らせる）。
+    #[must_use]
+    pub fn is_broken(&self) -> bool {
+        self.options.regex() && !self.folded.is_empty() && self.regex.is_none()
     }
 
     /// 打った文字列。
@@ -49,6 +74,9 @@ impl FindQuery {
         if self.folded.is_empty() {
             return false;
         }
+        if self.options.regex() {
+            return self.regex_matches(cell);
+        }
         // 速い道：ASCII だけのセルは、畳んでも ASCII のまま（全角も半角カタカナも無い）。問いが ASCII でなければ
         // 当たらず、ASCII なら写しを作らずに比べる。
         if cell.is_ascii() {
@@ -73,34 +101,41 @@ impl FindQuery {
         if !self.matches(cell) {
             return None;
         }
+        if let Some(regex) = &self.regex {
+            return regex_replaced(regex, cell, replacement, self.options);
+        }
         if self.options.whole_cell() {
             return Some(String::from(replacement));
         }
         let (folded, origins) = fold_with_origins(cell, self.options);
-        // 写しのバイトの位置 `at` を含む字の、元の範囲。
-        let origin = |at: usize| {
-            let index = origins.partition_point(|(start, _)| *start <= at);
-            origins
-                .get(index.saturating_sub(1))
-                .map(|(_, range)| range.clone())
-        };
         let mut result = String::with_capacity(cell.len());
         let mut kept = 0_usize;
         for (at, part) in folded.match_indices(self.folded.as_str()) {
-            let last = at.saturating_add(part.len()).saturating_sub(1);
-            let (Some(first), Some(end)) = (origin(at), origin(last)) else {
+            let Some(original) = original_range(&origins, at..at.saturating_add(part.len())) else {
                 continue;
             };
             // 小文字にして 1 字が数字に増えた字の途中で切れても、元の字を丸ごと置き換える。前と重なれば飛ばす。
-            if first.start < kept {
+            if original.start < kept {
                 continue;
             }
-            result.push_str(cell.get(kept..first.start)?);
+            result.push_str(cell.get(kept..original.start)?);
             result.push_str(replacement);
-            kept = end.end;
+            kept = original.end;
         }
         result.push_str(cell.get(kept..)?);
         Some(result)
+    }
+
+    /// 正規表現の条件で、セルの値 `cell` に長さのある当たりがあるか。ASCII だけのセルは写しを作らずに照らす（畳んでも
+    /// 小文字になるだけで、式は大文字小文字の設定で同じ答えになる）。
+    fn regex_matches(&self, cell: &str) -> bool {
+        let Some(regex) = &self.regex else {
+            return false;
+        };
+        if cell.is_ascii() {
+            return has_long_match(regex, cell);
+        }
+        has_long_match(regex, &fold_for_find(cell, self.options))
     }
 
     /// ASCII だけの原本のレコードのバイト列 `raw`（区切りと引用を含む）のどのセルにも当たらないと言えるか。復号せずに
@@ -109,6 +144,10 @@ impl FindQuery {
     /// 含む問いでは言えない）。
     #[must_use]
     pub fn rules_out_ascii(&self, raw: &[u8]) -> bool {
+        if self.options.regex() {
+            // 式の字の並びがレコードに無いとは言えない（読めない式はどこにも当たらない）。
+            return self.regex.is_none();
+        }
         if self.folded.is_empty() || !self.folded.is_ascii() {
             return true;
         }
@@ -153,6 +192,96 @@ impl FindQuery {
         }
         cell.windows(wanted.len()).any(same)
     }
+}
+
+/// 正規表現の条件なら、打った `text` を組み立てた式（読めなければ `None`）。式は大文字小文字を除いてセルと同じ畳みで畳む
+/// （`\D` を `\d` にしないため）。大文字小文字は式の設定で扱う。セル全体の一致は式を頭と終わりに固定する。
+fn compiled(text: &str, options: FindOptions) -> Option<Regex> {
+    if !options.regex() || text.is_empty() {
+        return None;
+    }
+    let folded = fold_for_find(text, options.matching_case());
+    let pattern = if options.whole_cell() {
+        format!("\\A(?:{folded})\\z")
+    } else {
+        folded
+    };
+    Regex::builder()
+        .syntax(syntax::Config::new().case_insensitive(!options.match_case()))
+        .build(&pattern)
+        .ok()
+}
+
+/// `haystack` に長さのある当たりがあるか（長さ 0 の当たりは当たりにしない・空の式がどのセルにも当たらないように）。
+fn has_long_match(regex: &Regex, haystack: &str) -> bool {
+    regex.find_iter(haystack).any(|found| !found.is_empty())
+}
+
+/// 写しのバイトの範囲 `span` を含む字の、元の範囲（写しの字ごとの元の範囲 `origins` から）。
+fn original_range(origins: &[(usize, Range<usize>)], span: Range<usize>) -> Option<Range<usize>> {
+    let at = |position: usize| {
+        let index = origins.partition_point(|(start, _)| *start <= position);
+        origins
+            .get(index.saturating_sub(1))
+            .map(|(_, range)| range.clone())
+    };
+    let first = at(span.start)?;
+    let last = at(span.end.checked_sub(1)?)?;
+    Some(first.start..last.end)
+}
+
+/// 正規表現の当たった所を `replacement` に置き換えた値。`$1`・`${name}` は当たった組の**元の字**で埋める（揃えない・
+/// KEEP-01）。長さ 0 の当たりと、前の当たりと元の字で重なる当たりは飛ばす。
+fn regex_replaced(
+    regex: &Regex,
+    cell: &str,
+    replacement: &str,
+    options: FindOptions,
+) -> Option<String> {
+    let (folded, origins) = fold_with_origins(cell, options);
+    let mut result = String::with_capacity(cell.len());
+    let mut kept = 0_usize;
+    for captures in regex.captures_iter(folded.as_str()) {
+        let Some(found) = captures.get_match() else {
+            continue;
+        };
+        if found.is_empty() {
+            continue;
+        }
+        let Some(original) = original_range(&origins, found.range()) else {
+            continue;
+        };
+        if original.start < kept {
+            continue;
+        }
+        result.push_str(cell.get(kept..original.start)?);
+        let groups: Vec<Option<Range<usize>>> = (0..captures.group_len())
+            .map(|index| {
+                captures
+                    .get_group(index)
+                    .filter(|span| !span.is_empty())
+                    .and_then(|span| original_range(&origins, span.range()))
+            })
+            .collect();
+        interpolate::string(
+            replacement,
+            |index, out| {
+                if let Some(text) = groups
+                    .get(index)
+                    .cloned()
+                    .flatten()
+                    .and_then(|range| cell.get(range))
+                {
+                    out.push_str(text);
+                }
+            },
+            |name| captures.group_info().to_index(PatternID::ZERO, name),
+            &mut result,
+        );
+        kept = original.end;
+    }
+    result.push_str(cell.get(kept..)?);
+    Some(result)
 }
 
 #[cfg(test)]
@@ -267,6 +396,125 @@ mod tests {
                 assert!(!still, "{text:?} {cell:?} → {replaced:?} {options:?}");
             }
         }
+    }
+
+    fn regex(text: &str) -> FindQuery {
+        FindQuery::new(text, FindOptions::standard().toggled_regex())
+    }
+
+    /// 正規表現も同じ畳みで照らす。`\D` などの書き方は小文字に畳まない（ADR 0031 の決定 3）。
+    #[test]
+    fn a_regex_matches_folded_cells_and_keeps_its_escapes() {
+        assert!(regex(r"tok(yo)?\d").matches("Tokyo2"));
+        assert!(!regex(r"tok(yo)?\d").matches("tokyo"));
+        assert!(regex(r"tok(yo)?\d").matches("ｔｏｋｙｏ１"));
+        assert!(regex(r"^\d+$").matches("１２３"));
+        assert!(!regex(r"^\D+$").matches("12"));
+        assert!(regex(r"^\D+$").matches("ABC"));
+        assert!(regex(r"ガ").matches("ｶﾞｽ"));
+    }
+
+    /// 正規表現の大文字小文字・セル全体の条件と、長さ 0 の当たり。
+    #[test]
+    fn regex_options_and_empty_matches() {
+        let case = FindQuery::new(
+            "Tok",
+            FindOptions::standard().toggled_regex().toggled_case(),
+        );
+        assert!(case.matches("Tokyo") && !case.matches("tokyo"));
+        let whole = FindQuery::new(
+            "tok.*",
+            FindOptions::standard().toggled_regex().toggled_whole_cell(),
+        );
+        assert!(whole.matches("TOKYO") && !whole.matches("xtokyo"));
+        // 長さ 0 の当たりは当たりにしない。
+        assert!(!regex("a*").matches("bbb") && regex("a*").matches("baa"));
+    }
+
+    /// 置換の `$1`・`${name}` は当たった組の元の字（全角のまま）で埋める。
+    #[test]
+    fn a_regex_replacement_fills_groups_with_the_original_characters() {
+        assert_eq!(
+            regex(r"(\d+)-(\d+)").replaced("１２-３４ 5-6", "$2-$1"),
+            Some(String::from("３４-１２ 6-5"))
+        );
+        assert_eq!(
+            regex(r"(?P<y>\d{4})/(?P<m>\d{2})").replaced("2026/11 です", "${m}月${y}年"),
+            Some(String::from("11月2026年 です"))
+        );
+        assert_eq!(regex("a*").replaced("baab", "-"), Some(String::from("b-b")));
+        assert_eq!(regex(r"\d").replaced("abc", "-"), None);
+    }
+
+    /// 読めない式はどのセルにも当たらず、そう分かる。空の式は読めないのではなく、何も探さない。
+    #[test]
+    fn a_broken_regex_matches_nothing_and_says_so() {
+        let broken = regex("(tok");
+        assert!(broken.is_broken());
+        assert!(!broken.matches("(tok"));
+        assert!(broken.rules_out_ascii(b"(tok"));
+        assert_eq!(broken.replaced("(tok", "x"), None);
+        assert!(!regex("").is_broken() && regex("").is_empty());
+        assert!(!query("(tok").is_broken() && query("(tok").matches("x(tokyo"));
+        // 正規表現ではレコードのバイト列で除けない。
+        assert!(!regex("t.k").rules_out_ascii(b"1,tak,x"));
+    }
+
+    /// 正規表現でも、置き換えられるのは当たるセルだけ。ASCII の速い道と畳んだ写しの道は同じ答え。
+    #[test]
+    fn a_regex_replacement_agrees_with_matching() {
+        let cells = [
+            "Tokyo2",
+            "ｔｏｋｙｏ１",
+            "abc",
+            "",
+            "１２-３４",
+            "ｶﾞｽ",
+            "x-tok-y",
+            "TOK",
+        ];
+        let patterns = [
+            r"tok\w*",
+            r"\d+",
+            r"^.$",
+            "ガ",
+            r"(\d)-(\d)",
+            "o|k",
+            "[a-c]+",
+        ];
+        let standard = FindOptions::standard().toggled_regex();
+        for options in [
+            standard,
+            standard.toggled_case(),
+            standard.toggled_whole_cell(),
+            standard.toggled_width(),
+        ] {
+            for (text, cell) in patterns
+                .iter()
+                .flat_map(|&text| cells.iter().map(move |&cell| (text, cell)))
+            {
+                let find = FindQuery::new(text, options);
+                let replaced = find.replaced(cell, "$1#");
+                assert_eq!(
+                    replaced.is_some(),
+                    find.matches(cell),
+                    "{text:?} {cell:?} {options:?}"
+                );
+                let slow =
+                    has_long_match(find.regex.as_ref().unwrap(), &fold_for_find(cell, options));
+                assert_eq!(find.matches(cell), slow, "{text:?} {cell:?} {options:?}");
+            }
+        }
+    }
+
+    /// 逆戻りで止まる式（`(a*)*b`・`(x+x+)+y`）も、長い入力で終わる（入力の長さに比例する・SEC-04）。
+    #[test]
+    fn pathological_patterns_finish_on_long_cells() {
+        let long = "a".repeat(200_000);
+        assert!(!regex("(a*)*b").matches(&long));
+        let xs = "x".repeat(200_000);
+        assert!(!regex("(x+x+)+y").matches(&xs));
+        assert_eq!(regex("(a*)*b").replaced(&long, "-"), None);
     }
 
     /// 遅い道：両方を畳んで比べる。

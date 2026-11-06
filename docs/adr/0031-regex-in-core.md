@@ -53,10 +53,12 @@ ADR 0030 の決定 5 は「`regex` クレートを scan に入れる」と決め
 
 ## 強制
 
-- **planned（導入の Issue で active にする）**:
-  - 正規表現でも `matches` と `replaced` が同じ答え（core のテスト・今の `replacing_agrees_with_matching` を正規表現に広げる）
-  - 病的な式（`(a*)*b` など）と長い入力で、時間が入力の長さに比例する（gate-proofs で測る・SEC-04）
-  - core が `std` に届かない（CNF-007 のまま）
+- **active**（GitHub Issue #171 で入れた）:
+  - core の外部クレートは `regex-automata` だけ（CNF-013 の許可表・許可を書く前に `regex-automata への依存は crates/core/ に許されていない` で落ちることを確かめた・gate-proofs 第 80 節）。core が `std` に届かない（CNF-007 のまま）
+  - 正規表現でも `matches` と `replaced` が同じ答え、ASCII の速い道と畳んだ写しの道が同じ答え（core のテスト `a_regex_replacement_agrees_with_matching`）。`\D` などを小文字に畳まない・全角を半角に畳む（`a_regex_matches_folded_cells_and_keeps_its_escapes`）。`$1`・`${name}` は元の字で埋める（`a_regex_replacement_fills_groups_with_the_original_characters`）。読めない式はどこにも当たらない（`a_broken_regex_matches_nothing_and_says_so`）
+  - 病的な式（`(a*)*b`・`(x+x+)+y`）が 20 万字のセルで終わる（`pathological_patterns_finish_on_long_cells`・SEC-04。時間の数は画面の Issue で 1 GB と一緒に測る）
+- **planned（画面の Issue で active にする）**:
+  - Alt+R の切り替えと、読めない式の知らせ。1 GB を正規表現で探す時間（benchmarks）
 
 ## 結果
 
