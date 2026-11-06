@@ -110,6 +110,18 @@ impl Viewer {
         }
     }
 
+    /// 新しい表を新しい窓で開く（自分の exe を `--new` で起こす・ADR 0028 の決定 1）。今の窓は残る。
+    fn open_new_window(&mut self) {
+        #[cfg(windows)]
+        let opened = nene_ledger_adapters_windows::new_window::open_new_window();
+        #[cfg(not(windows))]
+        let opened = nene_ledger_adapters_x11::new_window::open_new_window();
+        if let Err(failure) = opened {
+            warn(&format!("新しい表の窓を開けなかった: {failure:?}"));
+            self.document.notify(Notice::NewWindowFailed);
+        }
+    }
+
     /// 名前を付けて保存の保存先を選ばせる（ADR 0028 の決定 4）。Windows は OS の画面（既にあるファイルなら OS の画面が
     /// 上書きを尋ねる）、X11 はパレットの欄（初めは今のファイルのフォルダ）。
     fn choose_save_target(&mut self) {
@@ -624,6 +636,10 @@ impl Session for Viewer {
             // 開いたときの配色でパレットを描く（配色を試しても、パレットの色は動かない）。
             let colors = self.preferences.theme().palette();
             self.palette = Some(OpenPalette::new(CommandPalette::open(), colors));
+            return None;
+        }
+        if intent == Intent::NewTable {
+            self.open_new_window();
             return None;
         }
         if let Intent::Zoom(step) = intent {

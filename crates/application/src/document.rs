@@ -375,6 +375,7 @@ impl Document {
             | Intent::Advance(_)
             | Intent::Save
             | Intent::SaveAs
+            | Intent::NewTable
             | Intent::Undo
             | Intent::Redo
             | Intent::InsertRows(_)
@@ -676,6 +677,7 @@ impl Document {
                     | Intent::BreakLine
                     | Intent::Save
                     | Intent::SaveAs
+                    | Intent::NewTable
                     | Intent::Undo
                     | Intent::Redo
                     | Intent::InsertRows(_)
@@ -734,6 +736,7 @@ impl Document {
             | Intent::Advance(_)
             | Intent::Save
             | Intent::SaveAs
+            | Intent::NewTable
             | Intent::Undo
             | Intent::Redo
             | Intent::InsertRows(_)
@@ -822,6 +825,7 @@ impl Document {
             | Intent::Advance(_)
             | Intent::Save
             | Intent::SaveAs
+            | Intent::NewTable
             | Intent::Undo
             | Intent::Redo
             | Intent::InsertRows(_)
@@ -857,6 +861,7 @@ impl Document {
             // 別のセル・別の行への移動と、表の並びを変える操作は、確定してから（保存と元に戻すは `apply` が先に受ける）。
             Intent::Save
             | Intent::SaveAs
+            | Intent::NewTable
             | Intent::Undo
             | Intent::Redo
             | Intent::InsertRows(_)
@@ -960,6 +965,7 @@ impl Document {
             | Intent::Cancel
             | Intent::Save
             | Intent::SaveAs
+            | Intent::NewTable
             | Intent::Undo
             | Intent::Redo
             | Intent::InsertRows(_)
@@ -1490,6 +1496,7 @@ impl Document {
             | Intent::Advance(_)
             | Intent::Save
             | Intent::SaveAs
+            | Intent::NewTable
             | Intent::Undo
             | Intent::Redo
             | Intent::InsertRows(_)
@@ -1698,6 +1705,7 @@ impl Document {
             | Intent::Advance(_)
             | Intent::Save
             | Intent::SaveAs
+            | Intent::NewTable
             | Intent::Undo
             | Intent::Redo
             | Intent::InsertRows(_)

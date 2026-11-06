@@ -96,17 +96,7 @@ pub fn cursor_status(record: u64, column: usize) -> String {
 #[must_use]
 pub fn notice_status(notice: Notice) -> String {
     match notice {
-        Notice::Copied {
-            rows,
-            columns,
-            cut: 0,
-        } => format!("{} 行 × {} 列をコピーしました", group_digits(rows), columns),
-        Notice::Copied { rows, columns, cut } => format!(
-            "{} 行 × {} 列をコピーしました（うち {} 行は 1 MiB で切り詰めた値）",
-            group_digits(rows),
-            columns,
-            group_digits(cut)
-        ),
+        Notice::Copied { rows, columns, cut } => copied_status(rows, columns, cut),
         Notice::TooLargeToCopy => String::from("選択が大きすぎるのでコピーしませんでした"),
         Notice::LooksBinary => String::from("文字のファイルではないようです（NUL のバイトがある）"),
         Notice::RangesNotAligned => {
@@ -137,6 +127,7 @@ pub fn notice_status(notice: Notice) -> String {
         Notice::NothingToSave => String::from("変えた所が無いので保存しませんでした"),
         Notice::StillSaving => String::from("保存しています。終わるまで直せません"),
         Notice::SaveFailed(problem) => save_problem_status(problem),
+        Notice::NewWindowFailed => String::from("新しい表の窓を開けませんでした"),
         Notice::ReopenFailed => {
             String::from("保存しました。開き直せなかったので、表示は保存の前のままです")
         }
@@ -154,6 +145,20 @@ pub fn notice_status(notice: Notice) -> String {
             top / 10,
             second / 10
         ),
+    }
+}
+
+/// コピーした知らせの文言（`cut` は 1 MiB で切り詰めた行の数）。
+fn copied_status(rows: u64, columns: usize, cut: u64) -> String {
+    if cut == 0 {
+        format!("{} 行 × {} 列をコピーしました", group_digits(rows), columns)
+    } else {
+        format!(
+            "{} 行 × {} 列をコピーしました（うち {} 行は 1 MiB で切り詰めた値）",
+            group_digits(rows),
+            columns,
+            group_digits(cut)
+        )
     }
 }
 

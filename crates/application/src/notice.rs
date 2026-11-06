@@ -61,6 +61,8 @@ pub enum Notice {
     SaveFailed(SaveProblem),
     /// 保存したが、置き換えた後のファイルを開き直せなかった（表示は保存の前のまま）。
     ReopenFailed,
+    /// 新しい表の窓を開けなかった（自分の exe を起こせない・ADR 0028 の決定 1）。
+    NewWindowFailed,
     /// 書き換えがある間は、読み方を変えられない（先に保存する）。
     ReadingNeedsSave,
     /// 1 MiB で切り詰めたレコードのセルは直せない（保存の計画と同じ・ADR 0026 の決定 1）。

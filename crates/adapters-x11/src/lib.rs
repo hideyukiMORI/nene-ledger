@@ -5,6 +5,7 @@
 pub mod adapter_failure;
 pub mod appearance;
 mod config_directory;
+pub mod new_window;
 pub mod saved_settings;
 pub mod thread_ticker;
 mod tick_shared;

@@ -89,6 +89,8 @@ pub enum Intent {
     Save,
     /// 別の名前・場所に保存する（Ctrl+Shift+S・ADR 0028 の決定 4）。
     SaveAs,
+    /// 新しい表を新しい窓で開く（Ctrl+N・ADR 0028 の決定 1）。合成ルートが受ける（表の状態は変えない）。
+    NewTable,
     /// 1 手元に戻す（Ctrl+Z・UNDO-01）。編集中なら編集をやめる。
     Undo,
     /// 戻した 1 手をやり直す（Ctrl+Y・Ctrl+Shift+Z）。

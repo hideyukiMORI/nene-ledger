@@ -170,6 +170,7 @@ impl CommandPalette {
             | Intent::Advance(_)
             | Intent::Save
             | Intent::SaveAs
+            | Intent::NewTable
             | Intent::Undo
             | Intent::Redo
             | Intent::InsertRows(_)
