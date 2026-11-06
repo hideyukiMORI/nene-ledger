@@ -52,10 +52,11 @@ ROADMAP は最初の版 0.1.0 を M4 の終わり（フェーズ 1 の 124 項�
 
 ## 強制
 
-- **planned（実装の Issue で active にする）**:
-  - 著作権表示の一覧が `Cargo.lock` の Windows の exe に入るクレートと一致する（xtask の検査）
-  - `--version` と「このアプリについて」の版が `Cargo.toml` の `version` と同じ（テスト）
-  - タグから zip を作る手順が、手元の Makefile の入口と同じ（同じ script を呼ぶ）
+- **active**:
+  - `--version` と「このアプリについて」の版は `Cargo.toml` の `version`（GitHub Issue #179・application のテスト `the_version_line_carries_the_package_version`・`the_about_step_shows_the_version_and_the_license`・gate-proofs 第 83 節）
+  - 著作権表示の一覧が `Cargo.lock` の Windows の exe に入るクレートと一致する（GitHub Issue #181・`make notices-check`・`make dist` と `make check` から呼ぶ・gate-proofs 第 84 節。入れた当日に、#178 に紛れ込んだ依存を捕まえた）
+  - タグから zip を作る手順は手元と同じ `make dist`。タグと `Cargo.toml` の版が違えば止まる（GitHub Issue #183・`.github/workflows/release.yml`・初回の結果は gate-proofs 第 85 節）
+  - タグは施主の実機の確認の後（0.1.0-preview.1：gate-proofs 第 86 節）
 - **不能**: ライセンスの条文の解釈。実機で動くこと（施主の確認を gate-proofs に記録）
 
 ## 結果
