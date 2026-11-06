@@ -155,6 +155,8 @@ pub struct Document {
     baseline: (Vec<OrderRun>, Vec<OrderRun>),
     /// 原本のファイルが無い新しい表か（Ctrl+S が名前を付けて保存になる・ADR 0028 の決定 4）。
     untitled: bool,
+    /// 裏の保存の進み具合（書いたバイト数・書く見込みのバイト数・SAVE-02）。
+    save_progress: Option<(u64, u64)>,
 }
 
 /// 状態の行の右端に出すパレットの案内。
@@ -254,6 +256,7 @@ impl Document {
                 ColumnOrder::whole().runs().to_vec(),
             ),
             untitled: false,
+            save_progress: None,
         }
     }
 
@@ -419,6 +422,14 @@ impl Document {
     /// 裏の保存を始めた（`DocumentEffect::Save` を受けて合成ルートが呼ぶ）。
     pub fn begin_saving(&mut self) {
         self.saving = true;
+        self.save_progress = None;
+    }
+
+    /// 裏の保存が `written` バイトを書いた（見込みは `total` バイト・SAVE-02）。状態の行に割合を出す。
+    pub fn save_progress(&mut self, written: u64, total: u64) {
+        if self.saving {
+            self.save_progress = Some((written, total));
+        }
     }
 
     /// 保存して、置き換えた後のファイルを同じ読み方で開き直した。書き換えを空にし、索引は作り直しを待つ。
@@ -681,6 +692,10 @@ impl Document {
             return effect;
         }
         self.notice = None;
+        // 保存の途中の Esc は、保存をやめる（SAVE-02・ADR 0025 の施主の判断 4）。
+        if self.saving && intent == Intent::Cancel && self.editor.is_none() {
+            return DocumentEffect::StopSaving;
+        }
         if self.saving
             && matches!(
                 intent,
@@ -2331,7 +2346,8 @@ impl Document {
             | DocumentEffect::Copy { .. }
             | DocumentEffect::StopTotals
             | DocumentEffect::Save
-            | DocumentEffect::SaveAs => current,
+            | DocumentEffect::SaveAs
+            | DocumentEffect::StopSaving => current,
         };
         self.extend_to(at, first, window);
         effect
@@ -3319,7 +3335,7 @@ impl Document {
             return String::from("保存してから閉じます…");
         }
         if self.saving {
-            return String::from("保存しています…");
+            return saving_status(self.save_progress);
         }
         if let Some(editor) = &self.editor {
             return String::from(match editor.mode() {
@@ -3418,6 +3434,17 @@ fn passed(scrollbar: ScrollBar, side: TrackSide, along: i64) -> bool {
     match side {
         TrackSide::Before => along >= i64::from(offset),
         TrackSide::After => along < i64::from(offset) + i64::from(length),
+    }
+}
+
+/// 保存の途中の状態の行。進み具合が分かれば割合（書き終える前は 99% で止める）と、やめ方を添える。
+fn saving_status(progress: Option<(u64, u64)>) -> String {
+    match progress {
+        Some((written, total)) if total > 0 => {
+            let percent = written.saturating_mul(100) / total;
+            format!("保存しています… {}%（Esc でやめる）", percent.min(99))
+        }
+        Some(_) | None => String::from("保存しています…（Esc でやめる）"),
     }
 }
 
@@ -6088,7 +6115,10 @@ mod tests {
         document.apply(Intent::Save, normal());
         document.begin_saving();
         assert!(document.is_saving());
-        text_at(&document.frame(normal(), palette()), "保存しています…");
+        text_at(
+            &document.frame(normal(), palette()),
+            "保存しています…（Esc でやめる）",
+        );
         typed(&mut document, "y");
         assert_eq!(document.editor(), None);
         text_at(
@@ -6535,5 +6565,39 @@ mod tests {
         ));
         assert_eq!(document.format_summary().line_endings(), mixed);
         assert!(document.format_summary().line_endings().mixed());
+    }
+
+    /// 保存の途中は割合と、Esc でやめられることを出す。Esc は保存をやめる効き目を返し、やめたら書き換えは残る（SAVE-02）。
+    #[test]
+    fn saving_shows_progress_and_esc_stops_it() {
+        let mut document = editable();
+        typed(&mut document, "x");
+        assert_eq!(document.apply(Intent::Save, normal()), DocumentEffect::Save);
+        document.begin_saving();
+        text_at(
+            &document.frame(normal(), palette()),
+            "保存しています…（Esc でやめる）",
+        );
+        document.save_progress(450, 1_000);
+        text_at(
+            &document.frame(normal(), palette()),
+            "保存しています… 45%（Esc でやめる）",
+        );
+        document.save_progress(2_000, 1_000);
+        text_at(
+            &document.frame(normal(), palette()),
+            "保存しています… 99%（Esc でやめる）",
+        );
+        assert_eq!(
+            document.apply(Intent::Cancel, normal()),
+            DocumentEffect::StopSaving
+        );
+        document.save_failed(SaveProblem::Cancelled);
+        text_at(
+            &document.frame(normal(), palette()),
+            "保存をやめました。ファイルは元のままです（直した値は残っています）",
+        );
+        assert!(document.has_unsaved());
+        assert!(!document.is_saving());
     }
 }

@@ -17,6 +17,8 @@ pub enum SaveProblem {
     Unplannable,
     /// 原本のファイルが無い新しい表（名前を付けて保存が要る・ADR 0028）。
     Untitled,
+    /// 利用者が保存をやめた（原本はそのまま・SAVE-02）。
+    Cancelled,
     /// それ以外（書けない・読めない・スレッドを作れない）。
     Other,
 }

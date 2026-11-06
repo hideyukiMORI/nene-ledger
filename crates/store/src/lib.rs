@@ -10,8 +10,10 @@ pub mod locating;
 #[cfg(windows)]
 mod lock_probe;
 pub mod rename_replacing;
+mod save_control;
 pub mod save_failure;
 pub mod save_job;
 pub mod saving;
 pub mod stamping;
 mod temporary_file;
+mod watched_sink;

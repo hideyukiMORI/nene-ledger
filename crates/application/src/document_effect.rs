@@ -17,6 +17,8 @@ pub enum DocumentEffect {
     /// 受け取り、保存を始めたら `Document::begin_saving`、終わったら `Document::saved_as` か `Document::save_failed`、
     /// やめたら `Document::save_as_cancelled` を呼ぶ。
     SaveAs,
+    /// 裏の保存をやめる（保存の途中の Esc・SAVE-02）。やめたら `Document::save_failed` が届く。
+    StopSaving,
     /// 裏の集計を止める（Esc）。
     StopTotals,
     /// 行の並びの位置 `first_line` から `count` 行を読んで `Document::copy_text` に渡す（コピー）。

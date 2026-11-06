@@ -15,8 +15,10 @@ use nene_ledger_core::plan_sink::PlanSink;
 use nene_ledger_core::save_plan::SavePlan;
 use nene_ledger_core::text_encoding::TextEncoding;
 
+use crate::save_control::SaveControl;
 use crate::save_failure::SaveFailure;
 use crate::saving::{save, save_streamed};
+use crate::watched_sink::WatchedSink;
 
 /// 裏のスレッドの名前。
 const THREAD_NAME: &str = "nene-ledger-save";
@@ -29,6 +31,7 @@ type Outcome = Result<(), SaveFailure>;
 #[derive(Debug)]
 pub struct SaveJob {
     worker: Option<JoinHandle<Outcome>>,
+    control: Arc<SaveControl>,
 }
 
 impl SaveJob {
@@ -64,6 +67,7 @@ impl SaveJob {
             .map_err(|error| SaveFailure::Spawn(error.kind()))?;
         Ok(Self {
             worker: Some(worker),
+            control: Arc::new(SaveControl::new()),
         })
     }
 
@@ -84,14 +88,17 @@ impl SaveJob {
         R: Replacing<Location = Path> + Send + 'static,
         P: FnOnce(&mut dyn PlanSink) -> Result<(), SaveFailure> + Send + 'static,
     {
+        let control = Arc::new(SaveControl::new());
+        let watched = Arc::clone(&control);
         let worker = Builder::new()
             .name(String::from(THREAD_NAME))
             .spawn(move || {
+                let waker = Arc::clone(&wakeup);
                 let outcome = save_streamed(
                     &target,
                     (encoding, expected),
                     (&mut source, &replacing),
-                    produce,
+                    |sink: &mut dyn PlanSink| watched_produce(sink, (&watched, waker), produce),
                 );
                 wakeup.wake();
                 outcome
@@ -99,7 +106,19 @@ impl SaveJob {
             .map_err(|error| SaveFailure::Spawn(error.kind()))?;
         Ok(Self {
             worker: Some(worker),
+            control,
         })
+    }
+
+    /// 保存をやめるよう求める（書いている途中なら一時ファイルを消して `SaveFailure::Cancelled`。置き換えの後は効かない）。
+    pub fn cancel(&self) {
+        self.control.cancel();
+    }
+
+    /// ここまでに書いたバイト数（目安・進み具合を出す）。
+    #[must_use]
+    pub fn written(&self) -> u64 {
+        self.control.written()
     }
 
     /// 終わっていれば結果（1 度だけ）。まだなら `None`。
@@ -128,6 +147,24 @@ impl Drop for SaveJob {
             let _finished = join(worker);
         }
     }
+}
+
+/// 書き先 `sink` を、進み具合を数えて中止を見る書き先で包み、`produce` に計画を流させる。中止を求められていたら、
+/// 計画の結果に依らず中止とする（一時ファイルは消える）。
+fn watched_produce<P>(
+    sink: &mut dyn PlanSink,
+    (control, wakeup): (&Arc<SaveControl>, Arc<dyn Wakeup>),
+    produce: P,
+) -> Result<(), SaveFailure>
+where
+    P: FnOnce(&mut dyn PlanSink) -> Result<(), SaveFailure>,
+{
+    let mut watched = WatchedSink::new(sink, Arc::clone(control), wakeup);
+    let planned = produce(&mut watched);
+    if control.is_cancelled() {
+        return Err(SaveFailure::Cancelled);
+    }
+    planned
 }
 
 fn join(worker: JoinHandle<Outcome>) -> Outcome {
