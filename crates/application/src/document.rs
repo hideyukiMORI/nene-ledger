@@ -258,6 +258,13 @@ impl Document {
         TableChanges::new((&self.rows, &self.columns), &self.edits, shape)
     }
 
+    /// 保存していない変更があるか（セルの書き換え・行の並び・列の並び）。未保存の印・保存・閉じるときの確認・
+    /// 読み方を変えてよいかの判断は、すべてこれで決める（GitHub Issue #107）。編集中のセルは確定するまで数えない。
+    #[must_use]
+    pub fn has_unsaved(&self) -> bool {
+        !self.edits.is_empty() || !self.rows.is_whole() || !self.columns.is_whole()
+    }
+
     /// 編集中のセル。
     #[must_use]
     pub const fn editor(&self) -> Option<&CellEditor> {
@@ -283,7 +290,7 @@ impl Document {
             return true;
         }
         self.commit_edit();
-        if self.edits.is_empty() && !self.saving {
+        if !self.has_unsaved() && !self.saving {
             self.closing = CloseState::Finished;
             return true;
         }
@@ -424,7 +431,7 @@ impl Document {
     /// Ctrl+S。編集中なら確定してから、書き換えがあれば保存させる。
     fn save_request(&mut self) -> DocumentEffect {
         self.commit_edit();
-        if self.edits.is_empty() {
+        if !self.has_unsaved() {
             self.notice = Some(Notice::NothingToSave);
             return DocumentEffect::Stay;
         }
@@ -2901,10 +2908,10 @@ impl Document {
             .map(|command| command.offset(dx, dy))
             .collect();
         // 未保存の書き換えがあれば、題名の頭に印を付ける（WIN-01・ADR 0026 の決定 7）。
-        let title = if self.edits.is_empty() {
-            self.title.clone()
-        } else {
+        let title = if self.has_unsaved() {
             format!("● {}", self.title)
+        } else {
+            self.title.clone()
         };
         commands.extend(ChromePainter::new(view, palette).title_bar(&title));
         commands.extend(ChromePainter::new(view, palette).border());
@@ -5882,7 +5889,7 @@ mod tests {
         let mut document = editable();
         assert_eq!(document.apply(Intent::Save, normal()), DocumentEffect::Stay);
         let frame = document.frame(normal(), palette());
-        text_at(&frame, "変えたセルが無いので保存しませんでした");
+        text_at(&frame, "変えた所が無いので保存しませんでした");
         typed(&mut document, "x");
         assert_eq!(document.apply(Intent::Save, normal()), DocumentEffect::Save);
         assert_eq!(document.editor(), None);
@@ -6110,5 +6117,39 @@ mod tests {
         );
         document.apply(Intent::Redo, normal());
         assert!(document.edits().is_empty());
+    }
+
+    /// 行か列を足し消ししただけ（セルは書き換えていない）でも未保存。保存・閉じるときの確認・題名の印が効き、
+    /// 戻せば未保存でなくなる（GitHub Issue #107。直す前は Ctrl+S が「保存しませんでした」で、尋ねずに閉じた）。
+    #[test]
+    fn adding_or_removing_rows_and_columns_alone_is_unsaved() {
+        for intent in [
+            Intent::InsertRows(RowPlace::Above),
+            Intent::RemoveRows,
+            Intent::InsertColumns(ColumnPlace::Left),
+            Intent::RemoveColumns,
+        ] {
+            let mut document = editable();
+            assert!(!document.has_unsaved());
+            document.apply(intent, normal());
+            assert!(document.edits().is_empty(), "{intent:?}");
+            assert!(document.has_unsaved(), "{intent:?}");
+            text_at(
+                &document.frame(normal(), palette()),
+                "● e.csv — NeNe Ledger",
+            );
+            let mut closing = document.clone();
+            assert!(!closing.ask_close(), "{intent:?}");
+            assert_eq!(closing.close_state(), CloseState::Asking);
+            let mut saving = document.clone();
+            assert_eq!(
+                saving.apply(Intent::Save, normal()),
+                DocumentEffect::Save,
+                "{intent:?}"
+            );
+            document.apply(Intent::Undo, normal());
+            assert!(!document.has_unsaved(), "{intent:?}");
+            assert!(document.ask_close(), "{intent:?}");
+        }
     }
 }

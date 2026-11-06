@@ -134,7 +134,7 @@ pub fn notice_status(notice: Notice) -> String {
         Notice::Redone(cells) => format!("やり直しました（{cells} セル）"),
         Notice::NothingToUndo => String::from("元に戻すものがありません"),
         Notice::NothingToRedo => String::from("やり直すものがありません"),
-        Notice::NothingToSave => String::from("変えたセルが無いので保存しませんでした"),
+        Notice::NothingToSave => String::from("変えた所が無いので保存しませんでした"),
         Notice::StillSaving => String::from("保存しています。終わるまで直せません"),
         Notice::SaveFailed(problem) => save_problem_status(problem),
         Notice::ReopenFailed => {

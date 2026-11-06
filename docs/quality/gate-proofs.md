@@ -699,6 +699,19 @@ PR の枝の debug の exe を Xvfb に出し、`id,name` ＋ 2 行の表で `xd
 
 🔴 **正直に:** JIS の配列の Ctrl+Shift+; と、Windows の実機のキー（`VK_OEM_PLUS`）は試していない（単体テストだけ）。
 
+## 66. 行と列を足し消ししただけの表を保存する（GitHub Issue #107）— 仮想の X サーバでの確認（QLT-013）
+
+直す前は、セルを書き換えずに行か列を足し消しすると、Ctrl+S が「変えたセルが無いので保存しませんでした」になり、閉じるときも尋ねなかった。
+PR の枝の debug の exe を Xvfb に出し、`id,name` ＋ 2 行（CRLF）の表で `xdotool` のキーを送った（2026-11-06）。
+
+| # | 操作 | 見え・結果 |
+| --- | --- | --- |
+| 1 | Ctrl++（カーソルは `id`） | 2 行目に空の行が入る・題名の頭に `●`・`1 行を足しました` |
+| 2 | Ctrl+S | `保存しました`・題名の `●` が消える |
+| 3 | 保存したファイルを `od -c` | `id,name\r\n,\r\n1,Sato\r\n2,Kato\r\n`（足した行は列の数に合わせた空のセル・改行は原本の CRLF） |
+
+閉じるときの確認と読み方を変えられないことは、application のテスト（`adding_or_removing_rows_and_columns_alone_is_unsaved`）と app の `Viewer::reading_blocked` が同じ `Document::has_unsaved` を使うことで見る。
+
 ## 7. active の規則と、その証明
 
 CNF-009 は active の規則ごとに `| ID |` で始まる行がここにあることを要求する。
