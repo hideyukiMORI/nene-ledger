@@ -153,16 +153,17 @@ mod folding {
         assert_eq!(reports.last().copied(), u64::try_from(expected.len()).ok());
     }
 
-    /// 30 万行を索引付きで書いた原本（分けて畳み込む見本）。
-    fn indexed_split() -> IndexedSource {
+    /// 30 万行を索引付きで書いた原本（分けて畳み込む見本）。見本のファイルの名前 `name` はテストごとに替える
+    /// （同じファイルを並列のテストが書き直し合わないように・Issue #159）。
+    fn indexed_split(name: &str) -> IndexedSource {
         let rows = 300_000;
-        let plain = from("split", rows, SparseIndex::empty());
+        let plain = from(name, rows, SparseIndex::empty());
         let built = build_index(plain.source(), utf8(), BlockSize::MEBIBYTE, |_| {
             ControlFlow::Continue(())
         });
         match built.unwrap() {
             nene_ledger_scan::index_outcome::IndexOutcome::Finished(index) => {
-                from("split", rows, index)
+                from(name, rows, index)
             }
             nene_ledger_scan::index_outcome::IndexOutcome::Cancelled => panic!("止まった"),
         }
@@ -193,7 +194,7 @@ mod folding {
     /// （QLT-008・ADR 0030 の決定 4）。
     #[test]
     fn a_split_fold_merges_to_the_same_result_for_any_number_of_parts() {
-        let source = indexed_split();
+        let source = indexed_split("split-merge");
         let (one, whole) = split_run(&source, 10, (Collect::default(), 1));
         assert_eq!(one, 1);
         for parts in [2, 3, 8] {
@@ -206,7 +207,7 @@ mod folding {
     /// 前の部分で見つければ、後ろの部分の結果は使わない。答えは分けた数に依らない。
     #[test]
     fn a_split_search_finds_the_earliest_match_for_any_number_of_parts() {
-        let source = indexed_split();
+        let source = indexed_split("split-search");
         let first = FirstMultiple {
             from: 200_001,
             step: 9_973,
