@@ -149,6 +149,9 @@ pub struct Document {
     closing: CloseState,
     /// 元に戻す・やり直すの履歴（UNDO-01）。保存の後も残す。
     history: EditHistory,
+    /// 開いた直後（保存した直後）の行と列の並び。ふだんは原本のまま、新しい表は足した 1 行と 3 列
+    /// （未保存かの基準・ADR 0028 の決定 2）。
+    baseline: (Vec<OrderRun>, Vec<OrderRun>),
 }
 
 /// 状態の行の右端に出すパレットの案内。
@@ -183,6 +186,12 @@ pub const MAX_COPY_BYTES: usize = 4 * 1024 * 1024;
 
 /// 足した列の幅（半角の字数・ADR 0027）。
 const NEW_COLUMN_WIDTH: u32 = 8;
+
+/// 新しい表の行の数（ADR 0028 の決定 2）。
+const BLANK_ROWS: u64 = 1;
+
+/// 新しい表の列の数（ADR 0028 の決定 2）。
+const BLANK_COLUMNS: usize = 3;
 
 impl Document {
     /// 題名（タイトルバーに書く）・読み方の要約（状態の行に書く）・見出しのレコードの番号（無ければ `None`）・
@@ -237,7 +246,26 @@ impl Document {
             saving: false,
             closing: CloseState::Open,
             history: EditHistory::empty(),
+            baseline: (
+                RowOrder::whole().runs().to_vec(),
+                ColumnOrder::whole().runs().to_vec(),
+            ),
         }
+    }
+
+    /// 原本の無い新しい表（ADR 0028 の決定 2）。原本は空で、行の並びに足した 1 行、列の並びに足した 3 列。見出しの行は無い。
+    /// この形を開いた直後とする（何も打たなければ未保存でない・Undo で消えない）。
+    #[must_use]
+    pub fn blank(title: String, format: FormatSummary) -> Self {
+        let mut document = Self::open(title, format, None, &[]);
+        let _row = document.rows.insert(0, BLANK_ROWS);
+        let _columns = document.columns.insert(0, BLANK_COLUMNS);
+        document.columns_inserted(0, &[NEW_COLUMN_WIDTH; BLANK_COLUMNS]);
+        document.baseline = (
+            document.rows.runs().to_vec(),
+            document.columns.runs().to_vec(),
+        );
+        document
     }
 
     /// 書き換えたセル（保存で store に渡す・ADR 0025）。
@@ -262,7 +290,9 @@ impl Document {
     /// 読み方を変えてよいかの判断は、すべてこれで決める（GitHub Issue #107）。編集中のセルは確定するまで数えない。
     #[must_use]
     pub fn has_unsaved(&self) -> bool {
-        !self.edits.is_empty() || !self.rows.is_whole() || !self.columns.is_whole()
+        !self.edits.is_empty()
+            || self.rows.runs() != self.baseline.0.as_slice()
+            || self.columns.runs() != self.baseline.1.as_slice()
     }
 
     /// 編集中のセル。
@@ -407,6 +437,7 @@ impl Document {
         }
         self.rows = RowOrder::whole();
         self.columns = ColumnOrder::whole();
+        self.baseline = (self.rows.runs().to_vec(), self.columns.runs().to_vec());
         self.editor = None;
         self.index = JobState::Waiting;
         self.notice = Some(Notice::Saved);
@@ -6151,5 +6182,42 @@ mod tests {
             assert!(!document.has_unsaved(), "{intent:?}");
             assert!(document.ask_close(), "{intent:?}");
         }
+    }
+
+    /// 新しい表は 1 行 × 3 列・見出し無し。何も打たなければ未保存でなく、Undo で消えない。打てば未保存（ADR 0028 の決定 2）。
+    #[test]
+    fn a_blank_table_opens_with_one_row_of_three_empty_cells() {
+        let mut document = closed(Document::blank(
+            String::from("無題 — NeNe Ledger"),
+            summary(),
+        ));
+        reread(&mut document, &[]);
+        assert_eq!(document.header(), None);
+        assert_eq!(document.view().rows().len(), 1);
+        assert_eq!(document.view().rows()[0].cells(), ["", "", ""]);
+        assert_eq!(document.widths().columns().len(), 3);
+        assert!(!document.has_unsaved());
+        text_at(&document.frame(normal(), palette()), "無題 — NeNe Ledger");
+        document.apply(Intent::Undo, normal());
+        reread(&mut document, &[]);
+        assert_eq!(document.view().rows().len(), 1);
+        assert!(document.ask_close());
+    }
+
+    /// 新しい表に打てば未保存。列を足しても未保存で、戻せば開いた直後（ADR 0028 の決定 2）。
+    #[test]
+    fn a_blank_table_becomes_unsaved_only_when_changed() {
+        let mut typing = closed(Document::blank(String::from("無題"), summary()));
+        reread(&mut typing, &[]);
+        typed(&mut typing, "x");
+        typing.apply(Intent::Confirm, normal());
+        assert!(typing.has_unsaved());
+        assert!(!typing.ask_close());
+        // 列を足せば未保存。戻せば開いた直後。
+        let mut wider = closed(Document::blank(String::from("無題"), summary()));
+        wider.apply(Intent::InsertColumns(ColumnPlace::Right), normal());
+        assert!(wider.has_unsaved());
+        wider.apply(Intent::Undo, normal());
+        assert!(!wider.has_unsaved());
     }
 }

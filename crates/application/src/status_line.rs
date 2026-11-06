@@ -141,7 +141,7 @@ pub fn notice_status(notice: Notice) -> String {
             String::from("保存しました。開き直せなかったので、表示は保存の前のままです")
         }
         Notice::ReadingNeedsSave => {
-            String::from("直したセルがある間は読み方を変えられません（先に Ctrl+S で保存）")
+            String::from("変えた所がある間は読み方を変えられません（先に Ctrl+S で保存）")
         }
         Notice::EditCut => String::from(
             "1 MiB で切り詰めた行のセルは直せません（行の全体を読めないので、保存で元に戻せない）",
@@ -205,6 +205,9 @@ fn save_problem_status(problem: SaveProblem) -> String {
             "置き換えが途中で止まりました。新しい内容は同じフォルダの .nene-ledger-*.tmp に残しました",
         ),
         SaveProblem::Unplannable => String::from("書き換えた行を読めないので保存できませんでした"),
+        SaveProblem::Untitled => {
+            String::from("新しい表にはまだファイルがありません（名前を付けて保存は次の版）")
+        }
         SaveProblem::Other => String::from("保存できませんでした"),
     };
     format!("{reason}（直した値は残っています）")

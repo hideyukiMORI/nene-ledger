@@ -7,7 +7,9 @@ use nene_ledger_application::format_summary::FormatSummary;
 use nene_ledger_core::binary_sniff::looks_binary;
 use nene_ledger_core::detecting::READ_LIMIT;
 use nene_ledger_core::detection::Detection;
+use nene_ledger_core::dialect::Dialect;
 use nene_ledger_core::encoding_guess::EncodingGuess;
+use nene_ledger_core::line_ending_counts::LineEndingCounts;
 use nene_ledger_core::text_encoding::TextEncoding;
 use nene_ledger_core::text_format::TextFormat;
 use nene_ledger_scan::block_size::BlockSize;
@@ -69,6 +71,22 @@ impl Opened {
     pub(crate) fn title(&self) -> &str {
         &self.title
     }
+}
+
+/// 新しい表の題名（ADR 0028）。
+pub(crate) const BLANK_TITLE: &str = "無題 — NeNe Ledger";
+
+/// 新しい表の読み方。BOM 付きの UTF-8・カンマ・RFC 4180 の引用（ADR 0028 の決定 3）。改行は、内訳が空なので
+/// 足した行の書き方の既定の CRLF になる（`Document::changes`）。
+pub(crate) fn blank_summary() -> FormatSummary {
+    let format = TextFormat::new(TextEncoding::Utf8WithBom, Dialect::rfc4180());
+    FormatSummary::new(format, LineEndingCounts::tally(core::iter::empty()))
+}
+
+/// 新しい表の原本。BOM だけのメモリのバイト列で、ファイルは作らない。保存の計画は最初のレコードの前（BOM）を写すので、
+/// 新しいファイルも BOM 付きで書かれる（ADR 0028 の決定 2・3・特別な経路を作らない）。
+pub(crate) fn blank_source() -> Source {
+    Source::from_bytes(TextEncoding::Utf8WithBom.bom())
 }
 
 /// `path` を開き、文字コードと方言を推し量り、先頭の行を表示の値にする。

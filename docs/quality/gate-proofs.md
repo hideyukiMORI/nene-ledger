@@ -712,6 +712,19 @@ PR の枝の debug の exe を Xvfb に出し、`id,name` ＋ 2 行（CRLF）の
 
 閉じるときの確認と読み方を変えられないことは、application のテスト（`adding_or_removing_rows_and_columns_alone_is_unsaved`）と app の `Viewer::reading_blocked` が同じ `Document::has_unsaved` を使うことで見る。
 
+## 67. 新しい表を開く（GitHub Issue #109・ADR 0028 の決定 2）— 仮想の X サーバでの確認（QLT-013）
+
+PR の枝の debug の exe を `--new` で Xvfb に出し、`xdotool` のキーを送った（2026-11-06）。
+
+| # | 操作 | 見え・結果 |
+| --- | --- | --- |
+| 1 | 開いた直後 | 題名 `無題 — NeNe Ledger`（`●` 無し）・列の番号の行（1 2 3）・1 行 × 3 列の空のセル |
+| 2 | `abc` → Tab → `x` → Enter | 1 列目に `abc`、2 列目に `x`・題名の頭に `●` |
+| 3 | Ctrl++ | 上に行が入り 2 行 |
+| 4 | Ctrl+S | 保存しない（名前を付けて保存は次の Issue）。端末に `新しい表にはまだファイルが無い` |
+
+保存の中身（BOM 付きの UTF-8・CRLF・カンマ・要るときだけ引用）は app のテスト `a_blank_table_is_planned_as_utf8_with_a_bom_crlf_and_commas` で見る。
+
 ## 7. active の規則と、その証明
 
 CNF-009 は active の規則ごとに `| ID |` で始まる行がここにあることを要求する。

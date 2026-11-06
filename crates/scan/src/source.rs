@@ -3,11 +3,13 @@
 use std::fs::{File, OpenOptions};
 use std::io::ErrorKind;
 use std::path::Path;
+use std::sync::Arc;
 
 use nene_ledger_core::text_encoding::TextEncoding;
 
 use crate::block_size::BlockSize;
 use crate::scan_failure::ScanFailure;
+use crate::source_origin::SourceOrigin;
 
 /// 読むだけで開いた原本。位置を指定して塊を読む（ADR 0017 の決定 1・4）。
 ///
@@ -15,7 +17,7 @@ use crate::scan_failure::ScanFailure;
 /// Excel などの保存を妨げない。そのぶん、開いている間に中身が変わりうる（検出は FR-019）。
 #[derive(Debug)]
 pub struct Source {
-    file: File,
+    origin: SourceOrigin,
     len: u64,
 }
 
@@ -39,9 +41,19 @@ impl Source {
             return Err(ScanFailure::Open(ErrorKind::InvalidInput));
         }
         Ok(Self {
-            file,
+            origin: SourceOrigin::File(file),
             len: metadata.len(),
         })
+    }
+
+    /// ファイルの無い原本。中身はメモリの `bytes`（新しい表は BOM だけ・ADR 0028 の決定 2・3）。
+    #[must_use]
+    pub fn from_bytes(bytes: &[u8]) -> Self {
+        let len = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+        Self {
+            origin: SourceOrigin::Bytes(Arc::from(bytes)),
+            len,
+        }
     }
 
     /// 同じ原本を別に読む口（裏の仕事に渡す）。位置を指定して読むので、読む位置を共有しない。
@@ -50,12 +62,15 @@ impl Source {
     ///
     /// OS が複製を拒んだとき。
     pub fn try_clone(&self) -> Result<Self, ScanFailure> {
-        let file = self
-            .file
-            .try_clone()
-            .map_err(|error| ScanFailure::Open(error.kind()))?;
+        let origin = match &self.origin {
+            SourceOrigin::File(file) => SourceOrigin::File(
+                file.try_clone()
+                    .map_err(|error| ScanFailure::Open(error.kind()))?,
+            ),
+            SourceOrigin::Bytes(bytes) => SourceOrigin::Bytes(Arc::clone(bytes)),
+        };
         Ok(Self {
-            file,
+            origin,
             len: self.len,
         })
     }
@@ -118,15 +133,30 @@ impl Source {
         Ok(block)
     }
 
-    #[cfg(unix)]
     fn read_at(&self, buffer: &mut [u8], offset: u64) -> std::io::Result<usize> {
-        std::os::unix::fs::FileExt::read_at(&self.file, buffer, offset)
+        match &self.origin {
+            SourceOrigin::File(file) => read_file_at(file, buffer, offset),
+            SourceOrigin::Bytes(bytes) => {
+                let start = usize::try_from(offset).unwrap_or(usize::MAX);
+                let rest = bytes.get(start..).unwrap_or_default();
+                let count = rest.len().min(buffer.len());
+                if let (Some(to), Some(from)) = (buffer.get_mut(..count), rest.get(..count)) {
+                    to.copy_from_slice(from);
+                }
+                Ok(count)
+            }
+        }
     }
+}
 
-    #[cfg(windows)]
-    fn read_at(&self, buffer: &mut [u8], offset: u64) -> std::io::Result<usize> {
-        std::os::windows::fs::FileExt::seek_read(&self.file, buffer, offset)
-    }
+#[cfg(unix)]
+fn read_file_at(file: &File, buffer: &mut [u8], offset: u64) -> std::io::Result<usize> {
+    std::os::unix::fs::FileExt::read_at(file, buffer, offset)
+}
+
+#[cfg(windows)]
+fn read_file_at(file: &File, buffer: &mut [u8], offset: u64) -> std::io::Result<usize> {
+    std::os::windows::fs::FileExt::seek_read(file, buffer, offset)
 }
 
 /// 読むだけの開き方。
@@ -146,4 +176,25 @@ fn reading_options() -> OpenOptions {
     let mut options = OpenOptions::new();
     options.read(true).share_mode(SHARE_ALL);
     options
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// メモリの原本は、ファイルの原本と同じく位置を指定して読め、終わりで短くなり、BOM を見分ける。
+    #[test]
+    fn a_source_in_memory_reads_like_a_file() {
+        let source = Source::from_bytes(b"\xEF\xBB\xBFa,b\r\n");
+        assert_eq!(source.len(), 8);
+        assert!(!source.is_empty());
+        let block = BlockSize::new(4).unwrap();
+        assert_eq!(source.read_block(0, block).unwrap(), b"\xEF\xBB\xBFa");
+        assert_eq!(source.read_block(6, block).unwrap(), b"\r\n");
+        assert_eq!(source.read_block(99, block).unwrap(), b"");
+        assert_eq!(source.content_start(TextEncoding::Utf8WithBom).unwrap(), 3);
+        let copy = source.try_clone().unwrap();
+        assert_eq!(copy.read_block(3, block).unwrap(), b"a,b\r");
+        assert!(Source::from_bytes(b"").is_empty());
+    }
 }

@@ -30,8 +30,8 @@ pub(crate) struct Reader {
     format: TextFormat,
     index: SparseIndex,
     wakeup: Arc<dyn Wakeup>,
-    /// 原本の道筋（保存と、保存の後の開き直しに使う）。
-    path: PathBuf,
+    /// 原本の道筋（保存と、保存の後の開き直しに使う）。新しい表は `None`（ADR 0028）。
+    path: Option<PathBuf>,
     /// 開く前に取った原本の印（保存の前に比べる・FILE-01）。取れなければ `None`（保存できない）。
     opened: Option<FileStamp>,
 }
@@ -50,7 +50,7 @@ impl core::fmt::Debug for Reader {
 impl Reader {
     /// 作り始める前の索引（先頭から切り進める）で始める。
     pub(crate) fn new(
-        (source, path, opened): (Source, PathBuf, Option<FileStamp>),
+        (source, path, opened): (Source, Option<PathBuf>, Option<FileStamp>),
         format: TextFormat,
         wakeup: Arc<dyn Wakeup>,
     ) -> Self {
@@ -69,9 +69,9 @@ impl Reader {
         self.opened
     }
 
-    /// 原本の道筋。
-    pub(crate) fn path(&self) -> &Path {
-        &self.path
+    /// 原本の道筋。新しい表は `None`。
+    pub(crate) fn path(&self) -> Option<&Path> {
+        self.path.as_deref()
     }
 
     /// 窓を起こす口（裏の仕事に渡す）。
@@ -97,9 +97,13 @@ impl Reader {
     /// 保存して置き換えた後のファイルを、同じ読み方で開き直して索引を作り直す（ADR 0026 の決定 6）。
     /// 置き換えの前の口（Linux では前のファイルを指したまま）は捨てる。
     pub(crate) fn reopen_saved(&mut self) -> Result<IndexJob, ScanFailure> {
+        let path = self
+            .path
+            .as_deref()
+            .ok_or(ScanFailure::Open(std::io::ErrorKind::NotFound))?;
         // 印は開く前に取る（開いた後の外からの変更を次の保存で見つける）。
-        let opened = stamp_of(&self.path).ok();
-        let source = Source::open(&self.path)?;
+        let opened = stamp_of(path).ok();
+        let source = Source::open(path)?;
         let job = IndexJob::spawn(
             source.try_clone()?,
             self.format,
