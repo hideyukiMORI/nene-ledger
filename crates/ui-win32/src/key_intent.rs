@@ -168,6 +168,16 @@ pub(crate) fn press_intent(x: i32, y: i32, modifiers: Modifiers) -> Option<Inten
     Some(Intent::Point { at, mode })
 }
 
+/// 中身の 2 度目の左の押し（`WM_LBUTTONDBLCLK`）の意図。Shift・Ctrl を押していなければダブルクリック
+/// （本体のセルなら編集・ADR 0026 の決定 1）、押していれば 1 度押したのと同じ。
+pub(crate) fn double_press_intent(x: i32, y: i32, modifiers: Modifiers) -> Option<Intent> {
+    if modifiers.shift || modifiers.control {
+        return press_intent(x, y, modifiers);
+    }
+    let at = PixelPoint::new(u32::try_from(x).ok()?, u32::try_from(y).ok()?);
+    Some(Intent::DoubleClick { at })
+}
+
 /// 縦のホイール（`WM_MOUSEWHEEL`）の刻み `delta` の意図。上が正。Ctrl で拡大、Shift で横へ。
 pub(crate) fn wheel_intent(delta: i16, modifiers: Modifiers) -> Option<Intent> {
     if delta == 0 {
@@ -360,6 +370,23 @@ mod tests {
         assert_eq!(key_intent(VK_G, control()), Some(Intent::OpenGoTo));
         assert_eq!(key_intent(VK_N, control()), Some(Intent::NewTable));
         assert_eq!(key_intent(VK_V, control()), Some(Intent::Paste));
+    }
+
+    /// 2 度目の押しは、Shift・Ctrl が無ければダブルクリック、あれば 1 度押したのと同じ（ADR 0026 の決定 1）。
+    #[test]
+    fn a_second_press_is_a_double_click_without_modifiers() {
+        let at = PixelPoint::new(10, 20);
+        assert_eq!(
+            double_press_intent(10, 20, Modifiers::new(false, false, false)),
+            Some(Intent::DoubleClick { at })
+        );
+        assert_eq!(
+            double_press_intent(10, 20, Modifiers::new(true, false, false)),
+            Some(Intent::Point {
+                at,
+                mode: SelectionMode::Extend
+            })
+        );
         assert_eq!(key_intent(VK_P, control_shift()), Some(Intent::OpenPalette));
         assert_eq!(
             key_intent(VK_U, control_shift()),

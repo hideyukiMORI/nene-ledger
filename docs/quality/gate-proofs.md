@@ -764,6 +764,17 @@ PR の枝の debug の exe で `rows.csv`（`id,name` ＋ 2 行・CRLF）を Xvf
 
 🔴 **正直に:** Windows の `CF_UNICODETEXT` の読み取りと、Excel からの貼り付けは実機でまだ。直した値の列の幅は広がらない（`0099` は `0…` と出る。手で打った値と同じ・前からの振る舞い）。
 
+## 71. ダブルクリックでセルを直し始める（GitHub Issue #120・ADR 0026 の決定 1）— 仮想の X サーバでの確認（QLT-013）
+
+PR の枝の debug の exe で `rows.csv`（`id,name` ＋ 2 行・CRLF）を Xvfb に出し、`xdotool` で `Sato` のセルをダブルクリックした（2 度の押しの間 120 ms・2026-11-06）。
+
+| # | 操作 | 見え・結果 |
+| --- | --- | --- |
+| 1 | `Sato` をダブルクリック | セルが編集の状態になり、カーソルは末尾（欄は末尾が見えるよう `ato｜` を出す）。詳細ペインは `Sato` |
+| 2 | `X` → Enter → Ctrl+S → `od -c` | `id,name\r\n1,SatoX\r\n2,Kato\r\n`（続けて直した・置き換えではない） |
+
+🔴 **正直に:** Windows の実機（`WM_LBUTTONDBLCLK`・OS のダブルクリックの間）はまだ。
+
 ## 7. active の規則と、その証明
 
 CNF-009 は active の規則ごとに `| ID |` で始まる行がここにあることを要求する。

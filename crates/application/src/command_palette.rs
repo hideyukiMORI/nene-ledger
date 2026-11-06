@@ -141,6 +141,7 @@ impl CommandPalette {
             Intent::Cancel | Intent::OpenPalette | Intent::OpenGoTo => self.cancelled(),
             Intent::Scroll(_)
             | Intent::Point { .. }
+            | Intent::DoubleClick { .. }
             | Intent::Drag { .. }
             | Intent::Release
             | Intent::SelectAll

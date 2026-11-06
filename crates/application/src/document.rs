@@ -347,7 +347,9 @@ impl Document {
             Intent::Type('s' | 'S') | Intent::Confirm => Some(CloseChoice::Save),
             Intent::Type('d' | 'D') => Some(CloseChoice::Discard),
             Intent::Cancel => Some(CloseChoice::Cancel),
-            Intent::Point { at, .. } => ClosePrompt::new(window).choice_at(at),
+            Intent::Point { at, .. } | Intent::DoubleClick { at } => {
+                ClosePrompt::new(window).choice_at(at)
+            }
             Intent::Scroll(_)
             | Intent::Move { .. }
             | Intent::Drag { .. }
@@ -696,6 +698,9 @@ impl Document {
         if intent == Intent::Save {
             return self.save_request();
         }
+        if let Intent::DoubleClick { at } = intent {
+            return self.double_click(at, window);
+        }
         if intent == Intent::SaveAs {
             self.commit_edit();
             return DocumentEffect::SaveAs;
@@ -730,6 +735,7 @@ impl Document {
             | Intent::Confirm
             | Intent::Cancel
             | Intent::Drag { .. }
+            | Intent::DoubleClick { .. }
             | Intent::Release
             | Intent::OpenGoTo
             | Intent::Edit
@@ -797,6 +803,7 @@ impl Document {
             Intent::Scroll(_)
             | Intent::Move { .. }
             | Intent::Point { .. }
+            | Intent::DoubleClick { .. }
             | Intent::Drag { .. }
             | Intent::Release
             | Intent::GoTo(_)
@@ -870,6 +877,7 @@ impl Document {
             | Intent::InsertHere
             | Intent::RemoveHere
             | Intent::Point { .. }
+            | Intent::DoubleClick { .. }
             | Intent::GoTo(_)
             | Intent::OpenGoTo
             | Intent::OpenPalette
@@ -905,6 +913,24 @@ impl Document {
 
     /// 編集していないときの編集の意図。打ち始め・F2 で編集に入り、Delete でカーソルのセルを空にする。
     /// Enter・Tab などは動くだけ。
+    /// 2 度目の押し（ADR 0026 の決定 1）。1 度押したのと同じに扱い、押した所がカーソルの本体のセルなら、押して始めた
+    /// ドラッグを終えて、そのセルを編集の状態（元の値・カーソルは末尾）で直し始める。保存の途中は直し始めない。
+    fn double_click(&mut self, at: PixelPoint, window: WindowView) -> DocumentEffect {
+        let effect = self.apply(
+            Intent::Point {
+                at,
+                mode: SelectionMode::Collapse,
+            },
+            window,
+        );
+        let on_cursor = self.cell_at(at, window) == Some(self.selection.cursor());
+        if on_cursor && self.editor.is_none() && !self.saving && self.closing == CloseState::Open {
+            self.release(window);
+            self.begin_edit(EditMode::Editing);
+        }
+        effect
+    }
+
     /// 打った字 `character` で入力を始める（セルの値を打った字で置き換える）。
     fn type_into_new_edit(&mut self, character: char) {
         if self.begin_edit(EditMode::Entering)
@@ -943,6 +969,7 @@ impl Document {
             Intent::Scroll(_)
             | Intent::Move { .. }
             | Intent::Point { .. }
+            | Intent::DoubleClick { .. }
             | Intent::Drag { .. }
             | Intent::Release
             | Intent::GoTo(_)
@@ -1521,6 +1548,7 @@ impl Document {
             Intent::Scroll(_)
             | Intent::Move { .. }
             | Intent::Point { .. }
+            | Intent::DoubleClick { .. }
             | Intent::Drag { .. }
             | Intent::Release
             | Intent::GoTo(_)
@@ -1718,6 +1746,7 @@ impl Document {
     fn pointer_intent(&mut self, intent: Intent, window: WindowView) -> Option<DocumentEffect> {
         match intent {
             Intent::Point { at, mode } => self.press_bar(at, mode, window),
+            Intent::DoubleClick { at } => self.press_bar(at, SelectionMode::Collapse, window),
             Intent::Drag { at } => Some(self.drag(at, window)),
             Intent::Release => {
                 self.release(window);
@@ -6425,5 +6454,43 @@ mod tests {
                 .editor()
                 .is_some_and(|editor| editor.field().text() == "0012a\tb")
         );
+    }
+
+    /// ダブルクリックは、押したセルを編集の状態（元の値・カーソルは末尾）で直し始める。見出しの上では 1 度押したのと同じ
+    /// （ADR 0026 の決定 1）。
+    #[test]
+    fn double_clicking_a_cell_edits_it_from_the_end() {
+        let window = normal();
+        let mut document = editable();
+        let layout = document.layout(0, window.content_metrics());
+        let body = document.bars(window).body();
+        let inside = |row: usize, column: usize| {
+            let rect = layout.cell_rect(row, column).unwrap();
+            PixelPoint::new(
+                body.origin().x() + rect.origin().x() + 3,
+                body.origin().y() + rect.origin().y() + 3,
+            )
+        };
+        // 2 行目の 2 列目（b2）を 1 度押して離し、2 度目。
+        document.apply(pressing(inside(2, 1), SelectionMode::Collapse), window);
+        document.apply(Intent::Release, window);
+        document.apply(Intent::DoubleClick { at: inside(2, 1) }, window);
+        document.apply(Intent::Release, window);
+        assert_eq!(document.selection().cursor(), CellPosition::new(1, 1));
+        assert!(
+            document
+                .editor()
+                .is_some_and(|editor| editor.field().text() == "b2")
+        );
+        typed(&mut document, "x");
+        document.apply(Intent::Confirm, window);
+        assert_eq!(
+            edited(&document, 1, 1),
+            Some(&CellValue::Text(String::from("b2x")))
+        );
+        // 列の番号の行（固定した上の行）のダブルクリックは、列を選ぶだけで直し始めない。
+        document.apply(Intent::DoubleClick { at: inside(0, 0) }, window);
+        document.apply(Intent::Release, window);
+        assert_eq!(document.editor(), None);
     }
 }
