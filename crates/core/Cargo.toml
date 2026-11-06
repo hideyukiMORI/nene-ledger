@@ -13,4 +13,4 @@ workspace = true
 # 🔴 外部クレートは `regex-automata` だけ（正規表現の照合・no_std ＋ alloc・ADR 0031・ARC-013・CNF-013）。
 # 速い道（`perf-literal-*` と、それが連れてくる aho-corasick・memchr）は入れない（ADR 0031 の決定 2）。
 [dependencies]
-regex-automata = { version = "0.4.18", default-features = false, features = ["alloc", "syntax", "meta", "unicode"] }
+regex-automata = { version = "0.4.18", default-features = false, features = ["alloc", "syntax", "meta", "unicode", "perf-literal-substring", "perf-literal-multisubstring"] }
