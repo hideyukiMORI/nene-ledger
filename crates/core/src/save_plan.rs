@@ -3,6 +3,7 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
+use crate::plan_sink::PlanSink;
 use crate::save_step::SaveStep;
 
 /// 保存の計画。続いた写す区間は 1 つにまとめ、空の歩は持たない。
@@ -20,8 +21,26 @@ impl SavePlan {
         Self { steps: Vec::new() }
     }
 
+    /// 歩の列。
+    #[must_use]
+    pub fn steps(&self) -> &[SaveStep] {
+        &self.steps
+    }
+
+    /// 歩を順に書き先 `sink` に渡す。
+    pub fn replay<S: PlanSink + ?Sized>(&self, sink: &mut S) {
+        for step in &self.steps {
+            match step {
+                SaveStep::Copy { offset, length } => sink.copy(*offset, *length),
+                SaveStep::Text(text) => sink.text(text),
+            }
+        }
+    }
+}
+
+impl PlanSink for SavePlan {
     /// 原本の区間を写す歩を足す。前の歩が直前まで写す区間なら、それを伸ばす。長さ 0 なら何もしない。
-    pub fn copy(&mut self, offset: u64, length: u64) {
+    fn copy(&mut self, offset: u64, length: u64) {
         if length == 0 {
             return;
         }
@@ -38,7 +57,7 @@ impl SavePlan {
     }
 
     /// 文字列を書く歩を足す。前の歩も文字列なら、つなげる。空なら何もしない。
-    pub fn text(&mut self, text: &str) {
+    fn text(&mut self, text: &str) {
         if text.is_empty() {
             return;
         }
@@ -47,12 +66,6 @@ impl SavePlan {
             return;
         }
         self.steps.push(SaveStep::Text(String::from(text)));
-    }
-
-    /// 歩の列。
-    #[must_use]
-    pub fn steps(&self) -> &[SaveStep] {
-        &self.steps
     }
 }
 

@@ -53,6 +53,7 @@ pub mod pasted_text;
 pub mod pixel_point;
 pub mod pixel_rect;
 pub mod pixel_size;
+pub mod plan_sink;
 pub mod pointer_point;
 pub mod preedit;
 pub mod quote_escape;

@@ -11,11 +11,12 @@ use nene_ledger_application::replacing::Replacing;
 use nene_ledger_application::save_target::SaveTarget;
 use nene_ledger_application::source_bytes::SourceBytes;
 use nene_ledger_application::wakeup::Wakeup;
+use nene_ledger_core::plan_sink::PlanSink;
 use nene_ledger_core::save_plan::SavePlan;
 use nene_ledger_core::text_encoding::TextEncoding;
 
 use crate::save_failure::SaveFailure;
-use crate::saving::save;
+use crate::saving::{save, save_streamed};
 
 /// 裏のスレッドの名前。
 const THREAD_NAME: &str = "nene-ledger-save";
@@ -56,6 +57,41 @@ impl SaveJob {
                     (&plan, encoding, expected),
                     &mut source,
                     &replacing,
+                );
+                wakeup.wake();
+                outcome
+            })
+            .map_err(|error| SaveFailure::Spawn(error.kind()))?;
+        Ok(Self {
+            worker: Some(worker),
+        })
+    }
+
+    /// 計画を記憶に持たずに書く仕事を始める（GitHub Issue #130）。計画を作ること（`produce`）も裏のスレッドで行い、
+    /// 歩は一時ファイルに直に書く（`saving::save_streamed`）。画面のスレッドは止まらない。
+    ///
+    /// # Errors
+    ///
+    /// スレッドを作れないとき（`SaveFailure::Spawn`）。
+    pub fn spawn_streamed<S, R, P>(
+        target: PathBuf,
+        (encoding, expected): (TextEncoding, SaveTarget),
+        (mut source, replacing, produce): (S, R, P),
+        wakeup: Arc<dyn Wakeup>,
+    ) -> Result<Self, SaveFailure>
+    where
+        S: SourceBytes<Failure = ErrorKind> + Send + 'static,
+        R: Replacing<Location = Path> + Send + 'static,
+        P: FnOnce(&mut dyn PlanSink) -> Result<(), SaveFailure> + Send + 'static,
+    {
+        let worker = Builder::new()
+            .name(String::from(THREAD_NAME))
+            .spawn(move || {
+                let outcome = save_streamed(
+                    &target,
+                    (encoding, expected),
+                    (&mut source, &replacing),
+                    produce,
                 );
                 wakeup.wake();
                 outcome

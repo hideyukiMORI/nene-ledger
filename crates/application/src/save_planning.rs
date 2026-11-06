@@ -11,6 +11,7 @@ use nene_ledger_core::column_id::ColumnId;
 use nene_ledger_core::dialect::Dialect;
 use nene_ledger_core::line_ending::LineEnding;
 use nene_ledger_core::order_run::OrderRun;
+use nene_ledger_core::plan_sink::PlanSink;
 use nene_ledger_core::record::Record;
 use nene_ledger_core::row_id::RowId;
 use nene_ledger_core::row_piece::RowPiece;
@@ -47,6 +48,24 @@ pub fn save_plan<L: RecordLookup>(
     source_length: u64,
     dialect: Dialect,
 ) -> Result<SavePlan, SavePlanFailure<L::Failure>> {
+    let mut plan = SavePlan::empty();
+    write_plan(changes, lookup, (source_length, dialect), &mut plan)?;
+    Ok(plan)
+}
+
+/// [`save_plan`] と同じ計画を、歩を記憶に持たずに書き先 `sink` へ順に渡す（GitHub Issue #130）。
+/// 列を足し消しした巨大な表でも、記憶は塊（4,096 行）の大きさにしか比例しない。
+/// 書き先が書けなくなったら（[`PlanSink::stopped`]）、塊の境目でやめて [`SavePlanFailure::Stopped`] を返す。
+///
+/// # Errors
+///
+/// [`SavePlanFailure`] のとおり。
+pub fn write_plan<L: RecordLookup, S: PlanSink + ?Sized>(
+    changes: TableChanges<'_>,
+    lookup: &mut L,
+    (source_length, dialect): (u64, Dialect),
+    sink: &mut S,
+) -> Result<(), SavePlanFailure<L::Failure>> {
     let edited = changes.edits().rows();
     let width = changes.shape().columns();
     let restructured = (!changes.columns().is_whole()).then(|| changes.columns().columns(width));
@@ -54,7 +73,7 @@ pub fn save_plan<L: RecordLookup>(
         lookup,
         source_length,
         dialect,
-        plan: SavePlan::empty(),
+        plan: sink,
         unterminated: false,
         after_cr: false,
         body_start: 0,
@@ -72,17 +91,20 @@ pub fn save_plan<L: RecordLookup>(
             OrderRun::Source { first, count } => planner.source_run((*first, *count), &edited)?,
             OrderRun::Added(rows) => planner.added_rows(rows, changes.edits(), changes.shape())?,
         }
+        if planner.plan.stopped() {
+            return Err(SavePlanFailure::Stopped);
+        }
     }
-    Ok(planner.plan)
+    Ok(())
 }
 
 /// 計画を組み立てる途中の状態。`unterminated` は、書いた最後の行が終わり方の無い原本の最後の行か。
 /// `after_cr` は、書いた最後の行が `\r` だけで終わったか（次に `\n` で始まる行を書くとつながる）。
-struct Planner<'lookup, L> {
+struct Planner<'lookup, L, S: ?Sized> {
     lookup: &'lookup mut L,
     source_length: u64,
     dialect: Dialect,
-    plan: SavePlan,
+    plan: &'lookup mut S,
     unterminated: bool,
     after_cr: bool,
     body_start: u64,
@@ -90,7 +112,7 @@ struct Planner<'lookup, L> {
     restructured: Option<Vec<ColumnId>>,
 }
 
-impl<L: RecordLookup> Planner<'_, L> {
+impl<L: RecordLookup, S: PlanSink + ?Sized> Planner<'_, L, S> {
     /// レコード `number` を引く。
     fn located(
         &mut self,
@@ -188,6 +210,9 @@ impl<L: RecordLookup> Planner<'_, L> {
             }
             if read < left {
                 break;
+            }
+            if self.plan.stopped() {
+                return Err(SavePlanFailure::Stopped);
             }
         }
         self.unterminated = ending == Some(LineEnding::EndOfInput);
@@ -1012,5 +1037,36 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// 書けなくなった書き先には、計画を作るのを途中でやめる（GitHub Issue #130）。
+    #[test]
+    fn a_stopped_sink_stops_the_plan() {
+        struct Broken;
+        impl PlanSink for Broken {
+            fn copy(&mut self, _: u64, _: u64) {}
+            fn text(&mut self, _: &str) {}
+            fn stopped(&self) -> bool {
+                true
+            }
+        }
+        let input = b"a,b\nc,d\n";
+        let order = RowOrder::whole();
+        let mut columns = ColumnOrder::whole();
+        let _added = columns.insert(0, 1);
+        let edits = CellEdits::empty();
+        let changes = TableChanges::new(
+            (&order, &columns),
+            &edits,
+            AddedRowShape::new(3, LineEnding::Lf),
+        );
+        let mut lookup = InMemory { input, lookups: 0 };
+        let stopped = write_plan(
+            changes,
+            &mut lookup,
+            (u64::try_from(input.len()).unwrap(), Dialect::rfc4180()),
+            &mut Broken,
+        );
+        assert_eq!(stopped, Err(SavePlanFailure::Stopped));
     }
 }
