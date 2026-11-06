@@ -944,7 +944,9 @@ Windows の exe の `--version`（コマンドプロンプトに結んで書く�
 
 `make dist`（`tools/dist.sh`）を手元で回した（2026-11-06・版 `0.1.0-preview.1`）。`notices-check` → `build-windows` → `dist/nene-ledger-0.1.0-preview.1-windows-x86_64.zip`（5,549,555 バイトを展開・10 項目：`nene-ledger.exe` 5,509,175 バイト・`LICENSE`・`THIRD-PARTY-NOTICES.txt`・`README.txt`・`samples/` の見本 4 つ）と `.sha256`。説明書の類は改行を CRLF にした（メモ帳で読めるように）。
 
-タグから GitHub Actions で同じ `make dist` を回して Releases に置く `.github/workflows/release.yml` は、タグを打つまで走らない（初めて走らせた結果は、タグを打った後にここへ足す）。
+タグから GitHub Actions で同じ `make dist` を回して Releases に置く `.github/workflows/release.yml` の初回（2026-11-07・タグ `v0.1.0-preview.1` = `1d7df4d`・run 42242279971）：全部の段が成功（版とタグの一致・`make dist`・プレリリースの公開）。公開物は `nene-ledger-0.1.0-preview.1-windows-x86_64.zip`（1,809,293 バイト）と `.sha256`。落とし直して `sha256sum -c` が OK、10 項目。
+
+🔴 CI の exe（5,501,395 バイト）は、施主が試した手元の exe（5,514,003 バイト）と同じではない（ソースは同じ・mingw-w64 の版が違う）。CI の exe を施主の機械に置き、`--version` が `NeNe Ledger 0.1.0-preview.1`・10 秒後も検疫されないことを確かめた。窓を開いての操作は、手元の exe で施主が確かめた（第 86 節）。
 
 ## 86. 検索の欄から置換の欄への切り替え（GitHub Issue #187）— 施主の Windows の実機（QLT-013）
 
@@ -956,6 +958,8 @@ Windows の exe の `--version`（コマンドプロンプトに結んで書く�
 | 2 | 表から Ctrl+H で開いた置換の欄 | 探す欄が空（検索の欄の文字は Enter で探したときしか覚えない） | （1 で引き継ぐ） |
 | 3 | 探す文字が空のまま Alt+A | パレットが閉じ、何もせず、何も知らせない | 閉じずに探す欄へ戻る（application のテスト） |
 | 4 | 置き換える欄に `Z`・Alt+A・Enter | — | 状態の行に `6 セルを置き換えます（Enter で置き換える・Esc でやめる）` → `Z123`〜`Z128`・窓の名前に `●`・`6 セルを置き換えました（Ctrl+Z で戻す）` |
+
+施主がこの直しの候補（`candidate-2`）で手順を試し「うん、できてるよ」（2026-11-07）。ほかの項目（開く・このアプリについて・貼り付けと切り取り・検索と置換・窓の名前の `●`・名前を付けて保存・Ctrl+N・ダブルクリック・保存の Esc）も施主「全部いいと思う」。Alt+ のキーは Steam などが握っていると効かないことがある（施主）。
 
 展開先の exe が施主の開いている窓で使われていて上書きできず、1 度は古い exe を起動していた（`rm` の失敗で手順が止まったのに、続きの起動だけが走った）。新しい候補は別のフォルダ（`candidate-2`）に展開した。
 
