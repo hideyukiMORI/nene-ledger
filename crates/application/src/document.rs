@@ -410,9 +410,10 @@ impl Document {
             | Intent::UnfreezeColumns
             | Intent::Copy
             | Intent::Cut
-            | Intent::OpenFind
+            | Intent::OpenFind { .. }
             | Intent::FindAgain { .. }
             | Intent::FindToggle(_)
+            | Intent::ReplaceAll
             | Intent::ToggleDetail
             | Intent::Theme(_)
             | Intent::Zoom(_)
@@ -808,9 +809,10 @@ impl Document {
             Intent::Copy => return self.copy_request(),
             Intent::Cut => return self.cut_request(),
             // 配色・文字の大きさ・パレット・字の入力・検索の欄は合成ルートが、続けて探すのは `apply` が受ける。
-            Intent::OpenFind
+            Intent::OpenFind { .. }
             | Intent::FindAgain { .. }
             | Intent::FindToggle(_)
+            | Intent::ReplaceAll
             | Intent::Theme(_)
             | Intent::Zoom(_)
             | Intent::OpenPalette
@@ -862,17 +864,23 @@ impl Document {
         self.go_to(target, page)
     }
 
+    /// Esc：ドラッグの途中ならやめ、選んだ範囲を数えていれば止める。どちらでもなければ `None`。
+    fn cancel_effect(&mut self, window: WindowView) -> Option<DocumentEffect> {
+        if let Some(effect) = self.cancel_drag(window) {
+            return Some(effect);
+        }
+        if let SelectionTotals::Counting(_) = self.totals {
+            return Some(DocumentEffect::StopTotals);
+        }
+        None
+    }
+
     /// 表の意図のうち、先に受けるもの（ドラッグと裏の集計をやめる Esc・スクロールバーの上の指・行と列の足し消し）。
     fn early_effect(&mut self, intent: Intent, window: WindowView) -> Option<DocumentEffect> {
         if intent == Intent::Cancel
-            && let Some(effect) = self.cancel_drag(window)
+            && let Some(effect) = self.cancel_effect(window)
         {
             return Some(effect);
-        }
-        if intent == Intent::Cancel
-            && let SelectionTotals::Counting(_) = self.totals
-        {
-            return Some(DocumentEffect::StopTotals);
         }
         match intent {
             Intent::InsertRows(place) => Some(self.insert_rows(place, window)),
@@ -902,9 +910,10 @@ impl Document {
             | Intent::UnfreezeColumns
             | Intent::Copy
             | Intent::Cut
-            | Intent::OpenFind
+            | Intent::OpenFind { .. }
             | Intent::FindAgain { .. }
             | Intent::FindToggle(_)
+            | Intent::ReplaceAll
             | Intent::ToggleDetail
             | Intent::Theme(_)
             | Intent::Zoom(_)
@@ -981,8 +990,9 @@ impl Document {
                 return Some(intent);
             }
             // 表示だけを動かすものは、編集を続けたまま。
-            Intent::OpenFind
+            Intent::OpenFind { .. }
             | Intent::FindToggle(_)
+            | Intent::ReplaceAll
             | Intent::Scroll(_)
             | Intent::Drag { .. }
             | Intent::Release
@@ -1066,9 +1076,10 @@ impl Document {
             | Intent::UnfreezeColumns
             | Intent::Copy
             | Intent::Cut
-            | Intent::OpenFind
+            | Intent::OpenFind { .. }
             | Intent::FindAgain { .. }
             | Intent::FindToggle(_)
+            | Intent::ReplaceAll
             | Intent::ToggleDetail
             | Intent::Theme(_)
             | Intent::Zoom(_)
@@ -2453,9 +2464,10 @@ impl Document {
             | Intent::OpenGoTo
             | Intent::Copy
             | Intent::Cut
-            | Intent::OpenFind
+            | Intent::OpenFind { .. }
             | Intent::FindAgain { .. }
             | Intent::FindToggle(_)
+            | Intent::ReplaceAll
             | Intent::ToggleDetail
             | Intent::Theme(_)
             | Intent::Zoom(_)
@@ -2659,9 +2671,10 @@ impl Document {
             | Intent::Move { .. }
             | Intent::Copy
             | Intent::Cut
-            | Intent::OpenFind
+            | Intent::OpenFind { .. }
             | Intent::FindAgain { .. }
             | Intent::FindToggle(_)
+            | Intent::ReplaceAll
             | Intent::ToggleDetail
             | Intent::Theme(_)
             | Intent::Zoom(_)
@@ -4515,9 +4528,10 @@ const fn keeps_cut(intent: Intent) -> bool {
         | Intent::Advance(_)
         | Intent::NewTable
         | Intent::Paste
-        | Intent::OpenFind
+        | Intent::OpenFind { .. }
         | Intent::FindAgain { .. }
-        | Intent::FindToggle(_) => true,
+        | Intent::FindToggle(_)
+        | Intent::ReplaceAll => true,
         Intent::Copy
         | Intent::Cut
         | Intent::Cancel

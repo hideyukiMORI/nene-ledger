@@ -39,6 +39,7 @@ const VK_N: u16 = 0x4E;
 const VK_V: u16 = 0x56;
 const VK_X: u16 = 0x58;
 const VK_F: u16 = 0x46;
+const VK_H: u16 = 0x48;
 const VK_W: u16 = 0x57;
 const VK_F3: u16 = 0x72;
 const VK_P: u16 = 0x50;
@@ -89,6 +90,7 @@ pub(crate) fn key_intent(key: u16, modifiers: Modifiers) -> Option<Intent> {
         // 検索の欄の条件の切り替え（ADR 0030 の決定 3）。`WM_SYSKEYDOWN` で届く。表の上では何もしない。
         VK_C if alt && !control => return Some(Intent::FindToggle(FindToggle::Case)),
         VK_W if alt && !control => return Some(Intent::FindToggle(FindToggle::WholeCell)),
+        VK_A if alt && !control => return Some(Intent::ReplaceAll),
         VK_ESCAPE => return Some(Intent::Cancel),
         // Alt+Enter は `WM_SYSKEYDOWN` で届く（ui の側で同じ関数に渡す）。
         VK_RETURN if alt => return Some(Intent::BreakLine),
@@ -131,7 +133,8 @@ fn control_intent(key: u16, shift: bool, alt: bool) -> Option<Intent> {
     match (key, shift) {
         (VK_C, _) => Some(Intent::Copy),
         (VK_X, _) => Some(Intent::Cut),
-        (VK_F, false) => Some(Intent::OpenFind),
+        (VK_F, false) => Some(Intent::OpenFind { replace: false }),
+        (VK_H, false) => Some(Intent::OpenFind { replace: true }),
         (VK_SPACE, false) => Some(Intent::SelectColumns),
         (VK_PRIOR, true) => Some(Intent::MoveColumns(ColumnShift::Left)),
         (VK_NEXT, true) => Some(Intent::MoveColumns(ColumnShift::Right)),
@@ -481,10 +484,27 @@ mod tests {
         assert_eq!(key_intent(VK_Z, plain()), None);
     }
 
+    /// Ctrl+H は置換の欄、Alt+A は全部の置換。Ctrl+A はすべてを選ぶまま（ADR 0030 の決定 6）。
+    #[test]
+    fn replace_keys() {
+        assert_eq!(
+            key_intent(VK_H, control()),
+            Some(Intent::OpenFind { replace: true })
+        );
+        assert_eq!(
+            key_intent(VK_A, Modifiers::new(false, false, true)),
+            Some(Intent::ReplaceAll)
+        );
+        assert_eq!(key_intent(VK_A, control()), Some(Intent::SelectAll));
+    }
+
     /// Ctrl+F は検索の欄、F3 / Shift+F3 は続けて探す、Alt+C は検索の条件（ADR 0030）。
     #[test]
     fn find_keys() {
-        assert_eq!(key_intent(VK_F, control()), Some(Intent::OpenFind));
+        assert_eq!(
+            key_intent(VK_F, control()),
+            Some(Intent::OpenFind { replace: false })
+        );
         assert_eq!(
             key_intent(VK_F3, plain()),
             Some(Intent::FindAgain { forward: true })

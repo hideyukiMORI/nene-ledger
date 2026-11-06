@@ -36,6 +36,7 @@ const XK_N: u32 = 0x6e;
 const XK_V: u32 = 0x76;
 const XK_X: u32 = 0x78;
 const XK_F: u32 = 0x66;
+const XK_H: u32 = 0x68;
 const XK_W: u32 = 0x77;
 const XK_F3: u32 = 0xffc0;
 const XK_U: u32 = 0x75;
@@ -175,6 +176,8 @@ fn editing_intent(keysym: u32, typed: Option<char>, state: KeyButMask) -> Option
         // 検索の欄の条件の切り替え（ADR 0030 の決定 3）。表の上では何もしない。
         XK_C if alt_only(state) => Some(Intent::FindToggle(FindToggle::Case)),
         XK_W if alt_only(state) => Some(Intent::FindToggle(FindToggle::WholeCell)),
+        // 置換の欄の全部（ADR 0030 の決定 6）。表の上では何もしない。
+        XK_A if alt_only(state) => Some(Intent::ReplaceAll),
         XK_RETURN | XK_KP_ENTER if state.contains(KeyButMask::MOD1) => Some(Intent::BreakLine),
         XK_RETURN | XK_KP_ENTER if shift => Some(Intent::Advance(CursorStep::Up)),
         XK_RETURN | XK_KP_ENTER => Some(Intent::Confirm),
@@ -214,7 +217,8 @@ fn save_intent(keysym: u32, shift: bool) -> Option<Intent> {
         (XK_S, false) => Some(Intent::Save),
         (XK_N, false) => Some(Intent::NewTable),
         (XK_V, false) => Some(Intent::Paste),
-        (XK_F, false) => Some(Intent::OpenFind),
+        (XK_F, false) => Some(Intent::OpenFind { replace: false }),
+        (XK_H, false) => Some(Intent::OpenFind { replace: true }),
         (XK_C, _) => Some(Intent::Copy),
         (XK_X, _) => Some(Intent::Cut),
         (XK_S | 0x53, true) => Some(Intent::SaveAs),
@@ -653,7 +657,7 @@ mod tests {
     fn find_keys() {
         assert_eq!(
             key_intent(XK_F, Some('f'), KeyButMask::CONTROL),
-            Some(Intent::OpenFind)
+            Some(Intent::OpenFind { replace: false })
         );
         assert_eq!(
             key_intent(XK_F3, None, plain()),
@@ -670,6 +674,27 @@ mod tests {
         assert_eq!(
             key_intent(XK_W, Some('w'), KeyButMask::MOD1),
             Some(Intent::FindToggle(FindToggle::WholeCell))
+        );
+    }
+
+    /// Ctrl+H は置換の欄、Alt+A は全部の置換。Ctrl+A はすべてを選ぶまま（ADR 0030 の決定 6）。
+    #[test]
+    fn replace_keys() {
+        assert_eq!(
+            key_intent(XK_H, Some('h'), KeyButMask::CONTROL),
+            Some(Intent::OpenFind { replace: true })
+        );
+        assert_eq!(
+            key_intent(XK_A, Some('a'), KeyButMask::MOD1),
+            Some(Intent::ReplaceAll)
+        );
+        assert_eq!(
+            key_intent(XK_A, Some('a'), KeyButMask::CONTROL),
+            Some(Intent::SelectAll)
+        );
+        assert_eq!(
+            key_intent(XK_H, Some('h'), plain()),
+            Some(Intent::Type('h'))
         );
     }
 }
