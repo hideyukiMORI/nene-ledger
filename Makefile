@@ -6,7 +6,7 @@
 #    全件は限定した検証で影響を覆えない理由を REASON= に添えたときだけ回す（QLT-001 / ADR 0003）。
 CARGO ?= cargo
 
-.PHONY: all check ci fmt fmt-check lint lint-windows build-windows test conformance validate-git coverage deny doc-check build prove screenshot bench-pollock fetch-corpus bench-corpus doctor clean
+.PHONY: all notices notices-check check ci fmt fmt-check lint lint-windows build-windows test conformance validate-git coverage deny doc-check build prove screenshot bench-pollock fetch-corpus bench-corpus doctor clean
 
 all: doctor
 
@@ -17,7 +17,7 @@ check:
 	  exit 2; \
 	fi
 	@echo "全件検証: $(REASON)"
-	$(MAKE) fmt-check lint test conformance deny doc-check build
+	$(MAKE) fmt-check lint test conformance deny doc-check notices-check build
 
 ## ci — CI の必須 check。Git 規約・PR の検証記録・絶対パス・差分の空白だけを見る（QLT-005 / QLT-012・ADR 0021）。
 ## 手元でも同じ 1 行で走る（origin/main が要る）。
@@ -45,7 +45,7 @@ WINDOWS_EXCLUDE := --exclude nene-ledger-ui-x11 --exclude nene-ledger-adapters-x
 lint-windows:
 	$(CARGO) clippy --workspace $(WINDOWS_EXCLUDE) --all-targets --locked --target $(WINDOWS_TARGET) -- -D warnings
 
-## build-windows — Windows の exe を作る（mingw-w64 のリンカ）。🔴 当面は使わない（ROADMAP・Issue #7。exe を組み立てずに進める）。target/x86_64-pc-windows-gnu/release/nene-ledger.exe
+## build-windows — Windows の exe を作る（mingw-w64 のリンカ）。施主の実機で確かめる exe と、配る exe（ADR 0032）。target/x86_64-pc-windows-gnu/release/nene-ledger.exe
 build-windows:
 	$(CARGO) build --release --locked -p nene-ledger --target $(WINDOWS_TARGET)
 
@@ -55,6 +55,14 @@ test:
 ## conformance — このリポジトリ固有の規約検査（CNF-0xx / xtask）。
 conformance:
 	$(CARGO) run --quiet -p xtask --locked -- conformance
+
+## notices — 配る exe に入る外部クレートの著作権表示の一覧（THIRD-PARTY-NOTICES.txt）を Cargo.lock から作り直す（ADR 0032）。
+## notices-check — 一覧が Cargo.lock の依存と食い違えば落とす。依存を変えたら notices で作り直す。
+notices:
+	$(CARGO) run --quiet -p xtask --locked -- notices
+
+notices-check:
+	$(CARGO) run --quiet -p xtask --locked -- notices-check
 
 ## validate-git — GIT-001〜005。手元は origin/main..HEAD と管理しているファイル、CI は PR のメタデータも見る（ADR 0021）。
 validate-git:

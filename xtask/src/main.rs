@@ -10,6 +10,8 @@
 //! $ cargo run --quiet -p xtask -- commit-msg .git/COMMIT_EDITMSG
 //! $ cargo run --quiet -p xtask -- prove
 //! $ cargo run --quiet --release -p xtask -- bench-pollock <Pollock の置き場>
+//! $ cargo run --quiet -p xtask -- notices          # THIRD-PARTY-NOTICES.txt を作り直す
+//! $ cargo run --quiet -p xtask -- notices-check    # Cargo.lock と食い違えば落とす
 //! ```
 
 mod bench_pollock;
@@ -22,6 +24,7 @@ mod proof_case;
 mod prove;
 mod rule_id;
 mod source_file;
+mod third_party;
 mod violation;
 
 use std::env;
@@ -73,6 +76,8 @@ enum Task {
     CommitMessage(PathBuf),
     Prove,
     BenchPollock(PathBuf),
+    Notices,
+    NoticesCheck,
 }
 
 /// 引数から副命令を決める。
@@ -90,8 +95,10 @@ fn task_from(arguments: &[String]) -> Result<Task, String> {
             .get(2_usize)
             .map(|directory| Task::BenchPollock(PathBuf::from(directory)))
             .ok_or_else(|| "bench-pollock needs the Pollock directory".to_owned()),
+        "notices" => Ok(Task::Notices),
+        "notices-check" => Ok(Task::NoticesCheck),
         "conformance-help" | "help" | "--help" | "-h" => Err(
-            "usage: xtask [conformance|validate-git|commit-msg <file>|prove|bench-pollock <dir>]"
+            "usage: xtask [conformance|validate-git|commit-msg <file>|prove|bench-pollock <dir>|notices|notices-check]"
                 .to_owned(),
         ),
         other => Err(format!("unknown task `{other}`")),
@@ -173,6 +180,8 @@ fn execute(task: Task, root: &Path) -> Result<Vec<String>, String> {
             }
             bench_pollock::run(&pollock, &binary)
         }
+        Task::Notices => third_party::write(root),
+        Task::NoticesCheck => third_party::check(root),
     }
 }
 

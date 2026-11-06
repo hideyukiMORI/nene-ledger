@@ -931,6 +931,15 @@ PR の枝の exe（2026-11-06）:
 
 Windows の exe の `--version`（コマンドプロンプトに結んで書く）は実機でまだ。`THIRD-PARTY-NOTICES.txt` は配る zip に入れる（次の Issue）。
 
+## 84. 外部クレートの著作権表示の一覧（GitHub Issue #181・ADR 0032 の決定 6）
+
+`make notices` が `cargo tree --target x86_64-pc-windows-gnu -e normal -p nene-ledger` の 23 クレート（`encoding_rs` とその依存・`regex-automata`・`regex-syntax`・`windows` の 12 クレートと、手続きマクロの `syn`・`quote`・`proc-macro2`・`unicode-ident`）について、`Cargo.toml` のライセンスの式と配布元のファイルから `THIRD-PARTY-NOTICES.txt`（32,607 バイト）を作った。選べるものは MIT の本文、`encoding_rs` は `COPYRIGHT` と BSD-3-Clause（`LICENSE-WHATWG`）も、`unicode-ident` は Unicode-3.0 も載せる。23 の節のどれにも著作権の行がある（2026-11-06）。
+
+| 試したこと | 結果 |
+| --- | --- |
+| 一覧から 1 行（`==== simdutf8 …`）を消して `notices-check` | `ADR 0032: THIRD-PARTY-NOTICES.txt が Cargo.lock の依存と食い違う。…作り直す`・終了 1 |
+| `make notices` で作り直す | 消す前と 1 バイトも違わない（`cmp`）・`notices-check` が通る |
+
 ## 7. active の規則と、その証明
 
 CNF-009 は active の規則ごとに `| ID |` で始まる行がここにあることを要求する。
