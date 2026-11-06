@@ -62,6 +62,8 @@ pub enum CommandId {
     Copy,
     /// 書き換えを保存する（ADR 0026 の決定 6）。
     Save,
+    /// 名前を付けて保存する。
+    SaveAs,
     /// 1 手元に戻す（UNDO-01）。
     Undo,
     /// 戻した 1 手をやり直す。
@@ -86,7 +88,7 @@ pub enum CommandId {
 
 impl CommandId {
     /// すべての操作（何も打たないときの順）。
-    pub const ALL: [Self; 34] = [
+    pub const ALL: [Self; 35] = [
         Self::Top,
         Self::Bottom,
         Self::GoTo,
@@ -111,6 +113,7 @@ impl CommandId {
         Self::UnfreezeColumns,
         Self::Copy,
         Self::Save,
+        Self::SaveAs,
         Self::Undo,
         Self::Redo,
         Self::InsertRowsAbove,
@@ -154,7 +157,8 @@ impl CommandId {
             Self::FreezeColumns => "カーソルの列まで左に固定する",
             Self::UnfreezeColumns => "列の固定を外す",
             Self::Copy => "選んだ範囲をコピーする",
-            Self::Save => "直したセルを保存する",
+            Self::Save => "変えた所を保存する",
+            Self::SaveAs => "名前を付けて保存する",
             Self::Undo => "元に戻す",
             Self::Redo => "やり直す",
             Self::InsertRowsAbove => "上に行を足す",
@@ -195,7 +199,8 @@ impl CommandId {
             Self::FreezeColumns => "かーそるのれつまでひだりにこていする",
             Self::UnfreezeColumns => "れつのこていをはずす",
             Self::Copy => "えらんだはんいをこぴーする",
-            Self::Save => "なおしたせるをほぞんする",
+            Self::Save => "かえたところをほぞんする",
+            Self::SaveAs => "なまえをつけてほぞんする",
             Self::Undo => "もとにもどす",
             Self::Redo => "やりなおす",
             Self::InsertRowsAbove => "うえにぎょうをたす",
@@ -244,6 +249,7 @@ impl CommandId {
             Self::UnfreezeColumns => &["unfreeze", "unpin", "unlock columns"],
             Self::Copy => &["copy", "clipboard"],
             Self::Save => &["save", "write"],
+            Self::SaveAs => &["saveas", "save as", "export"],
             Self::Undo => &["undo"],
             Self::Redo => &["redo"],
             Self::InsertRowsAbove => &["insert row above", "add row", "new row"],
@@ -293,6 +299,7 @@ impl CommandId {
             Self::RemoveRows | Self::RemoveColumns => Some("Ctrl+Minus"),
             Self::Copy => Some("Ctrl+C"),
             Self::Save => Some("Ctrl+S"),
+            Self::SaveAs => Some("Ctrl+Shift+S"),
             Self::Undo => Some("Ctrl+Z"),
             Self::Redo => Some("Ctrl+Y / Ctrl+Shift+Z"),
         }
@@ -326,6 +333,7 @@ impl CommandId {
             | Self::UnfreezeColumns
             | Self::Copy
             | Self::Save
+            | Self::SaveAs
             | Self::Undo
             | Self::Redo
             | Self::InsertRowsAbove
@@ -372,6 +380,7 @@ impl CommandId {
             Self::UnfreezeColumns => Some(Intent::UnfreezeColumns),
             Self::Copy => Some(Intent::Copy),
             Self::Save => Some(Intent::Save),
+            Self::SaveAs => Some(Intent::SaveAs),
             Self::Undo => Some(Intent::Undo),
             Self::Redo => Some(Intent::Redo),
             Self::InsertRowsAbove => Some(Intent::InsertRows(RowPlace::Above)),

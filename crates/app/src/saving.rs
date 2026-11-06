@@ -10,6 +10,7 @@ use nene_ledger_application::replace_failure::ReplaceFailure;
 use nene_ledger_application::save_plan_failure::SavePlanFailure;
 use nene_ledger_application::save_planning::save_plan;
 use nene_ledger_application::save_problem::SaveProblem;
+use nene_ledger_application::save_target::SaveTarget;
 use nene_ledger_application::table_changes::TableChanges;
 use nene_ledger_core::cell_edits::CellEdits;
 use nene_ledger_core::column_order::ColumnOrder;
@@ -25,7 +26,7 @@ use nene_ledger_scan::sparse_index::SparseIndex;
 use nene_ledger_store::save_failure::SaveFailure;
 use nene_ledger_store::save_job::SaveJob;
 use nene_ledger_store::saving::{discard, save};
-use nene_ledger_store::stamping::stamp_of;
+use nene_ledger_store::stamping::{stamp_of, target_state};
 
 use crate::open_failure::OpenFailure;
 use crate::opening::guess_format;
@@ -96,16 +97,47 @@ pub(crate) fn start_saving(
     let Some(path) = reader.path() else {
         return Err(SavingFailure::Untitled);
     };
+    let opened = source_unchanged(reader)?.ok_or(SavingFailure::Untitled)?;
+    spawn_saving(changes, reader, (path, SaveTarget::Existing(opened)))
+}
+
+/// 名前を付けて保存（ADR 0028 の決定 5）を始める。保存先 `target` が既にあれば、今の印と比べてから置き換える
+/// （上書きは呼ぶ側が確かめてある：Windows は OS の画面、X11 はパレットの欄）。無ければ作る。元のファイルは変えない。
+pub(crate) fn start_saving_as(
+    changes: TableChanges<'_>,
+    reader: &Reader,
+    target: &Path,
+) -> Result<SaveJob, SavingFailure> {
+    let expected =
+        target_state(target).map_err(|kind| SavingFailure::Save(SaveFailure::Target(kind)))?;
+    let _opened = source_unchanged(reader)?;
+    spawn_saving(changes, reader, (target, expected))
+}
+
+/// 原本のファイルが、開く前に取った印のままか。原本の無い新しい表は `None`。計画は原本の今の中身を読むので、
+/// 外から変わっていれば計画より先に止める（行が無いと言うより正しい理由）。書く前と置き換えの直前にも store が確かめる
+/// （ADR 0025）。
+fn source_unchanged(reader: &Reader) -> Result<Option<FileStamp>, SavingFailure> {
+    let Some(path) = reader.path() else {
+        return Ok(None);
+    };
     let opened = reader
         .opened()
         .ok_or(SavingFailure::Save(SaveFailure::Target(
             std::io::ErrorKind::NotFound,
         )))?;
-    // 計画は原本の今の中身を読むので、外から変わっていれば計画より先に止める（行が無いと言うより正しい理由）。
-    // 書く前と置き換えの直前にも store が確かめる（ADR 0025）。
     if stamp_of(path).ok() != Some(opened) {
         return Err(SavingFailure::Save(SaveFailure::ChangedOutside));
     }
+    Ok(Some(opened))
+}
+
+/// 計画を作り、裏で `target` へ書く仕事を始める（`expected` は保存先の書く前の様子）。
+fn spawn_saving(
+    changes: TableChanges<'_>,
+    reader: &Reader,
+    (target, expected): (&Path, SaveTarget),
+) -> Result<SaveJob, SavingFailure> {
     let format = reader.format();
     let plan = {
         let mut lookup = reader.lookup();
@@ -123,13 +155,41 @@ pub(crate) fn start_saving(
     #[cfg(not(windows))]
     let replacing = nene_ledger_store::rename_replacing::RenameReplacing;
     SaveJob::spawn(
-        path.to_path_buf(),
-        (plan, format.encoding(), opened),
+        target.to_path_buf(),
+        (plan, format.encoding(), expected),
         (bytes, replacing),
         reader.wakeup(),
     )
     .map_err(SavingFailure::Save)
 }
+
+/// 名前を付けて保存の画面の初め（Windows）：今のファイルのフォルダと名前。新しい表はフォルダ無しと `無題.csv`。
+#[cfg(windows)]
+pub(crate) fn suggested_target(current: Option<&Path>) -> (Option<&Path>, String) {
+    let folder = current.and_then(Path::parent);
+    let name = current.and_then(Path::file_name).map_or_else(
+        || String::from(UNTITLED_FILE),
+        |name| name.to_string_lossy().into_owned(),
+    );
+    (folder, name)
+}
+
+/// 名前を付けて保存の欄の初め（X11）：今のファイルのフォルダの絶対の道筋と区切り。新しい表は今の作業のフォルダ。
+#[cfg(not(windows))]
+pub(crate) fn suggested_entry(current: Option<&Path>) -> String {
+    let folder = nene_ledger_store::locating::folder_of(current);
+    let mut entry = folder.to_string_lossy().into_owned();
+    if !entry.ends_with(std::path::MAIN_SEPARATOR) {
+        entry.push(std::path::MAIN_SEPARATOR);
+    }
+    if current.is_none() {
+        entry.push_str(UNTITLED_FILE);
+    }
+    entry
+}
+
+/// 新しい表を保存するときの、初めのファイルの名前。
+const UNTITLED_FILE: &str = "無題.csv";
 
 /// 保存できなかった理由のうち、状態の行で示すもの。
 pub(crate) fn problem_of(failure: &SavingFailure) -> SaveProblem {
@@ -220,7 +280,12 @@ fn save_with_os(
     let replacing = nene_ledger_adapters_windows::file_replacing::FileReplacing;
     #[cfg(not(windows))]
     let replacing = nene_ledger_store::rename_replacing::RenameReplacing;
-    save(path, (plan, format.encoding(), opened), bytes, &replacing)
+    save(
+        path,
+        (plan, format.encoding(), SaveTarget::Existing(opened)),
+        bytes,
+        &replacing,
+    )
 }
 
 #[cfg(test)]

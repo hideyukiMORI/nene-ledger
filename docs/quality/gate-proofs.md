@@ -725,6 +725,21 @@ PR の枝の debug の exe を `--new` で Xvfb に出し、`xdotool` のキー�
 
 保存の中身（BOM 付きの UTF-8・CRLF・カンマ・要るときだけ引用）は app のテスト `a_blank_table_is_planned_as_utf8_with_a_bom_crlf_and_commas` で見る。
 
+## 68. 名前を付けて保存（GitHub Issue #111・ADR 0028 の決定 4・5）— 仮想の X サーバでの確認（QLT-013）
+
+PR の枝の debug の exe を Xvfb に出し、`xdotool` のキーを送った（2026-11-06）。保存したファイルは `od -c` で見た。
+
+| # | 操作 | 見え・結果 |
+| --- | --- | --- |
+| 1 | `--new` → `id` Tab `0012` Tab `a,b` Enter → Ctrl+S | パレットの欄が開き、初めの値は作業のフォルダ ＋ `無題.csv`。案内 `Enter で、この道筋に名前を付けて保存する（方言と文字コードは今のまま）` |
+| 2 | Enter | 題名が `無題.csv — NeNe Ledger`（`●` 無し）・`保存しました`・状態の行の改行は `CRLF`。ファイルは `EF BB BF` `id,0012,"a,b"\r\n` |
+| 3 | `rows.csv`（`id,name` ＋ 2 行・CRLF）で `Z` Enter → Ctrl+Shift+S → `other.csv`（既にある）Enter | 欄の下に `このファイルは既にあります。Enter をもう一度で上書き・Esc でやめる`（強調の色） |
+| 4 | Enter | 題名が `other.csv — NeNe Ledger`。`other.csv` は `id,name\r\nZ,Sato\r\n2,Kato\r\n`。🔴 `rows.csv` は元のまま（`1,Sato`） |
+| 5 | 深いフォルダの道筋 | 欄は頭を `…` で略し、ファイルの名前の側を見せる |
+| 6 | 欄で Esc | 何も書かない（ファイルは増えない）・題名の `●` は残る |
+
+🔴 **正直に:** Windows の OS の保存の画面（`GetSaveFileNameW`・`OFN_OVERWRITEPROMPT`）は `make lint-windows` で組み立てを確かめただけで、実機ではまだ開いていない（QLT-013）。
+
 ## 7. active の規則と、その証明
 
 CNF-009 は active の規則ごとに `| ID |` で始まる行がここにあることを要求する。

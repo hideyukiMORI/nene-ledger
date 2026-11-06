@@ -109,33 +109,23 @@ impl<'state> PalettePainter<'state> {
         let left = field.origin().x().saturating_add(self.px(TEXT_INSET));
         let query = self.palette.query();
         if query.is_empty() {
-            let placeholder = match self.palette.mode() {
-                PaletteMode::Commands => "操作の名前を英字かローマ字で（例: theme, haishoku）",
-                PaletteMode::GoTo => "行の番号（例: 1200、列も選ぶなら 1200,3）",
-                PaletteMode::Keys => "キーか操作の名前で絞る（例: ctrl, shift, kopi-）",
-                PaletteMode::Themes { .. } => "配色の名前を英字で（例: solarized）",
-                PaletteMode::Reading {
-                    aspect: ReadingAspect::Delimiter,
-                    ..
-                } => "英字で絞るか、区切りの字を 1 つ打つ（例: tab, #）",
-                PaletteMode::Reading { .. } => "英字で絞る（例: sjis, tab）",
-                PaletteMode::Candidates { .. } => {
-                    "英字で絞る（例: tab, comma）。上から判別の点数の順"
-                }
-            };
             self.text_at(
                 from_left(field, left),
-                String::from(placeholder),
+                String::from(placeholder(self.palette.mode())),
                 self.colors.gutter_text(),
             );
-        } else {
-            self.text_at(
-                from_left(field, left),
-                String::from(query),
-                self.colors.text(),
-            );
         }
-        let caret_x = left.saturating_add(self.width_of(query));
+        // 欄より長い文字列（深いフォルダの道筋など）は、打っている後ろの側を見せる（頭は … で略す）。
+        let room = field
+            .size()
+            .width()
+            .saturating_sub(self.px(TEXT_INSET).saturating_mul(2))
+            .saturating_sub(self.px(2));
+        let shown = self.tail_within(query, room);
+        if !query.is_empty() {
+            self.text_at(from_left(field, left), shown.clone(), self.colors.text());
+        }
+        let caret_x = left.saturating_add(self.width_of(&shown));
         let caret_top = field.origin().y().saturating_add(
             field
                 .size()
@@ -160,7 +150,7 @@ impl<'state> PalettePainter<'state> {
     /// 段の候補の全部の数（検索欄の右端の「該当 / 全部」）。飛ぶ先の段は数を出さない。
     fn total(&self) -> Option<usize> {
         match self.palette.mode() {
-            PaletteMode::GoTo => None,
+            PaletteMode::GoTo | PaletteMode::SaveAs { .. } => None,
             PaletteMode::Commands => Some(CommandId::ALL.len()),
             PaletteMode::Keys => Some(key_list("").len()),
             PaletteMode::Themes { .. } => Some(COUNT),
@@ -203,8 +193,12 @@ impl<'state> PalettePainter<'state> {
             self.go_to_line();
             return;
         }
+        if let PaletteMode::SaveAs { overwrite } = self.palette.mode() {
+            self.save_as_line(overwrite);
+            return;
+        }
         let kind = match self.palette.mode() {
-            PaletteMode::GoTo | PaletteMode::Commands => "操作",
+            PaletteMode::GoTo | PaletteMode::Commands | PaletteMode::SaveAs { .. } => "操作",
             PaletteMode::Keys => "キー",
             PaletteMode::Themes { .. } => "配色",
             PaletteMode::Reading { aspect, .. } => aspect.noun(),
@@ -229,6 +223,23 @@ impl<'state> PalettePainter<'state> {
         let row = self.layout.row(0);
         let left = row.origin().x().saturating_add(self.px(TEXT_INSET));
         self.text_at(from_left(row, left), text, self.colors.gutter_text());
+    }
+
+    /// 保存先の段の 1 行。上書きを尋ねていればその問い、そうでなければ Enter で保存する案内（ADR 0028 の決定 5）。
+    fn save_as_line(&mut self, overwrite: bool) {
+        let text = if overwrite {
+            String::from("このファイルは既にあります。Enter をもう一度で上書き・Esc でやめる")
+        } else {
+            String::from("Enter で、この道筋に名前を付けて保存する（方言と文字コードは今のまま）")
+        };
+        let row = self.layout.row(0);
+        let left = row.origin().x().saturating_add(self.px(TEXT_INSET));
+        let color = if overwrite {
+            self.colors.cursor()
+        } else {
+            self.colors.gutter_text()
+        };
+        self.text_at(from_left(row, left), text, color);
     }
 
     /// 候補の 1 行。選んでいれば選択の色で塗り、左に強調の色の帯（色だけに頼らない）。
@@ -302,6 +313,7 @@ impl<'state> PalettePainter<'state> {
             PaletteMode::Commands
             | PaletteMode::GoTo
             | PaletteMode::Keys
+            | PaletteMode::SaveAs { .. }
             | PaletteMode::Themes { .. } => false,
         }
     }
@@ -352,6 +364,28 @@ impl<'state> PalettePainter<'state> {
     }
 
     /// `text` の幅の近似（半角 1・全角 2 の字数 × 半角の幅）。
+    /// `text` が幅 `room` に収まればそのまま、収まらなければ頭を `…` にして後ろの側を収める。
+    fn tail_within(&self, text: &str, room: u32) -> String {
+        if self.width_of(text) <= room {
+            return String::from(text);
+        }
+        let budget = room.saturating_sub(self.width_of("…"));
+        let mut kept: Vec<char> = Vec::new();
+        let mut used = 0_u32;
+        for character in text.chars().rev() {
+            let mut one = [0_u8; 4];
+            let next = used.saturating_add(self.width_of(character.encode_utf8(&mut one)));
+            if next > budget {
+                break;
+            }
+            used = next;
+            kept.push(character);
+        }
+        core::iter::once('…')
+            .chain(kept.into_iter().rev())
+            .collect()
+    }
+
     fn width_of(&self, text: &str) -> u32 {
         display_columns(text).saturating_mul(self.metrics.half_width())
     }
@@ -419,6 +453,23 @@ fn bottom(rect: PixelRect) -> u32 {
     rect.origin().y().saturating_add(rect.size().height())
 }
 
+/// 段 `mode` の欄が空のときの案内。
+fn placeholder(mode: PaletteMode) -> &'static str {
+    match mode {
+        PaletteMode::Commands => "操作の名前を英字かローマ字で（例: theme, haishoku）",
+        PaletteMode::GoTo => "行の番号（例: 1200、列も選ぶなら 1200,3）",
+        PaletteMode::SaveAs { .. } => "保存先のファイルの道筋（例: /srv/data/表.csv）",
+        PaletteMode::Keys => "キーか操作の名前で絞る（例: ctrl, shift, kopi-）",
+        PaletteMode::Themes { .. } => "配色の名前を英字で（例: solarized）",
+        PaletteMode::Reading {
+            aspect: ReadingAspect::Delimiter,
+            ..
+        } => "英字で絞るか、区切りの字を 1 つ打つ（例: tab, #）",
+        PaletteMode::Reading { .. } => "英字で絞る（例: sjis, tab）",
+        PaletteMode::Candidates { .. } => "英字で絞る（例: tab, comma）。上から判別の点数の順",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -469,7 +520,7 @@ mod tests {
         let commands = palette.paint(view(), colors(), DetailPane::Open);
         let shown = texts(&commands);
         assert!(shown.contains(&"操作の名前を英字かローマ字で（例: theme, haishoku）"));
-        assert!(shown.contains(&"34 / 34"));
+        assert!(shown.contains(&"35 / 35"));
         assert!(shown.contains(&"詳細ペインを閉じる") && shown.contains(&"Ctrl+Shift+U"));
         assert!(shown.contains(&"文字を大きくする") && shown.contains(&"Ctrl+0"));
         // 選んでいる最初の行は選択の色で塗り、左に強調の色の 3px の帯。
@@ -520,7 +571,7 @@ mod tests {
         let commands = palette.paint(view(), colors(), DetailPane::Closed);
         let shown = texts(&commands);
         assert!(shown.contains(&"“xyz” に合う操作は無い"));
-        assert!(shown.contains(&"0 / 34") && shown.contains(&"xyz"));
+        assert!(shown.contains(&"0 / 35") && shown.contains(&"xyz"));
         assert!(fills(&commands, colors().selection()).is_empty());
     }
 
@@ -603,5 +654,27 @@ mod tests {
         assert!(!fills(&commands, seed.accent()).is_empty());
         let panel = PaletteLayout::new(view(), &palette).panel();
         assert!(fills(&commands, frozen.gutter()).contains(&panel));
+    }
+
+    /// 欄より長い道筋は、頭を … で略して後ろ（ファイルの名前）を見せる（ADR 0028 の決定 4・X11 の欄）。
+    #[test]
+    fn a_long_save_as_path_shows_its_tail() {
+        let deep = format!("/srv/data/{}/表.csv", "folder/".repeat(30));
+        let palette = CommandPalette::open_save_as(deep.clone());
+        let commands = palette.paint(view(), colors(), DetailPane::Closed);
+        let shown = texts(&commands);
+        let field = shown
+            .iter()
+            .find(|text| text.ends_with("表.csv"))
+            .expect("the file name is shown");
+        assert!(field.starts_with('…'));
+        assert!(field.chars().count() < deep.chars().count());
+        assert!(
+            shown.contains(
+                &"Enter で、この道筋に名前を付けて保存する（方言と文字コードは今のまま）"
+            )
+        );
+        let short = CommandPalette::open_save_as(String::from("/tmp/a.csv"));
+        assert!(texts(&short.paint(view(), colors(), DetailPane::Closed)).contains(&"/tmp/a.csv"));
     }
 }

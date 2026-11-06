@@ -54,10 +54,12 @@
 
 ## 強制
 
-- **planned（実装の Issue で active にする）**:
-  - 新しい表を保存すると、BOM 付きの UTF-8・CRLF・カンマで、足した行と列が方言どおりに書かれる（store のテスト）
-  - 名前を付けて保存は、元のファイルのバイト列を変えない（store のテスト）
-  - 上書きの確認を出さずに、既にあるファイルを置き換えない（application のテスト）
+- **active**（GitHub Issue #109・#111 で入れた）:
+  - 新しい表を保存すると、BOM 付きの UTF-8・CRLF・カンマで、足した行と列が方言どおりに書かれる（app のテスト `a_blank_table_is_planned_as_utf8_with_a_bom_crlf_and_commas`。原本を BOM だけの 3 バイトにしたので、保存の計画が BOM を写す）
+  - 名前を付けて保存は、元のファイルのバイト列を変えない（store のテスト `saving_as_a_new_file_creates_it_and_leaves_the_original_alone`）
+  - 上書きの確認を出さずに、既にあるファイルを置き換えない（application のテスト `saving_as_needs_a_second_enter_to_overwrite`・store のテスト `saving_as_a_new_file_refuses_a_file_that_appeared`。Windows は OS の画面の `OFN_OVERWRITEPROMPT` が尋ねる）
+- **planned**:
+  - Ctrl+N とパレットの「新しい表を作る」で自分の exe を `--new` で起こし直す（決定 1。今は `--new` を付けて起動する）
 - **不能（レビュー事項）**:
   - プロセスを起こす経路が adapters の外に無いか（ARC-007・CNF-012 で見られるかは実装の Issue で確かめる）
 

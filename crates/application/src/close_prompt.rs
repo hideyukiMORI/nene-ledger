@@ -16,7 +16,7 @@ use crate::close_choice::CloseChoice;
 use crate::window_view::WindowView;
 
 /// 問いの文言。
-const QUESTION: &str = "直したセルが保存されていません。閉じる前に保存しますか？";
+const QUESTION: &str = "変えた所が保存されていません。閉じる前に保存しますか？";
 /// 箱の内側の余白（論理の画素）。
 const PADDING: u32 = 16;
 /// ボタンの間（論理の画素）。

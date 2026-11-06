@@ -47,6 +47,25 @@ impl CommandPalette {
         }
     }
 
+    /// 名前を付けて保存の保存先を打つ段で開く（X11・ADR 0028 の決定 4）。初めの道筋は `initial`（今のファイルのフォルダ）。
+    #[must_use]
+    pub fn open_save_as(initial: String) -> Self {
+        Self {
+            mode: PaletteMode::SaveAs { overwrite: false },
+            query: initial,
+            selected: 0,
+            candidates: Vec::new(),
+        }
+    }
+
+    /// 打った道筋のファイルが既にあるので、上書きしてよいかを尋ねる（もう一度 Enter で上書き・ADR 0028 の決定 5）。
+    /// 道筋を打ち直せば尋ねるのをやめる。
+    pub fn ask_overwrite(&mut self) {
+        if let PaletteMode::SaveAs { .. } = self.mode {
+            self.mode = PaletteMode::SaveAs { overwrite: true };
+        }
+    }
+
     /// 操作の一覧を、何も打たずに開く。
     #[must_use]
     pub fn open() -> Self {
@@ -76,7 +95,8 @@ impl CommandPalette {
         match self.mode {
             PaletteMode::Commands => commands(&self.query),
             // 飛ぶ先は候補ではなく、打った番号そのもの。
-            PaletteMode::GoTo => Vec::new(),
+            // 飛ぶ先と保存先は候補ではなく、打った文字列そのもの。
+            PaletteMode::GoTo | PaletteMode::SaveAs { .. } => Vec::new(),
             PaletteMode::Keys => key_list(&self.query),
             PaletteMode::Themes { .. } => themes(&self.query),
             PaletteMode::Reading { aspect, .. } => readings(aspect, &self.query),
@@ -103,10 +123,12 @@ impl CommandPalette {
         match intent {
             Intent::Type(character) => {
                 self.query.push(character);
+                self.stop_asking();
                 self.retarget(0)
             }
             Intent::Erase => {
                 self.query.pop();
+                self.stop_asking();
                 self.retarget(0)
             }
             Intent::Move { step, .. } => self.step(step),
@@ -114,16 +136,17 @@ impl CommandPalette {
                 .map_or(PaletteOutcome::Stay, |target| {
                     PaletteOutcome::Run(Intent::GoTo(target))
                 }),
-            Intent::Confirm => self.confirm(current_theme),
-            Intent::Cancel | Intent::OpenPalette | Intent::OpenGoTo => match self.mode {
-                PaletteMode::Commands | PaletteMode::GoTo | PaletteMode::Keys => {
-                    PaletteOutcome::Close
-                }
-                PaletteMode::Themes { original } => PaletteOutcome::Revert(original),
-                PaletteMode::Reading { .. } | PaletteMode::Candidates { .. } => {
-                    PaletteOutcome::RevertReading
-                }
+            Intent::Confirm => match self.mode {
+                PaletteMode::SaveAs { .. } if self.query.trim().is_empty() => PaletteOutcome::Stay,
+                PaletteMode::SaveAs { overwrite } => PaletteOutcome::SaveAs { overwrite },
+                PaletteMode::Commands
+                | PaletteMode::GoTo
+                | PaletteMode::Keys
+                | PaletteMode::Reading { .. }
+                | PaletteMode::Candidates { .. }
+                | PaletteMode::Themes { .. } => self.confirm(current_theme),
             },
+            Intent::Cancel | Intent::OpenPalette | Intent::OpenGoTo => self.cancelled(),
             Intent::Scroll(_)
             | Intent::Point { .. }
             | Intent::Drag { .. }
@@ -146,6 +169,7 @@ impl CommandPalette {
             | Intent::BreakLine
             | Intent::Advance(_)
             | Intent::Save
+            | Intent::SaveAs
             | Intent::Undo
             | Intent::Redo
             | Intent::InsertRows(_)
@@ -218,6 +242,27 @@ impl CommandPalette {
                 PaletteOutcome::PreviewReading(ReadingChoice::dialect(candidate.dialect()))
             }
             Some(&PaletteItem::Command(_) | &PaletteItem::Key(_)) | None => PaletteOutcome::Stay,
+        }
+    }
+
+    /// Esc（とパレットを開くキー）。試していれば元に戻して閉じる。
+    fn cancelled(&self) -> PaletteOutcome {
+        match self.mode {
+            PaletteMode::Commands
+            | PaletteMode::GoTo
+            | PaletteMode::Keys
+            | PaletteMode::SaveAs { .. } => PaletteOutcome::Close,
+            PaletteMode::Themes { original } => PaletteOutcome::Revert(original),
+            PaletteMode::Reading { .. } | PaletteMode::Candidates { .. } => {
+                PaletteOutcome::RevertReading
+            }
+        }
+    }
+
+    /// 道筋を打ち直したので、上書きを尋ねるのをやめる。
+    fn stop_asking(&mut self) {
+        if let PaletteMode::SaveAs { overwrite: true } = self.mode {
+            self.mode = PaletteMode::SaveAs { overwrite: false };
         }
     }
 
@@ -563,5 +608,45 @@ mod tests {
             PaletteOutcome::Run(Intent::GoTo(GoToTarget::parse("12,2").unwrap()))
         );
         assert_eq!(palette.handle(Intent::Cancel, 0), PaletteOutcome::Close);
+    }
+
+    /// 名前を付けて保存の欄は、既にあるファイルなら一度尋ね、もう一度 Enter を受けるまで上書きの結果を出さない。
+    /// 道筋を打ち直せば尋ねるのをやめる（ADR 0028 の決定 5・強制の 3 つ目）。
+    #[test]
+    fn saving_as_needs_a_second_enter_to_overwrite() {
+        let mut palette = CommandPalette::open_save_as(String::from("/tmp/"));
+        assert_eq!(palette.query(), "/tmp/");
+        for character in "a.csv".chars() {
+            palette.handle(Intent::Type(character), 0);
+        }
+        assert_eq!(
+            palette.handle(Intent::Confirm, 0),
+            PaletteOutcome::SaveAs { overwrite: false }
+        );
+        // 合成ルートがファイルを見つけて尋ねる。
+        palette.ask_overwrite();
+        assert_eq!(palette.mode(), PaletteMode::SaveAs { overwrite: true });
+        assert_eq!(
+            palette.handle(Intent::Confirm, 0),
+            PaletteOutcome::SaveAs { overwrite: true }
+        );
+        // 打ち直すと、もう一度確かめる。
+        palette.handle(Intent::Erase, 0);
+        assert_eq!(palette.mode(), PaletteMode::SaveAs { overwrite: false });
+        assert_eq!(
+            palette.handle(Intent::Confirm, 0),
+            PaletteOutcome::SaveAs { overwrite: false }
+        );
+        assert_eq!(palette.handle(Intent::Cancel, 0), PaletteOutcome::Close);
+    }
+
+    /// 空の欄では何もしない。ほかの段で尋ねる印は付かない。
+    #[test]
+    fn saving_as_ignores_an_empty_path_and_other_modes_never_ask() {
+        let mut empty = CommandPalette::open_save_as(String::from("  "));
+        assert_eq!(empty.handle(Intent::Confirm, 0), PaletteOutcome::Stay);
+        let mut commands = CommandPalette::open();
+        commands.ask_overwrite();
+        assert_eq!(commands.mode(), PaletteMode::Commands);
     }
 }

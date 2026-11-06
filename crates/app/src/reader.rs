@@ -6,6 +6,7 @@ use std::sync::Arc;
 use nene_ledger_application::file_stamp::FileStamp;
 use nene_ledger_application::wakeup::Wakeup;
 use nene_ledger_core::dialect_candidate::DialectCandidate;
+use nene_ledger_core::line_ending_counts::LineEndingCounts;
 use nene_ledger_core::text_encoding::TextEncoding;
 use nene_ledger_core::text_format::TextFormat;
 use nene_ledger_scan::block_size::BlockSize;
@@ -74,6 +75,11 @@ impl Reader {
         self.path.as_deref()
     }
 
+    /// 名前を付けて保存した先 `path` を、これからの原本の道筋にする（次の [`Self::reopen_saved`] で開く・ADR 0028 の決定 5）。
+    pub(crate) fn retarget(&mut self, path: PathBuf) {
+        self.path = Some(path);
+    }
+
     /// 窓を起こす口（裏の仕事に渡す）。
     pub(crate) fn wakeup(&self) -> Arc<dyn Wakeup> {
         Arc::clone(&self.wakeup)
@@ -114,6 +120,13 @@ impl Reader {
         self.index = SparseIndex::empty();
         self.opened = opened;
         Ok(job)
+    }
+
+    /// 原本の先頭の標本から数えた改行の内訳（名前を付けて保存して開き直した後に数え直す・ADR 0028）。読めなければ `None`。
+    pub(crate) fn line_endings(&self) -> Option<LineEndingCounts> {
+        crate::opening::guess_format(&self.source)
+            .ok()
+            .map(crate::guessed::Guessed::line_endings)
     }
 
     /// 読み方。

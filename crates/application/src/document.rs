@@ -91,6 +91,7 @@ use nene_ledger_core::draw_command::DrawCommand;
 use nene_ledger_core::frame::Frame;
 use nene_ledger_core::glyph_metrics::GlyphMetrics;
 use nene_ledger_core::line_ending::LineEnding;
+use nene_ledger_core::line_ending_counts::LineEndingCounts;
 use nene_ledger_core::order_run::OrderRun;
 use nene_ledger_core::palette::Palette;
 use nene_ledger_core::pixel_point::PixelPoint;
@@ -152,6 +153,8 @@ pub struct Document {
     /// 開いた直後（保存した直後）の行と列の並び。ふだんは原本のまま、新しい表は足した 1 行と 3 列
     /// （未保存かの基準・ADR 0028 の決定 2）。
     baseline: (Vec<OrderRun>, Vec<OrderRun>),
+    /// 原本のファイルが無い新しい表か（Ctrl+S が名前を付けて保存になる・ADR 0028 の決定 4）。
+    untitled: bool,
 }
 
 /// 状態の行の右端に出すパレットの案内。
@@ -250,6 +253,7 @@ impl Document {
                 RowOrder::whole().runs().to_vec(),
                 ColumnOrder::whole().runs().to_vec(),
             ),
+            untitled: false,
         }
     }
 
@@ -265,6 +269,7 @@ impl Document {
             document.rows.runs().to_vec(),
             document.columns.runs().to_vec(),
         );
+        document.untitled = true;
         document
     }
 
@@ -369,6 +374,7 @@ impl Document {
             | Intent::BreakLine
             | Intent::Advance(_)
             | Intent::Save
+            | Intent::SaveAs
             | Intent::Undo
             | Intent::Redo
             | Intent::InsertRows(_)
@@ -397,6 +403,8 @@ impl Document {
                 if self.saving {
                     // 今の保存が終われば閉じる。
                     DocumentEffect::Stay
+                } else if self.untitled {
+                    DocumentEffect::SaveAs
                 } else {
                     DocumentEffect::Save
                 }
@@ -449,6 +457,29 @@ impl Document {
         }
     }
 
+    /// 名前を付けて保存して、保存先のファイルを同じ読み方で開き直した。題名を `title` に替え、窓は保存先を指す
+    /// （ADR 0028 の決定 5）。後は [`Self::saved`] と同じ。
+    /// 改行の内訳は保存先の先頭から数え直した `line_endings`（新しい表は、書くまで改行が無い）。
+    pub fn saved_as(&mut self, title: String, line_endings: LineEndingCounts) -> DocumentEffect {
+        self.title = title;
+        self.format = FormatSummary::new(self.format.format(), line_endings);
+        self.untitled = false;
+        self.saved()
+    }
+
+    /// 名前を付けて保存の保存先を選ばずにやめた。保存して閉じると選んでいたなら、閉じずに戻る。
+    pub fn save_as_cancelled(&mut self) {
+        if self.closing == CloseState::AfterSave && !self.saving {
+            self.closing = CloseState::Open;
+        }
+    }
+
+    /// 原本のファイルが無い新しい表か。
+    #[must_use]
+    pub const fn is_untitled(&self) -> bool {
+        self.untitled
+    }
+
     /// 保存できなかった。書き換えは残す。
     pub fn save_failed(&mut self, problem: SaveProblem) {
         self.saving = false;
@@ -462,6 +493,9 @@ impl Document {
     /// Ctrl+S。編集中なら確定してから、書き換えがあれば保存させる。
     fn save_request(&mut self) -> DocumentEffect {
         self.commit_edit();
+        if self.untitled {
+            return DocumentEffect::SaveAs;
+        }
         if !self.has_unsaved() {
             self.notice = Some(Notice::NothingToSave);
             return DocumentEffect::Stay;
@@ -641,6 +675,7 @@ impl Document {
                     | Intent::Delete
                     | Intent::BreakLine
                     | Intent::Save
+                    | Intent::SaveAs
                     | Intent::Undo
                     | Intent::Redo
                     | Intent::InsertRows(_)
@@ -656,6 +691,10 @@ impl Document {
         }
         if intent == Intent::Save {
             return self.save_request();
+        }
+        if intent == Intent::SaveAs {
+            self.commit_edit();
+            return DocumentEffect::SaveAs;
         }
         if let Intent::Undo | Intent::Redo = intent {
             return self.undo_or_redo(intent == Intent::Redo, window);
@@ -694,6 +733,7 @@ impl Document {
             | Intent::BreakLine
             | Intent::Advance(_)
             | Intent::Save
+            | Intent::SaveAs
             | Intent::Undo
             | Intent::Redo
             | Intent::InsertRows(_)
@@ -781,6 +821,7 @@ impl Document {
             | Intent::BreakLine
             | Intent::Advance(_)
             | Intent::Save
+            | Intent::SaveAs
             | Intent::Undo
             | Intent::Redo
             | Intent::InsertRows(_)
@@ -815,6 +856,7 @@ impl Document {
             Intent::Advance(step) => return Some(self.committed_move(step)),
             // 別のセル・別の行への移動と、表の並びを変える操作は、確定してから（保存と元に戻すは `apply` が先に受ける）。
             Intent::Save
+            | Intent::SaveAs
             | Intent::Undo
             | Intent::Redo
             | Intent::InsertRows(_)
@@ -859,14 +901,19 @@ impl Document {
 
     /// 編集していないときの編集の意図。打ち始め・F2 で編集に入り、Delete でカーソルのセルを空にする。
     /// Enter・Tab などは動くだけ。
+    /// 打った字 `character` で入力を始める（セルの値を打った字で置き換える）。
+    fn type_into_new_edit(&mut self, character: char) {
+        if self.begin_edit(EditMode::Entering)
+            && let Some(editor) = self.editor.as_mut()
+        {
+            editor.type_character(character);
+        }
+    }
+
     fn start_edit(&mut self, intent: Intent) -> Option<Intent> {
         match intent {
             Intent::Type(character) => {
-                if self.begin_edit(EditMode::Entering)
-                    && let Some(editor) = self.editor.as_mut()
-                {
-                    editor.type_character(character);
-                }
+                self.type_into_new_edit(character);
                 None
             }
             Intent::Edit => {
@@ -912,6 +959,7 @@ impl Document {
             | Intent::Erase
             | Intent::Cancel
             | Intent::Save
+            | Intent::SaveAs
             | Intent::Undo
             | Intent::Redo
             | Intent::InsertRows(_)
@@ -1441,6 +1489,7 @@ impl Document {
             | Intent::BreakLine
             | Intent::Advance(_)
             | Intent::Save
+            | Intent::SaveAs
             | Intent::Undo
             | Intent::Redo
             | Intent::InsertRows(_)
@@ -1648,6 +1697,7 @@ impl Document {
             | Intent::BreakLine
             | Intent::Advance(_)
             | Intent::Save
+            | Intent::SaveAs
             | Intent::Undo
             | Intent::Redo
             | Intent::InsertRows(_)
@@ -2186,7 +2236,8 @@ impl Document {
             DocumentEffect::Stay
             | DocumentEffect::Copy { .. }
             | DocumentEffect::StopTotals
-            | DocumentEffect::Save => current,
+            | DocumentEffect::Save
+            | DocumentEffect::SaveAs => current,
         };
         self.extend_to(at, first, window);
         effect
@@ -6219,5 +6270,55 @@ mod tests {
         assert!(wider.has_unsaved());
         wider.apply(Intent::Undo, normal());
         assert!(!wider.has_unsaved());
+    }
+
+    /// 新しい表の Ctrl+S と、どの表でも Ctrl+Shift+S は名前を付けて保存。保存して閉じるを選んで保存先を選ばずにやめれば
+    /// 閉じない。名前を付けて保存した後は題名が替わり、Ctrl+S は普通の保存（ADR 0028 の決定 4・5）。
+    #[test]
+    fn untitled_tables_save_as_and_take_the_new_name() {
+        let mut document = closed(Document::blank(String::from("無題"), summary()));
+        reread(&mut document, &[]);
+        assert!(document.is_untitled());
+        assert_eq!(
+            document.apply(Intent::Save, normal()),
+            DocumentEffect::SaveAs
+        );
+        typed(&mut document, "x");
+        assert!(!document.ask_close());
+        let effect = document.apply(Intent::Type('s'), normal());
+        assert_eq!(effect, DocumentEffect::SaveAs);
+        assert_eq!(document.close_state(), CloseState::AfterSave);
+        document.save_as_cancelled();
+        assert_eq!(document.close_state(), CloseState::Open);
+    }
+
+    /// 名前を付けて保存した後は題名と改行の内訳が替わり、Ctrl+S は普通の保存（ADR 0028 の決定 5）。
+    #[test]
+    fn saving_as_takes_the_new_name_and_line_endings() {
+        let mut document = closed(Document::blank(String::from("無題"), summary()));
+        reread(&mut document, &[]);
+        typed(&mut document, "x");
+        assert_eq!(
+            document.apply(Intent::SaveAs, normal()),
+            DocumentEffect::SaveAs
+        );
+        document.begin_saving();
+        let crlf = LineEndingCounts::tally([LineEnding::CrLf].into_iter());
+        let _reread = document.saved_as(String::from("a.csv — NeNe Ledger"), crlf);
+        assert_eq!(
+            document.format_summary().line_endings().dominant(),
+            Some(LineEnding::CrLf)
+        );
+        assert!(!document.is_untitled());
+        assert!(!document.has_unsaved());
+        assert_eq!(document.title(), "a.csv — NeNe Ledger");
+        typed(&mut document, "y");
+        assert_eq!(document.apply(Intent::Save, normal()), DocumentEffect::Save);
+        // ファイルのある表でも Ctrl+Shift+S は名前を付けて保存（変えていなくても写しを書ける）。
+        let mut opened = editable();
+        assert_eq!(
+            opened.apply(Intent::SaveAs, normal()),
+            DocumentEffect::SaveAs
+        );
     }
 }

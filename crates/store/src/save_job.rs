@@ -7,8 +7,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::thread::{Builder, JoinHandle};
 
-use nene_ledger_application::file_stamp::FileStamp;
 use nene_ledger_application::replacing::Replacing;
+use nene_ledger_application::save_target::SaveTarget;
 use nene_ledger_application::source_bytes::SourceBytes;
 use nene_ledger_application::wakeup::Wakeup;
 use nene_ledger_core::save_plan::SavePlan;
@@ -31,7 +31,8 @@ pub struct SaveJob {
 }
 
 impl SaveJob {
-    /// `target` へ、計画 `plan` を文字コード `encoding` で書き、開く前に取った印 `opened` と比べてから置き換える仕事を始める。
+    /// `target` へ、計画 `plan` を文字コード `encoding` で書き、保存先が書く前の様子 `expected` のままか確かめてから
+    /// 置き換える（まだ無ければ作る）仕事を始める。
     /// 原本は `source` で読み、置き換えは `replacing`。終わったら `wakeup` で窓を起こす。
     ///
     /// # Errors
@@ -39,7 +40,7 @@ impl SaveJob {
     /// スレッドを作れないとき（`SaveFailure::Spawn`）。
     pub fn spawn<S, R>(
         target: PathBuf,
-        (plan, encoding, opened): (SavePlan, TextEncoding, FileStamp),
+        (plan, encoding, expected): (SavePlan, TextEncoding, SaveTarget),
         (mut source, replacing): (S, R),
         wakeup: Arc<dyn Wakeup>,
     ) -> Result<Self, SaveFailure>
@@ -50,7 +51,12 @@ impl SaveJob {
         let worker = Builder::new()
             .name(String::from(THREAD_NAME))
             .spawn(move || {
-                let outcome = save(&target, (&plan, encoding, opened), &mut source, &replacing);
+                let outcome = save(
+                    &target,
+                    (&plan, encoding, expected),
+                    &mut source,
+                    &replacing,
+                );
                 wakeup.wake();
                 outcome
             })
