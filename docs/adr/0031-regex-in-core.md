@@ -1,7 +1,7 @@
 # ADR 0031 — 正規表現の照合は core に置き、`regex-automata`（`no_std`）を使う（ADR 0030 の決定 5 を直す）
 
-- 状態: 提案
-- 日付: 2026-11-06
+- 状態: 受理
+- 日付: 2026-11-06（受理 2026-11-06）
 - Issue: #169（GitHub）
 - 影響する規則: FR-008 / FIND-03 / ARC-001 / ARC-003 / ARC-013 / CNF-007 / CNF-013 / SEC-04 / ADR 0008 / ADR 0030
 
@@ -30,7 +30,7 @@ ADR 0030 の決定 5 は「`regex` クレートを scan に入れる」と決め
 
 - `#![no_std]` ＋ `extern crate alloc` のライブラリから `meta::Regex::new` と `is_match` を呼んで、組み立てが通ることを確かめた
 
-## 決定（提案）
+## 決定
 
 ### 1. 照合の規則は core の 1 か所のまま、正規表現も `FindQuery` が持つ
 
@@ -51,7 +51,7 @@ ADR 0030 の決定 5 は「`regex` クレートを scan に入れる」と決め
 
 - 原本の行の ASCII の速い道（`rules_out_ascii`）は、正規表現では使わない（式の字の並びがレコードに無いとは言えない）。1 GB の時間は導入の Issue で測って benchmarks に残す
 
-## 強制（提案）
+## 強制
 
 - **planned（導入の Issue で active にする）**:
   - 正規表現でも `matches` と `replaced` が同じ答え（core のテスト・今の `replacing_agrees_with_matching` を正規表現に広げる）
@@ -79,4 +79,6 @@ ADR 0030 の決定 5 は「`regex` クレートを scan に入れる」と決め
 | B | `regex` を scan に入れ、core に照合の口（トレイト）を置いて合成ルートが差し込む | ADR 0030 の決定 5 の字面どおり・core に依存が入らない | `FindQuery` が差し込んだ物を持つ（等しさ・写し・Debug を手で書く）。口の向こうとこちらで答えが食い違わないことをテストで縛る手間 |
 | C | 正規表現は原本の行だけ（scan）で、足した行と書き換えたセルは探さない | 小さい | ADR 0030 の決定 2（見えている値を探す）に反する |
 
-施主の判断を待つ。
+## 施主の判断（2026-11-06・GitHub Issue #169）
+
+推しの A を受理した（施主「Aでいいよ」）。`regex-automata` を core の依存に足すこと（決定 2）も、この受理に含む。導入の Issue で `deny.toml`・CODING_RULES 第 5 節の表・CNF-013 の表を実測で更新する。
