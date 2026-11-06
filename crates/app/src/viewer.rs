@@ -341,10 +341,12 @@ impl Viewer {
         let lines = usize::try_from(count)
             .ok()
             .and_then(|count| self.read_lines(first_line, count).ok());
-        if let Some((rows, cuts)) = lines {
-            let effect = self.document.paste_rows(first_line, (&rows, &cuts), view);
-            let _clipboard = self.effect(effect);
-        }
+        let Some((rows, cuts)) = lines else {
+            self.document.paste_unread();
+            return;
+        };
+        let effect = self.document.paste_rows(first_line, (&rows, &cuts), view);
+        let _clipboard = self.effect(effect);
     }
 
     /// 行の並びの位置 `first_line` から `count` 行を、区間ごとに原本から読んで位置の順に並べる（ADR 0027）。足した行は
