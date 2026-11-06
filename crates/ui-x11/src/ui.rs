@@ -126,6 +126,10 @@ impl Ui {
         if let Some(step) = self.clipboard_event(event, screen)? {
             return Ok(step);
         }
+        if let Some(text) = self.window.pasted_text(event)? {
+            session.paste(&text, screen.view());
+            return Ok(Step::Redraw);
+        }
         if self.window.is_wake(event) {
             session.refresh(screen.view());
             return Ok(Step::Redraw);
@@ -158,6 +162,15 @@ impl Ui {
         let Some(intent) = intent else {
             return Ok(None);
         };
+        if intent == Intent::Paste {
+            // 自分が持ち主なら、持っている文字列をそのまま貼る。そうでなければ持ち主に求め、答えを待つ（CLIP-01）。
+            if let Some(text) = screen.clipboard().map(|text| String::from(text.as_str())) {
+                session.paste(&text, screen.view());
+            } else {
+                self.window.request_clipboard(time)?;
+            }
+            return Ok(Some(Step::Redraw));
+        }
         if let Intent::Point { .. } = intent {
             // 離すまで、指の動きはドラッグとして中身へ渡す（押している間は X が指を窓に結び付ける）。
             screen.set_holding(true);

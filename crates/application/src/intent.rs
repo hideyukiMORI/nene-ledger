@@ -91,6 +91,9 @@ pub enum Intent {
     SaveAs,
     /// 新しい表を新しい窓で開く（Ctrl+N・ADR 0028 の決定 1）。合成ルートが受ける（表の状態は変えない）。
     NewTable,
+    /// クリップボードの文字列を貼る（Ctrl+V・Shift+Insert・CLIP-01）。UI が OS のクリップボードを読み、
+    /// [`crate::session::Session::paste`] で渡す（ここまで来たら何もしない）。
+    Paste,
     /// 1 手元に戻す（Ctrl+Z・UNDO-01）。編集中なら編集をやめる。
     Undo,
     /// 戻した 1 手をやり直す（Ctrl+Y・Ctrl+Shift+Z）。

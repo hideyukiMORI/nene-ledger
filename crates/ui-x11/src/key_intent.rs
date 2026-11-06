@@ -32,6 +32,7 @@ const XK_Y: u32 = 0x79;
 const XK_Z: u32 = 0x7a;
 const XK_G: u32 = 0x67;
 const XK_N: u32 = 0x6e;
+const XK_V: u32 = 0x76;
 const XK_U: u32 = 0x75;
 const XK_T: u32 = 0x74;
 const XK_P: u32 = 0x70;
@@ -193,12 +194,14 @@ fn line_intent(keysym: u32, control: bool, shift: bool) -> Option<Intent> {
 }
 
 /// Ctrl と組んで元に戻す・やり直すキー（Ctrl+Z・Ctrl+Y・Ctrl+Shift+Z・UNDO-01）。Shift で `Z` が大文字の keysym になる配列もある。
-/// Ctrl と組んで保存する（Ctrl+S）・名前を付けて保存する（Ctrl+Shift+S）・新しい表を作る（Ctrl+N）キー（ADR 0028）。
+/// Ctrl と組んで保存する（Ctrl+S）・名前を付けて保存する（Ctrl+Shift+S）・新しい表を作る（Ctrl+N・ADR 0028）・
+/// 貼る（Ctrl+V・CLIP-01）キー。
 /// Shift を押した keysym は大文字（`S`・0x53）で届くこともある（Ctrl+Shift+Z と同じ）。
 fn save_intent(keysym: u32, shift: bool) -> Option<Intent> {
     match (keysym, shift) {
         (XK_S, false) => Some(Intent::Save),
         (XK_N, false) => Some(Intent::NewTable),
+        (XK_V, false) => Some(Intent::Paste),
         (XK_S | 0x53, true) => Some(Intent::SaveAs),
         _ => None,
     }
@@ -611,6 +614,10 @@ mod tests {
         assert_eq!(
             key_intent(XK_N, Some('n'), KeyButMask::CONTROL),
             Some(Intent::NewTable)
+        );
+        assert_eq!(
+            key_intent(XK_V, Some('v'), KeyButMask::CONTROL),
+            Some(Intent::Paste)
         );
         assert_eq!(
             key_intent(XK_S, Some('s'), control_shift),

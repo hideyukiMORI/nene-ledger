@@ -22,6 +22,8 @@ pub(crate) struct WindowAtoms {
     clipboard: Atom,
     targets: Atom,
     text_plain_utf8: Atom,
+    paste: Atom,
+    incr: Atom,
 }
 
 impl WindowAtoms {
@@ -45,6 +47,8 @@ impl WindowAtoms {
             clipboard: atom(b"CLIPBOARD")?,
             targets: atom(b"TARGETS")?,
             text_plain_utf8: atom(b"text/plain;charset=utf-8")?,
+            paste: atom(b"_NENE_LEDGER_PASTE")?,
+            incr: atom(b"INCR")?,
         })
     }
 
@@ -106,6 +110,16 @@ impl WindowAtoms {
     /// クリップボード（`CLIPBOARD`）。
     pub(crate) fn clipboard(self) -> Atom {
         self.clipboard
+    }
+
+    /// 貼り付けで受け取る中身を書いてもらう、自分の窓の属性（`_NENE_LEDGER_PASTE`）。
+    pub(crate) fn paste(self) -> Atom {
+        self.paste
+    }
+
+    /// 大きな中身を分けて渡す印（`INCR`・ICCCM）。分けた受け取りはまだしない。
+    pub(crate) fn incr(self) -> Atom {
+        self.incr
     }
 
     /// 渡せる形の一覧（`TARGETS`）。

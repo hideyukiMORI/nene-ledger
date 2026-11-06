@@ -153,6 +153,14 @@ impl<'session> WindowState<'session> {
     /// 意図を渡す。コピーなら文字列をクリップボードに置く。
     pub(crate) fn intent(&mut self, intent: Intent) {
         let view = self.view();
+        if intent == Intent::Paste {
+            // OS のクリップボードの文字列を貼る（CLIP-01）。読めなければ何もしない。
+            if let Some(text) = clipboard::take(self.window) {
+                self.session.paste(&text, view);
+            }
+            self.invalidate();
+            return;
+        }
         if let Some(text) = self.session.intent(intent, view) {
             // 置けなければ置かないだけ（状態の行の知らせは描く相手が出している）。
             let _placed = clipboard::put(self.window, text.as_str());

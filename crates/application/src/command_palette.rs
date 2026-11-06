@@ -121,16 +121,8 @@ impl CommandPalette {
     /// 意図を受ける。`current_theme` は今の配色の位置（配色を選ぶ段へ入るとき、元に戻す先として覚える）。
     pub fn handle(&mut self, intent: Intent, current_theme: usize) -> PaletteOutcome {
         match intent {
-            Intent::Type(character) => {
-                self.query.push(character);
-                self.stop_asking();
-                self.retarget(0)
-            }
-            Intent::Erase => {
-                self.query.pop();
-                self.stop_asking();
-                self.retarget(0)
-            }
+            Intent::Type(character) => self.edit_query(Some(character)),
+            Intent::Erase => self.edit_query(None),
             Intent::Move { step, .. } => self.step(step),
             Intent::Confirm if self.mode == PaletteMode::GoTo => GoToTarget::parse(&self.query)
                 .map_or(PaletteOutcome::Stay, |target| {
@@ -171,6 +163,7 @@ impl CommandPalette {
             | Intent::Save
             | Intent::SaveAs
             | Intent::NewTable
+            | Intent::Paste
             | Intent::Undo
             | Intent::Redo
             | Intent::InsertRows(_)
@@ -244,6 +237,16 @@ impl CommandPalette {
             }
             Some(&PaletteItem::Command(_) | &PaletteItem::Key(_)) | None => PaletteOutcome::Stay,
         }
+    }
+
+    /// 欄に字 `typed` を足す（`None` は 1 字消す）。上書きを尋ねていればやめ、候補を頭から選び直す。
+    fn edit_query(&mut self, typed: Option<char>) -> PaletteOutcome {
+        match typed {
+            Some(character) => self.query.push(character),
+            None => drop(self.query.pop()),
+        }
+        self.stop_asking();
+        self.retarget(0)
     }
 
     /// Esc（とパレットを開くキー）。試していれば元に戻して閉じる。

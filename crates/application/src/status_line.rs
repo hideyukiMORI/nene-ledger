@@ -128,6 +128,9 @@ pub fn notice_status(notice: Notice) -> String {
         Notice::StillSaving => String::from("保存しています。終わるまで直せません"),
         Notice::SaveFailed(problem) => save_problem_status(problem),
         Notice::NewWindowFailed => String::from("新しい表の窓を開けませんでした"),
+        Notice::PasteManyCells { rows, columns } => format!(
+            "{rows} 行 × {columns} 列の貼り付けはまだできません（1 つのセルか、編集中の欄には貼れます）"
+        ),
         Notice::ReopenFailed => {
             String::from("保存しました。開き直せなかったので、表示は保存の前のままです")
         }

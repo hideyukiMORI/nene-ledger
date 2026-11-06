@@ -61,6 +61,13 @@ pub enum Notice {
     SaveFailed(SaveProblem),
     /// 保存したが、置き換えた後のファイルを開き直せなかった（表示は保存の前のまま）。
     ReopenFailed,
+    /// 複数のセルの貼り付けはまだ（行と列の数）。1 つのセルなら貼れる（CLIP-01・EDIT-02）。
+    PasteManyCells {
+        /// 行の数。
+        rows: usize,
+        /// 列の数（いちばん長い行）。
+        columns: usize,
+    },
     /// 新しい表の窓を開けなかった（自分の exe を起こせない・ADR 0028 の決定 1）。
     NewWindowFailed,
     /// 書き換えがある間は、読み方を変えられない（先に保存する）。

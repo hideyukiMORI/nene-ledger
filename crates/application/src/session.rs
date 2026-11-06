@@ -31,6 +31,10 @@ pub trait Session {
     /// IME が文字列を確定した。編集の欄に挿す（パレットでは 1 字ずつ打ったのと同じ）。
     fn commit_text(&mut self, text: &str, view: WindowView);
 
+    /// クリップボードの文字列 `text` を貼る（Ctrl+V・CLIP-01）。UI が OS のクリップボードから読んで渡す。
+    /// 編集中なら欄に、パレットなら欄に、そうでなければ表に貼る。
+    fn paste(&mut self, text: &str, view: WindowView);
+
     /// IME の候補の窓を置く所（編集中のセルの、窓の中の矩形）。無ければ `None`（UI は動かさない）。
     fn composition_area(&self, view: WindowView) -> Option<PixelRect>;
 
