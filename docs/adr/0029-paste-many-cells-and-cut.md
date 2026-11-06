@@ -60,12 +60,14 @@ GitHub Issue #115 で、Ctrl+V で OS のクリップボードの文字列を読
 
 ## 強制
 
-- **planned（実装の Issue で active にする）**:
-  - 束の 1 手を戻すと、書き換え・足した行・足した列がすべて戻る（application のテスト）
-  - 1 つのセルの束で広い範囲を選ぶと、範囲のすべてに書く。束が端を越えると、足りない行と列を足す（application のテスト）
-  - 切り取って同じ窓で貼ると元が空になり、ほかの操作で枠が消えた後に貼っても元は残る（application のテスト）
-  - 上限を超える貼り付けは何も書かない（application のテスト）
-  - Excel から貼った値が変わらない（先頭の 0・日付に見える値・指数表記・Windows の実機・gate-proofs）
+- **active**（GitHub Issue #146 で入れた）:
+  - 束の 1 手を戻すと、書き換え・足した行・足した列がすべて戻る（application のテスト `one_undo_takes_back_a_paste_with_its_added_rows_and_columns`・`pasting_many_cells_writes_from_the_top_left_as_one_step`。履歴の束は `EditStep::Batch`）
+  - 1 つのセルの束で広い範囲を選ぶと、範囲のすべてに書く。束が端を越えると、足りない行と列を足す（application のテスト `pasting_one_value_over_a_range_fills_it`・`pasting_past_the_edges_adds_rows_and_columns`）
+  - 上限を超える貼り付けは何も書かない（application のテスト `pastes_that_cannot_be_written_change_nothing`。索引を作っている途中で今読める所より下に届く貼り付け・切り詰めた行への貼り付けも同じ）
+  - 貼った値を変えない（先頭の 0・日付に見える値・指数表記・application のテスト `pasted_values_are_kept_as_text`・X11 は gate-proofs 第 75 節）
+- **planned**:
+  - 切り取って同じ窓で貼ると元が空になり、ほかの操作で枠が消えた後に貼っても元は残る（決定 5・6 の実装の Issue で）
+  - Excel から貼った値が変わらない（Windows の実機・gate-proofs）
 
 ## 結果
 
