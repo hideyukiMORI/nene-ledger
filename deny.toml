@@ -29,7 +29,8 @@ version = 2
 #      （GitHub Issue #171 で regex-automata 0.4.18 と、それが連れてくる regex-syntax 0.8.11。どちらも MIT OR Apache-2.0・ADR 0031）
 #      Unicode-3.0 — unicode-ident だけ（syn が引く。windows-implement / windows-interface の手続きマクロの組み立て時の依存で、
 #                         配布物には入らない・`(MIT OR Apache-2.0) AND Unicode-3.0`）
-#    🔴 配布物にはこれらの著作権表示を添える必要がある（配布の形を決める Issue で扱う）。
+#    🔴 配布物にはこれらの著作権表示を添える。Windows の exe に入るクレートの一覧と本文は THIRD-PARTY-NOTICES.txt
+#       （`make notices` で Cargo.lock から作り直し、`make notices-check` が食い違いを落とす・ADR 0032・GitHub Issue #181）。
 allow = [
   "Apache-2.0",
   "Apache-2.0 WITH LLVM-exception",
