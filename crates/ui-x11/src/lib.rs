@@ -6,8 +6,10 @@
 mod chrome_action;
 mod cursor_shape;
 mod frame_surface;
+mod incoming_paste;
 mod key_intent;
 mod key_map;
+mod paste_receipt;
 mod pixels;
 mod pointer;
 mod pointer_at;

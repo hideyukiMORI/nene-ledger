@@ -18,6 +18,7 @@ use crate::chrome_action::ChromeAction;
 use crate::cursor_shape::CursorShape;
 use crate::frame_surface::{measure, paint};
 use crate::key_intent::button_intent;
+use crate::paste_receipt::PasteReceipt;
 use crate::pointer_at::PointerAt;
 use crate::screen::Screen;
 use crate::step::Step;
@@ -127,9 +128,13 @@ impl Ui {
         if let Some(step) = self.clipboard_event(event, screen)? {
             return Ok(step);
         }
-        if let Some(text) = self.window.pasted_text(event)? {
-            session.paste(&text, screen.view());
-            return Ok(Step::Redraw);
+        match self.window.pasted_text(event, screen.incoming_paste())? {
+            Some(PasteReceipt::Done(text)) => {
+                session.paste(&text, screen.view());
+                return Ok(Step::Redraw);
+            }
+            Some(PasteReceipt::Pending) => return Ok(Step::Wait),
+            None => {}
         }
         if self.window.is_wake(event) {
             session.refresh(screen.view());

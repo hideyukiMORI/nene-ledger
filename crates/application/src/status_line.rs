@@ -129,7 +129,8 @@ pub fn notice_status(notice: Notice) -> String {
         Notice::SaveFailed(problem) => save_problem_status(problem),
         Notice::NewWindowFailed => String::from("新しい表の窓を開けませんでした"),
         Notice::PasteManyCells { rows, columns } => format!(
-            "{rows} 行 × {columns} 列の貼り付けはまだできません（1 つのセルか、編集中の欄には貼れます）"
+            "{} 行 × {columns} 列の貼り付けはまだできません（1 つのセルか、編集中の欄には貼れます）",
+            group_digits(u64::try_from(rows).unwrap_or(u64::MAX))
         ),
         Notice::ReopenFailed => {
             String::from("保存しました。開き直せなかったので、表示は保存の前のままです")
