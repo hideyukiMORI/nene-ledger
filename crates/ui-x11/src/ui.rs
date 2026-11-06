@@ -188,6 +188,8 @@ impl Ui {
             if let Some(text) = screen.clipboard().map(|text| String::from(text.as_str())) {
                 session.paste(&text, screen.view());
             } else {
+                // 前の受け取りが途中で止まっていても、新しく求める（途中の中身は捨てる）。
+                *screen.incoming_paste() = None;
                 self.window.request_clipboard(time)?;
             }
             return Ok(Some(Step::Redraw));
