@@ -20,7 +20,8 @@ use nene_ledger_core::window_chrome::WindowChrome;
 use nene_ledger_core::window_placement::WindowPlacement;
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::Graphics::Gdi::InvalidateRect;
-use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_CLOSE};
+use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, SetWindowTextW, WM_CLOSE};
+use windows::core::HSTRING;
 
 use crate::clipboard;
 use crate::pen::Pen;
@@ -43,6 +44,8 @@ pub(crate) struct WindowState<'session> {
     scale: DisplayScale,
     metrics: (GlyphMetrics, GlyphMetrics),
     ticks: Arc<AtomicU64>,
+    /// OS に付けてある窓の名前（変わったときだけ付け直す・GitHub Issue #167）。
+    name: String,
 }
 
 impl core::fmt::Debug for WindowState<'_> {
@@ -88,6 +91,7 @@ impl<'session> WindowState<'session> {
             scale,
             metrics: (chrome.unwrap_or(fallback), content.unwrap_or(fallback)),
             ticks,
+            name: String::new(),
         }
     }
 
@@ -285,6 +289,7 @@ impl<'session> WindowState<'session> {
             self.pen = Pen::new(self.window, self.size).ok();
         }
         self.remeasure();
+        self.rename();
         let Some(pen) = &self.pen else {
             return;
         };
@@ -303,6 +308,22 @@ impl<'session> WindowState<'session> {
         if self.session.hover(at, view) {
             self.invalidate();
         }
+    }
+
+    /// 窓の名前が変わっていれば OS の窓の文字列を付け直す（タスクバー・Alt+Tab・GitHub Issue #167）。
+    #[expect(
+        unsafe_code,
+        reason = "RS-010: Win32 の SetWindowTextW を呼ぶ（ADR 0002 の 4）"
+    )]
+    fn rename(&mut self) {
+        let name = self.session.window_name();
+        if name == self.name {
+            return;
+        }
+        let wide = HSTRING::from(name.as_str());
+        // SAFETY: 自分の窓に、この関数の間だけ生きる NUL 終わりの UTF-16 の文字列を渡すだけ。
+        let _set = unsafe { SetWindowTextW(self.window, &wide) };
+        self.name = name;
     }
 
     /// 窓全体の描き直しを求める。

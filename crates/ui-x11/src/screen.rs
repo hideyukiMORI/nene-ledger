@@ -24,6 +24,8 @@ pub(crate) struct Screen {
     incoming: Option<IncomingPaste>,
     /// 今の貼り付けの求めに使う属性の番（0 か 1・GitHub Issue #144）。
     paste_slot: usize,
+    /// OS に付けてある窓の名前（変わったときだけ付け直す・GitHub Issue #167）。
+    name: String,
 }
 
 impl Screen {
@@ -39,7 +41,17 @@ impl Screen {
             holding: false,
             incoming: None,
             paste_slot: 0,
+            name: String::new(),
         }
+    }
+
+    /// 窓の名前が `name` と違えば覚え直して `true`（OS に付け直す）。
+    pub(crate) fn rename(&mut self, name: &str) -> bool {
+        if self.name == name {
+            return false;
+        }
+        name.clone_into(&mut self.name);
+        true
     }
 
     /// 中身の字を測った拡大。

@@ -818,6 +818,10 @@ impl Session for Viewer {
         self.document.close_state() == CloseState::Finished
     }
 
+    fn window_name(&self) -> String {
+        self.document.window_name()
+    }
+
     fn frame(&self, view: WindowView) -> Frame {
         let frame = self
             .document

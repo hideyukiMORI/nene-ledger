@@ -86,6 +86,10 @@ impl Ui {
         if zoom != screen.zoom() {
             screen.set_zoom(zoom, measure(zoom)?);
         }
+        let name = session.window_name();
+        if screen.rename(&name) {
+            self.window.rename(&name)?;
+        }
         let frame = session.frame(screen.view());
         self.window.present(&paint(&frame, zoom)?)
     }

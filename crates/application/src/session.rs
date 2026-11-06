@@ -1,5 +1,7 @@
 //! 窓が描く相手の口。
 
+use alloc::string::String;
+
 use nene_ledger_core::frame::Frame;
 use nene_ledger_core::pixel_point::PixelPoint;
 use nene_ledger_core::pixel_rect::PixelRect;
@@ -18,6 +20,9 @@ pub trait Session {
 
     /// 起こされた。作業のスレッドの知らせと時計の刻みを状態に取り込む。`view` は今の窓。
     fn refresh(&mut self, view: WindowView);
+
+    /// 窓の名前（OS の窓の名前に付ける・未保存なら頭に印）。UI は描くたびに問い合わせ、変わっていれば付け直す。
+    fn window_name(&self) -> String;
 
     /// 今の表と詳細ペインの文字の大きさ。UI はこれが変わったら中身の字を測り直す（ADR 0020）。
     fn zoom(&self) -> ZoomLevel;

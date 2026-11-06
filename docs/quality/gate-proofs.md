@@ -871,6 +871,18 @@ PR の枝の exe を Xvfb に出し、`xdotool` で操作した（2026-11-06）�
 
 最初の版は、欄の下の行の置き換え方のキーと条件がパレットの幅から切れた（`… · Alt+`）。第 77 節と同じ失敗で、言葉を縮めた（`置き換えて次へ` → `置換`・`大文字小文字を` → `大小を`・置換の段だけ）。
 
+## 79. OS の窓の名前の未保存の印（GitHub Issue #167・WIN-01）— 仮想の X サーバでの確認（QLT-013）
+
+PR の枝の exe を Xvfb に出し、`xdotool` で操作して `xprop _NET_WM_NAME` を読んだ（2026-11-06）。
+
+| # | 操作 | `_NET_WM_NAME` |
+| --- | --- | --- |
+| 1 | `r.csv` を開いた直後 | `r.csv — NeNe Ledger` |
+| 2 | 右へ動いて `9` を打って Enter | `● r.csv — NeNe Ledger` |
+| 3 | Ctrl+Z | `r.csv — NeNe Ledger` |
+
+前は開いたときに 1 度だけ付けていて、自前のタイトルバーの `●` が OS の側（タスクバー・Alt+Tab・窓の管理者）に出なかった。同じ日の測りで、OS の窓の名前の `●` を待つ script が 120 s の上限まで待って気づいた。Windows（`SetWindowTextW`）は `make build-windows` と `make lint-windows` まで・実機はまだ。
+
 ## 7. active の規則と、その証明
 
 CNF-009 は active の規則ごとに `| ID |` で始まる行がここにあることを要求する。

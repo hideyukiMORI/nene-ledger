@@ -214,6 +214,22 @@ impl X11Window {
     }
 
     /// マウスのカーソルを `shape` にする。
+    /// 窓の名前を `name` に付け直す（`_NET_WM_NAME`・GitHub Issue #167）。
+    ///
+    /// # Errors
+    ///
+    /// 接続が切れたとき。
+    pub(crate) fn rename(&self, name: &str) -> Result<(), UiFailure> {
+        self.connection.change_property8(
+            PropMode::REPLACE,
+            self.window,
+            self.atoms.net_wm_name(),
+            self.atoms.utf8_string(),
+            name.as_bytes(),
+        )?;
+        Ok(())
+    }
+
     pub(crate) fn set_cursor(&self, shape: CursorShape) -> Result<(), UiFailure> {
         let index = CursorShape::ALL
             .iter()
