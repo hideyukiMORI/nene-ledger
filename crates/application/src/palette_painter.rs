@@ -691,6 +691,60 @@ mod tests {
         assert!(texts(&both).contains(&"Enter 置き換えて次へ · Alt+A 全部 · Shift+Enter 前を探す"));
     }
 
+    /// パレットの案内の長さの上限（表示の桁・全角 = 2）。Xvfb の画面写し（Noto Sans CJK JP・倍率 100%・2026-11-06）で
+    /// 1 桁 ≈ 6.6 px、パレットのいちばん狭い幅（480 px）で字を置ける幅 ≈ 444 px ≈ 67 桁。切れた案内は 74・78・83 桁、
+    /// 収まった案内は 64・65 桁だった（GitHub Issue #175）。
+    const GUIDE_COLUMNS: u32 = 64;
+
+    /// 条件（大文字小文字・セル全体・正規表現）の全部の組み合わせ。
+    fn every_find_option() -> Vec<FindOptions> {
+        let mut options = vec![FindOptions::standard()];
+        for toggle in [
+            FindOptions::toggled_case,
+            FindOptions::toggled_whole_cell,
+            FindOptions::toggled_regex,
+        ] {
+            let flipped: Vec<FindOptions> = options.iter().map(|&one| toggle(one)).collect();
+            options.extend(flipped);
+        }
+        options
+    }
+
+    /// 探す段と置換の段の案内は、条件のどの組み合わせでもパレットの幅に収まる長さ（打った文字は除く・Issue #175）。
+    #[test]
+    fn find_and_replace_guides_fit_the_narrowest_palette() {
+        let palettes: Vec<CommandPalette> = every_find_option()
+            .into_iter()
+            .flat_map(|one| {
+                ["", "b", "(b"].into_iter().flat_map(move |text| {
+                    [
+                        CommandPalette::open_find(text, one),
+                        CommandPalette::open_replace(text, "", one),
+                        CommandPalette::open_replace("", text, one),
+                    ]
+                })
+            })
+            .collect();
+        assert_eq!(palettes.len(), 8 * 3 * 3);
+        for palette in palettes {
+            let commands = palette.paint(view(), colors(), DetailPane::Closed);
+            let guides = texts(&commands).into_iter().filter(|&text| {
+                text != palette.query()
+                    && text != palette.replacement()
+                    && !text.starts_with("探す: ")
+                    && !text.starts_with("置き換える: ")
+            });
+            for text in guides {
+                assert!(
+                    display_columns(text) <= GUIDE_COLUMNS,
+                    "{} 桁: {text:?}（{:?}）",
+                    display_columns(text),
+                    palette.mode()
+                );
+            }
+        }
+    }
+
     /// 判別の候補の段（カンマ 87%・6 列が今の読み方、タブ・引用なし 12%・1 列）。
     fn candidate_palette() -> CommandPalette {
         use nene_ledger_core::delimiter::Delimiter;
