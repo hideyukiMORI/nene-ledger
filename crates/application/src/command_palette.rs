@@ -83,6 +83,12 @@ impl CommandPalette {
         }
     }
 
+    /// 置き換える文字を `text` にする（検索の欄から置換の欄へ切り替えたときに、前に置き換えた文字を入れておく）。
+    pub fn set_replacement(&mut self, text: &str) {
+        self.replacement.clear();
+        self.replacement.push_str(text);
+    }
+
     /// 置き換える文字（置換の段）。
     #[must_use]
     pub fn replacement(&self) -> &str {
@@ -267,6 +273,13 @@ impl CommandPalette {
     fn mode_intent(&mut self, intent: Intent) -> Option<PaletteOutcome> {
         match self.mode {
             PaletteMode::Replace { with } => self.replace_intent(intent, with),
+            // 検索の欄で Ctrl+H は置換の欄へ。打った文字と条件を引き継ぐ（GitHub Issue #187）。
+            PaletteMode::Find if intent == (Intent::OpenFind { replace: true }) => {
+                self.mode = PaletteMode::Replace {
+                    with: !self.query.is_empty(),
+                };
+                Some(PaletteOutcome::Stay)
+            }
             PaletteMode::Find => matches!(
                 intent,
                 Intent::Confirm
@@ -300,8 +313,14 @@ impl CommandPalette {
             Intent::Advance(CursorStep::Right | CursorStep::Left) => {
                 self.mode = PaletteMode::Replace { with: !with };
             }
+            // 探す文字が空なら、閉じずに「探す」欄へ戻す（黙って閉じない・GitHub Issue #187）。
+            Intent::Confirm | Intent::ReplaceAll if self.query.is_empty() => {
+                self.mode = PaletteMode::Replace { with: false };
+            }
             Intent::Confirm => return Some(PaletteOutcome::Replace { all: false }),
             Intent::ReplaceAll => return Some(PaletteOutcome::Replace { all: true }),
+            // 置換の欄で Ctrl+F は検索の欄へ（打った文字と条件を引き継ぐ・GitHub Issue #187）。
+            Intent::OpenFind { replace: false } => self.mode = PaletteMode::Find,
             Intent::Advance(CursorStep::Up) | Intent::FindAgain { .. } | Intent::FindToggle(_) => {
                 return Some(self.find_intent(intent));
             }
@@ -582,6 +601,47 @@ mod tests {
         assert_eq!(
             (again.mode(), again.field_text()),
             (PaletteMode::Replace { with: true }, "os")
+        );
+    }
+
+    /// 検索の欄の Ctrl+H は置換の欄へ、置換の欄の Ctrl+F は検索の欄へ、打った文字と条件を引き継いで切り替える。同じ欄を
+    /// 開くキーは閉じる。探す文字が空なら Enter と Alt+A は閉じずに「探す」欄へ戻す（GitHub Issue #187・施主の実機）。
+    #[test]
+    fn find_and_replace_switch_without_losing_what_was_typed() {
+        let options = FindOptions::standard().toggled_case();
+        let mut palette = CommandPalette::open_find("", options);
+        palette.set_replacement("東京");
+        typed(&mut palette, "00");
+        assert_eq!(
+            palette.handle(Intent::OpenFind { replace: true }, 0),
+            PaletteOutcome::Stay
+        );
+        assert_eq!(palette.mode(), PaletteMode::Replace { with: true });
+        assert_eq!((palette.query(), palette.replacement()), ("00", "東京"));
+        assert!(palette.find_options().match_case());
+        assert_eq!(
+            palette.handle(Intent::OpenFind { replace: false }, 0),
+            PaletteOutcome::Stay
+        );
+        assert_eq!((palette.mode(), palette.query()), (PaletteMode::Find, "00"));
+        assert_eq!(
+            palette.handle(Intent::OpenFind { replace: false }, 0),
+            PaletteOutcome::Close
+        );
+    }
+
+    /// 置換の欄で探す文字が空なら、Enter と Alt+A は閉じずに「探す」欄へ戻す（黙って閉じない・GitHub Issue #187）。
+    #[test]
+    fn an_empty_find_text_keeps_the_replace_step_open() {
+        let mut empty = CommandPalette::open_replace("", "x", FindOptions::standard());
+        empty.handle(Intent::Advance(CursorStep::Right), 0);
+        for intent in [Intent::ReplaceAll, Intent::Confirm] {
+            assert_eq!(empty.handle(intent, 0), PaletteOutcome::Stay);
+            assert_eq!(empty.mode(), PaletteMode::Replace { with: false });
+        }
+        assert_eq!(
+            empty.handle(Intent::OpenFind { replace: true }, 0),
+            PaletteOutcome::Close
         );
     }
 

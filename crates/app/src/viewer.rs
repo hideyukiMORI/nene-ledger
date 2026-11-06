@@ -448,10 +448,10 @@ impl Viewer {
                 (String::from(query.text()), query.options())
             });
         let colors = self.preferences.theme().palette();
-        self.palette = Some(OpenPalette::new(
-            CommandPalette::open_find(&text, options),
-            colors,
-        ));
+        let mut palette = CommandPalette::open_find(&text, options);
+        // 検索の欄から Ctrl+H で置換の欄へ切り替えたときのために、前に置き換えた文字を入れておく（GitHub Issue #187）。
+        palette.set_replacement(&self.replacement);
+        self.palette = Some(OpenPalette::new(palette, colors));
     }
 
     /// パレットを開く意図（検索・置換・飛ぶ先・操作の一覧）なら開いて `true`。開いたときの配色でパレットを描く
