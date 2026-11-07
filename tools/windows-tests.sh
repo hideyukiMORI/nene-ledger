@@ -28,9 +28,11 @@ work="$(wslpath "${temp_win}")/nene-ledger-tests"
 root="${work}/root"
 bin="${work}/bin"
 rm -rf "${work}"
-# 🔴 ターゲットを指して組み立てたテストの `CARGO_TARGET_TMPDIR` は `target/<ターゲット>/tmp`（`target/tmp` ではない）。
+# 🔴 ターゲットを指して組み立てたテストの `CARGO_TARGET_TMPDIR` は `<組み立て先>/<ターゲット>/tmp`（`target/tmp` ではない）。
 # 無いと、そこへ書くテストが「道筋が無い」で落ちる（ほかのテストが先に作れば通るので、走らせる順で結果が変わった）。
-mkdir -p "${bin}" "${root}${repo}/target/x86_64-pc-windows-gnu/tmp"
+# 組み立て先は `CARGO_TARGET_DIR` で替えられるので、cargo に聞く。
+target_dir="$("$CARGO" metadata --format-version 1 --no-deps | python3 -I -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])')"
+mkdir -p "${bin}" "${root}${target_dir}/x86_64-pc-windows-gnu/tmp"
 
 # テストの exe を作る（X11 のクレートは除く）。
 mapfile -t exes < <(
