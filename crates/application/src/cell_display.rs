@@ -45,6 +45,19 @@ pub fn single_line(value: &str) -> String {
     out
 }
 
+/// `value` が表示の 1 行そのものか（`single_line(value) == value`・印に替える字が無い）。写しを作らずに確かめる
+/// （窓の行は、表示の文字列が元の値と同じなら写しを持たない・GitHub Issue #22）。
+#[must_use]
+pub fn is_single_line(value: &str) -> bool {
+    !value.chars().any(|character| {
+        matches!(
+            character,
+            '\u{2028}' | '\u{2029}' | '\u{3000}' | '\u{a0}' | '\u{202f}' | '\u{200b}'
+                ..='\u{200d}' | '\u{2060}' | '\u{feff}'
+        ) || character.is_control()
+    })
+}
+
 /// 省略の印（U+2026）。
 const ELLIPSIS: char = '…';
 
@@ -111,6 +124,38 @@ mod tests {
         assert_eq!(single_line("a\tb\u{0}c"), "a→b·c");
         assert_eq!(single_line(" 00123 "), " 00123 ");
         assert_eq!(single_line(""), "");
+    }
+
+    /// 写しを作らない確かめは、写しと比べたときと同じ答え。
+    #[test]
+    fn single_line_values_are_recognised_without_a_copy() {
+        for value in [
+            "",
+            "abc",
+            "東京",
+            "a\r\nb",
+            "a\rb",
+            "a\nb",
+            "a\tb",
+            "\u{0}",
+            "山田\u{3000}太郎",
+            "10\u{a0}000",
+            "ab\u{200b}c",
+            "一\u{2028}二",
+            "¶",
+            "→",
+            "\r",
+            "\r\n",
+            "x\u{7f}",
+            "x\u{85}",
+            "\u{2060}\u{feff}",
+        ] {
+            assert_eq!(
+                is_single_line(value),
+                single_line(value) == value,
+                "{value:?}"
+            );
+        }
     }
 
     #[test]

@@ -34,15 +34,21 @@ impl ColumnWidths {
     /// `rows` に、今より多い列があれば、その列の幅だけを `rows` から決めて足す。今ある列の幅は変えない。
     pub fn widen(&mut self, rows: &[&[String]]) {
         let count = rows.iter().map(|row| row.len()).max().unwrap_or(0);
-        for column in self.columns.len()..count {
-            let widest = rows
-                .iter()
+        self.widen_by(count, |column| {
+            rows.iter()
                 .filter_map(|row| row.get(column))
                 .map(|cell| display_columns(cell))
                 .max()
-                .unwrap_or(0);
+                .unwrap_or(0)
+        });
+    }
+
+    /// 列の数が `count` になるまで、足す列の幅を `widest`（列 → いちばん広い値の字数）から決めて足す。今ある列の幅は
+    /// 変えない（セルを `String` の並びで持たない行から決めるとき・GitHub Issue #22）。
+    pub fn widen_by<F: Fn(usize) -> u32>(&mut self, count: usize, widest: F) {
+        for column in self.columns.len()..count {
             self.columns
-                .push(widest.clamp(MIN_COLUMN_COLUMNS, MAX_COLUMN_COLUMNS));
+                .push(widest(column).clamp(MIN_COLUMN_COLUMNS, MAX_COLUMN_COLUMNS));
         }
     }
 
