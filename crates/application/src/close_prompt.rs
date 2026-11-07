@@ -249,7 +249,9 @@ mod tests {
             .iter()
             .filter_map(|command| match command {
                 DrawCommand::Text { text, .. } => Some(text.as_str()),
-                DrawCommand::Fill { .. } | DrawCommand::Line { .. } => None,
+                DrawCommand::Fill { .. }
+                | DrawCommand::Line { .. }
+                | DrawCommand::TextSpan { .. } => None,
             })
             .collect();
         assert!(texts.contains(&QUESTION));

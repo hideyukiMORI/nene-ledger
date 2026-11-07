@@ -46,6 +46,7 @@ pub(crate) struct PalettePainter<'state> {
     layout: PaletteLayout,
     metrics: GlyphMetrics,
     colors: Palette,
+    note: Option<&'state str>,
     commands: Vec<DrawCommand>,
 }
 
@@ -61,8 +62,14 @@ impl<'state> PalettePainter<'state> {
             layout,
             metrics,
             colors,
+            note: None,
             commands: Vec::new(),
         }
+    }
+
+    /// 置換の段の 1 行目のキーの案内の代わりに出す、全部の置換の短い 1 行（件数と確かめ・GitHub Issue #189）。
+    pub(crate) fn with_note(self, note: Option<&'state str>) -> Self {
+        Self { note, ..self }
     }
 
     /// 面・検索欄・試しの案内・候補の行の命令。`detail` は詳細ペインの開閉（開閉の操作の名前が変わる）。
@@ -279,9 +286,12 @@ impl<'state> PalettePainter<'state> {
                 "部分一致"
             },
         );
+        let note = self.note.map(String::from);
         let lines = if let PaletteMode::Replace { .. } = self.palette.mode() {
             vec![
-                String::from("Enter 置き換えて次へ · Alt+A 全部 · Shift+Enter 前を探す"),
+                note.clone().unwrap_or_else(|| {
+                    String::from("Enter 置き換えて次へ · Alt+A 全部 · Shift+Enter 前を探す")
+                }),
                 conditions,
             ]
         } else {
@@ -290,7 +300,9 @@ impl<'state> PalettePainter<'state> {
         for (slot, text) in lines.into_iter().enumerate() {
             let row = self.layout.row(slot);
             let left = row.origin().x().saturating_add(self.px(TEXT_INSET));
-            let color = if text.contains("読めない正規表現") {
+            // 読めない式と、全部の置換の件数と確かめは強調の色で目に付くように。
+            let color = if text.contains("読めない正規表現") || note.as_ref() == Some(&text)
+            {
                 self.colors.cursor()
             } else {
                 self.colors.gutter_text()
@@ -583,7 +595,9 @@ mod tests {
             .iter()
             .filter_map(|command| match command {
                 DrawCommand::Text { text, .. } => Some(text.as_str()),
-                DrawCommand::Fill { .. } | DrawCommand::Line { .. } => None,
+                DrawCommand::Fill { .. }
+                | DrawCommand::Line { .. }
+                | DrawCommand::TextSpan { .. } => None,
             })
             .collect()
     }
@@ -593,9 +607,10 @@ mod tests {
             .iter()
             .filter_map(|command| match command {
                 DrawCommand::Fill { rect, color } if *color == wanted => Some(*rect),
-                DrawCommand::Fill { .. } | DrawCommand::Text { .. } | DrawCommand::Line { .. } => {
-                    None
-                }
+                DrawCommand::Fill { .. }
+                | DrawCommand::Text { .. }
+                | DrawCommand::Line { .. }
+                | DrawCommand::TextSpan { .. } => None,
             })
             .collect()
     }
@@ -619,7 +634,8 @@ mod tests {
         // 文字はどれも窓の部品の大きさ。
         assert!(commands.iter().all(|command| match command {
             DrawCommand::Text { role, .. } => *role == TextRole::Chrome,
-            DrawCommand::Fill { .. } | DrawCommand::Line { .. } => true,
+            DrawCommand::Fill { .. } | DrawCommand::Line { .. } | DrawCommand::TextSpan { .. } =>
+                true,
         }));
     }
 
@@ -753,6 +769,36 @@ mod tests {
         }
     }
 
+    /// 全部の置換の件数と確かめは、置換の段の 1 行目のキーの案内の代わりに強調の色で出し、いちばん長い数でも幅に収まる。
+    /// 探す段には出さない（GitHub Issue #189）。
+    #[test]
+    fn the_replace_step_shows_the_count_and_the_confirmation_in_place_of_its_keys() {
+        let notes = [
+            "1,000,000 セルを置き換えます · Enter 置き換える · Esc やめる",
+            "置き換えるセルを数えています… 99% · Esc やめる",
+            "1,000,000 セルを置き換えました · 表で Ctrl+Z で戻す",
+        ];
+        let replace = CommandPalette::open_replace("b", "", FindOptions::standard());
+        for note in notes {
+            let commands = replace.paint_noted(view(), (colors(), DetailPane::Closed), Some(note));
+            let shown = texts(&commands);
+            assert!(shown.contains(&note), "{shown:?}");
+            assert!(
+                !shown
+                    .iter()
+                    .any(|text| text.starts_with("Enter 置き換えて次へ"))
+            );
+            assert!(display_columns(note) <= GUIDE_COLUMNS, "{note:?}");
+            assert!(commands.iter().any(|command| matches!(
+                command,
+                DrawCommand::Text { text, color, .. } if text == note && *color == colors().cursor()
+            )));
+        }
+        let find = CommandPalette::open_find("b", FindOptions::standard());
+        let commands = find.paint_noted(view(), (colors(), DetailPane::Closed), Some(notes[0]));
+        assert!(!texts(&commands).contains(&notes[0]));
+    }
+
     /// 「このアプリについて…」で版・著作権・ライセンスの行を出す。どの行もパレットの幅に収まる（ADR 0032・Issue #179）。
     #[test]
     fn the_about_step_shows_the_version_and_the_license() {
@@ -822,9 +868,10 @@ mod tests {
                 DrawCommand::Text { text, clip, .. } if text.starts_with("カンマ区切り") => {
                     Some(*clip)
                 }
-                DrawCommand::Text { .. } | DrawCommand::Fill { .. } | DrawCommand::Line { .. } => {
-                    None
-                }
+                DrawCommand::Text { .. }
+                | DrawCommand::Fill { .. }
+                | DrawCommand::Line { .. }
+                | DrawCommand::TextSpan { .. } => None,
             })
             .unwrap();
         let aside_width = display_columns("今の読み方 · 87% · 6 列") * 8;

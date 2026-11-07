@@ -78,6 +78,9 @@ pub(crate) struct Viewer {
     replacing: Option<SplitJob<ReplaceFold>>,
     /// 前に置き換えた文字（次に置換の欄を開くときに入れておく）。
     replacement: String,
+    /// 検索と置換の欄が開いている間の、表の印の問い（欄の文字と条件が変わったときだけ作り直す・描くたびに正規表現を
+    /// 組み立てない・GitHub Issue #189）。
+    found: Option<FindQuery>,
     /// 読み方を試している間の、元の画面（Esc で戻す・Issue #52）。
     trial: Option<Document>,
     /// 裏で回っている保存（ADR 0026 の決定 6）。
@@ -108,6 +111,7 @@ impl Viewer {
             finding: None,
             replacing: None,
             replacement: String::new(),
+            found: None,
             trial: None,
             saving: None,
             saving_as: None,
@@ -459,6 +463,8 @@ impl Viewer {
     fn opened_palette(&mut self, intent: Intent) -> bool {
         let colors = self.preferences.theme().palette();
         if let Intent::OpenFind { replace } = intent {
+            // 前の全部の置換の結果は、開き直した欄の案内に出さない（GitHub Issue #189）。
+            self.document.end_replace_note();
             if replace {
                 self.open_replace();
             } else {
@@ -499,8 +505,8 @@ impl Viewer {
             )
         })?;
         self.replacement.clone_from(&replacement);
+        // 全部の置換は欄を開いたまま数え、件数と確かめを欄の案内に出す（GitHub Issue #189）。
         let effect = if all {
-            self.palette = None;
             self.document.replace_all(query, &replacement)
         } else {
             self.document.replace_one(query, &replacement)
@@ -626,6 +632,13 @@ impl Viewer {
 
     /// パレットが開いている間の意図。どのキーもパレットへ渡し、表には届けない（Issue #41）。
     fn palette_intent(&mut self, intent: Intent, view: WindowView) -> Option<ClipboardText> {
+        // 全部の置換を数えている間と件数を見せている間は、Enter と Esc を確かめに使う（欄は開いたまま・GitHub Issue #189）。
+        if let Some((effect, consumed)) = self.document.replace_prompt_intent(intent) {
+            let copied = self.effect(effect);
+            if consumed {
+                return copied;
+            }
+        }
         let current = self.preferences.theme().position();
         let outcome = {
             let open = self.palette.as_mut()?;
@@ -805,77 +818,9 @@ impl Viewer {
             }
         }
     }
-}
 
-impl Session for Viewer {
-    fn close(&mut self) -> bool {
-        // 尋ねる画面はパレットより前に出す。
-        self.palette = None;
-        self.document.ask_close()
-    }
-
-    fn finished(&self) -> bool {
-        self.document.close_state() == CloseState::Finished
-    }
-
-    fn window_name(&self) -> String {
-        self.document.window_name()
-    }
-
-    fn frame(&self, view: WindowView) -> Frame {
-        let frame = self
-            .document
-            .frame(view, self.preferences.theme().palette());
-        let Some(open) = &self.palette else {
-            return frame;
-        };
-        let mut commands = frame.into_commands();
-        commands.extend(
-            open.state()
-                .paint(view, open.colors(), self.document.detail()),
-        );
-        Frame::new(view.size(), commands)
-    }
-
-    fn zoom(&self) -> ZoomLevel {
-        self.preferences.settings().zoom()
-    }
-
-    fn refresh(&mut self, view: WindowView) {
-        // 裏の保存の進み具合（見込みは原本の大きさ・列を足せば少し越えるので、割合は 99% で止める・SAVE-02）。
-        if let Some(job) = &self.saving {
-            self.document
-                .save_progress(job.written(), self.reader.source_length());
-        }
-        self.finish_saving();
-        let report = self.report();
-        // 読み方を試している間の索引の知らせは、元の読み方の画面のもの。
-        // 索引を作り終えたら今の表示の行を読み直す（試している読み方の画面は、元の読み方の索引では読めないので読み直さない）。
-        let reread = match self.trial.as_mut() {
-            Some(original) => {
-                original.report(report);
-                DocumentEffect::Stay
-            }
-            None => self.document.report(report),
-        };
-        self.effect(reread);
-        // 索引を作り終えたら、ファイルの終わりまでの選択を数え直す（変わっていなければ何もしない）。
-        self.refresh_totals();
-        if let Some(totals) = self.totals_report() {
-            self.document.totals_report(totals);
-        }
-        self.finding_report(view);
-        self.replacing_report();
-        let ticks = self.ticker.take();
-        if ticks > 0 {
-            let effect = self.document.tick(ticks, view);
-            self.effect(effect);
-            self.sync_ticker();
-        }
-    }
-
-    /// 意図を画面の状態に取り込み、求められたことをして、選んだ範囲の集計を作り直す。
-    fn intent(&mut self, intent: Intent, view: WindowView) -> Option<ClipboardText> {
+    /// 利用者の意図を取り込む（`Session::intent` の中身。取り込んだ後に表の印の問いをそろえる）。
+    fn apply_intent(&mut self, intent: Intent, view: WindowView) -> Option<ClipboardText> {
         let palette_took_last = core::mem::replace(&mut self.palette_took_last, false);
         // パレットを押して閉じた直後の 2 度目の押しは、表では 1 度の押し（直し始めない）。
         let intent = if let Intent::DoubleClick { at } = intent
@@ -926,6 +871,107 @@ impl Session for Viewer {
         let copied = self.effect(effect);
         self.refresh_totals();
         self.sync_ticker();
+        copied
+    }
+
+    /// 開いている検索と置換の欄の問いを、表の印の問いにそろえる。欄の文字と条件が同じなら作り直さない。
+    fn sync_found(&mut self) {
+        let wanted = self.palette.as_ref().and_then(|open| {
+            let state = open.state();
+            matches!(
+                state.mode(),
+                PaletteMode::Find | PaletteMode::Replace { .. }
+            )
+            .then(|| (state.query(), state.find_options()))
+        });
+        let same = match (&self.found, wanted) {
+            (Some(found), Some((text, options))) => {
+                found.text() == text && found.options() == options
+            }
+            (None, None) => true,
+            (Some(_), None) | (None, Some(_)) => false,
+        };
+        if !same {
+            self.found = self.palette.as_ref().and_then(|open| open.state().found());
+        }
+    }
+}
+
+impl Session for Viewer {
+    fn close(&mut self) -> bool {
+        // 尋ねる画面はパレットより前に出す。
+        self.palette = None;
+        self.document.ask_close()
+    }
+
+    fn finished(&self) -> bool {
+        self.document.close_state() == CloseState::Finished
+    }
+
+    fn window_name(&self) -> String {
+        self.document.window_name()
+    }
+
+    fn frame(&self, view: WindowView) -> Frame {
+        // 検索と置換の欄が開いている間は、打っている問いに当たる見えているセルと字に印を付ける（GitHub Issue #189）。
+        let found = self.found.as_ref();
+        let frame = self
+            .document
+            .frame_found(view, self.preferences.theme().palette(), found);
+        let Some(open) = &self.palette else {
+            return frame;
+        };
+        let mut commands = frame.into_commands();
+        let note = self.document.replace_guide();
+        commands.extend(open.state().paint_noted(
+            view,
+            (open.colors(), self.document.detail()),
+            note.as_deref(),
+        ));
+        Frame::new(view.size(), commands)
+    }
+
+    fn zoom(&self) -> ZoomLevel {
+        self.preferences.settings().zoom()
+    }
+
+    fn refresh(&mut self, view: WindowView) {
+        // 裏の保存の進み具合（見込みは原本の大きさ・列を足せば少し越えるので、割合は 99% で止める・SAVE-02）。
+        if let Some(job) = &self.saving {
+            self.document
+                .save_progress(job.written(), self.reader.source_length());
+        }
+        self.finish_saving();
+        let report = self.report();
+        // 読み方を試している間の索引の知らせは、元の読み方の画面のもの。
+        // 索引を作り終えたら今の表示の行を読み直す（試している読み方の画面は、元の読み方の索引では読めないので読み直さない）。
+        let reread = match self.trial.as_mut() {
+            Some(original) => {
+                original.report(report);
+                DocumentEffect::Stay
+            }
+            None => self.document.report(report),
+        };
+        self.effect(reread);
+        // 索引を作り終えたら、ファイルの終わりまでの選択を数え直す（変わっていなければ何もしない）。
+        self.refresh_totals();
+        if let Some(totals) = self.totals_report() {
+            self.document.totals_report(totals);
+        }
+        self.finding_report(view);
+        self.replacing_report();
+        let ticks = self.ticker.take();
+        if ticks > 0 {
+            let effect = self.document.tick(ticks, view);
+            self.effect(effect);
+            self.sync_ticker();
+        }
+    }
+
+    /// 意図を画面の状態に取り込み、求められたことをして、選んだ範囲の集計を作り直す。
+    fn intent(&mut self, intent: Intent, view: WindowView) -> Option<ClipboardText> {
+        let copied = self.apply_intent(intent, view);
+        self.sync_found();
         copied
     }
 
