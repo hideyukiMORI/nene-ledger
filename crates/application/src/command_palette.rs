@@ -1014,6 +1014,16 @@ mod tests {
         assert_eq!(commands.mode(), PaletteMode::Commands);
     }
 
+    /// `start` から `text` を 1 字ずつ打った欄と、最後の答え（制御文字は打たない）。
+    fn typed_one_by_one(start: &CommandPalette, text: &str) -> (CommandPalette, PaletteOutcome) {
+        let mut typed = start.clone();
+        let mut last = PaletteOutcome::Stay;
+        for character in text.chars().filter(|character| !character.is_control()) {
+            last = typed.handle(Intent::Type(character), 0);
+        }
+        (typed, last)
+    }
+
     /// 貼った文字列を一度に足すと、1 字ずつ打ったときと同じ欄・同じ答えになる（制御文字は打たない・GitHub Issue #207）。
     #[test]
     fn inserting_text_at_once_equals_typing_it() {
@@ -1028,11 +1038,7 @@ mod tests {
         ];
         for text in ["", "hozon", "12,3", "東京\tx\r\ny", "about"] {
             for start in &starts {
-                let mut typed = start.clone();
-                let mut last = PaletteOutcome::Stay;
-                for character in text.chars().filter(|character| !character.is_control()) {
-                    last = typed.handle(Intent::Type(character), 0);
-                }
+                let (typed, last) = typed_one_by_one(start, text);
                 let mut inserted = start.clone();
                 let outcome = inserted.insert_text(text);
                 assert_eq!(inserted, typed, "{text:?} {:?}", start.mode());
