@@ -45,8 +45,8 @@ M2 は「探して置き換え、壊れた行を直す」束を含む（ROADMAP�
 | 大文字小文字 | 区別しない | Alt+C |
 | 一致の仕方 | 部分一致 | Alt+W でセル全体 |
 | 範囲 | 表の全体 | Alt+S で選んだ範囲（列全体を選べば列を限る） |
-| 全角半角 | 区別しない（Excel の日本語版の既定） | パレットの切り替え |
-| ひらがなカタカナ | 区別する | パレットの切り替え |
+| 全角半角 | 区別しない（Excel の日本語版の既定） | パレットの切り替え（Alt+Z・2026-11-07 に GitHub Issue #199 で**提案**） |
+| ひらがなカタカナ | 区別する | パレットの切り替え（Alt+K・同上） |
 | 正規表現 | 使わない | Alt+R |
 
 - 条件は設定に残す（次の起動でも同じ・配色と同じ扱い）
@@ -121,6 +121,8 @@ M2 は「探して置き換え、壊れた行を直す」束を含む（ROADMAP�
   - 125 配色すべてで、当たったセルの上の字と当たった字が読め、当たった字の背景がほかの面から離れている（core のテスト `every_builtin_theme_marks_found_cells_and_characters_readably`）
   - 当たった字の印は字を書いた後に置き、表示の 1 行（`¶` など）と `…` で切った後ろに合わせる。見出しの行には付けない（application のテスト `found_cells_and_characters_are_marked_after_their_text`・`a_match_past_the_cut_marks_the_ellipsis`・`spans_in_the_value_map_onto_the_single_line`・`spans_past_the_cut_mark_the_ellipsis`）
   - 印を付ける問いは探す段と置換の段だけ（`only_the_find_and_replace_steps_mark_the_table`）。件数と確かめは置換の欄の案内に出し、Enter / Esc / 欄に打つ の扱いが決まっている（`counting_inside_the_open_field_waits_for_the_count`・`replacing_all_is_confirmed_inside_the_open_field`・`replacing_all_inside_the_open_field_can_be_declined`・`the_replace_step_shows_the_count_and_the_confirmation_in_place_of_its_keys`）
+- **active**（GitHub Issue #199 で入れた・キーは提案）:
+  - 検索と置換の欄で、全角半角（Alt+Z）とひらがなカタカナ（Alt+K）を 1 つずつ切り替え、案内の行に今の条件を出す（application のテスト `width_and_kana_toggle_one_each`・`the_find_steps_show_the_width_and_kana_conditions`・案内の幅は 32 の条件の組み合わせで `find_and_replace_guides_fit_the_narrowest_palette`・ui-x11 と ui-win32 の `find_keys`）
 - **planned（実装の Issue で active にする）**:
   - 正規表現の逆戻りで止まらない（病的な式と入力の時間を測る・gate-proofs）
   - 1 GB の表で、最後の行にだけある値を見つける時間を DuckDB / qsv / EmEditor と同じファイルで記録（QLT-014。`grep` と `rg` との比べは benchmarks 第 8 節）
