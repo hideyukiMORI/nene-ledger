@@ -423,6 +423,7 @@ impl Document {
             | Intent::Edit
             | Intent::Delete
             | Intent::BreakLine
+            | Intent::FillSelection
             | Intent::Advance(_)
             | Intent::Save
             | Intent::SaveAs
@@ -765,27 +766,7 @@ impl Document {
         if self.saving && intent == Intent::Cancel && self.editor.is_none() {
             return DocumentEffect::StopSaving;
         }
-        if self.saving
-            && matches!(
-                intent,
-                Intent::Type(_)
-                    | Intent::Edit
-                    | Intent::Delete
-                    | Intent::BreakLine
-                    | Intent::Save
-                    | Intent::SaveAs
-                    | Intent::NewTable
-                    | Intent::Paste
-                    | Intent::Undo
-                    | Intent::Redo
-                    | Intent::InsertRows(_)
-                    | Intent::RemoveRows
-                    | Intent::InsertColumns(_)
-                    | Intent::RemoveColumns
-                    | Intent::InsertHere
-                    | Intent::RemoveHere
-            )
-        {
+        if self.saving && changes_the_table(intent) {
             self.notice = Some(Notice::StillSaving);
             return DocumentEffect::Stay;
         }
@@ -837,6 +818,7 @@ impl Document {
             | Intent::Edit
             | Intent::Delete
             | Intent::BreakLine
+            | Intent::FillSelection
             | Intent::Advance(_)
             | Intent::Save
             | Intent::SaveAs
@@ -859,11 +841,7 @@ impl Document {
             | Intent::FreezeColumns
             | Intent::UnfreezeColumns => self.arrange(intent, window),
             Intent::GoTo(target) => self.jump(target, page, window),
-            // 開閉する。ペインの分だけ表が狭まるので、カーソルが見えるように縦の表示を動かす。
-            Intent::ToggleDetail => {
-                self.detail = self.detail.toggled();
-                reveal_row(current, self.selection.cursor().body(), page)
-            }
+            Intent::ToggleDetail => self.toggle_detail(current, page),
             Intent::Scroll(scroll) => self.wheel(scroll, current, window),
             Intent::Move { step, mode } => self.move_cursor((step, mode), page, window),
             Intent::Point { at, mode } => {
@@ -872,6 +850,13 @@ impl Document {
             }
         };
         self.go_to(target, page)
+    }
+
+    /// 詳細ペインを開閉する。ペインの分だけ表が狭まるので、カーソルが見えるように縦の表示を動かす（`current` は今の最初の
+    /// 本体の行・`page` は 1 画面の行の数）。動いた先の最初の行を返す。
+    fn toggle_detail(&mut self, current: u64, page: u64) -> u64 {
+        self.detail = self.detail.toggled();
+        reveal_row(current, self.selection.cursor().body(), page)
     }
 
     /// Esc：ドラッグの途中ならやめ、選んだ範囲を数えていれば止める。どちらでもなければ `None`。
@@ -935,6 +920,7 @@ impl Document {
             | Intent::Edit
             | Intent::Delete
             | Intent::BreakLine
+            | Intent::FillSelection
             | Intent::Advance(_)
             | Intent::Save
             | Intent::SaveAs
@@ -943,6 +929,17 @@ impl Document {
             | Intent::Undo
             | Intent::Redo => self.pointer_intent(intent, window),
         }
+    }
+
+    /// 編集中の矢印。欄の中で動ければ `None`、欄の端なら確定して表の動きの意図を返す。
+    fn arrow_in_field(&mut self, step: CursorStep, mode: SelectionMode) -> Option<Intent> {
+        if let Some(editor) = self.editor.as_mut()
+            && editor.arrow(step, mode == SelectionMode::Extend)
+        {
+            return None;
+        }
+        self.commit_edit();
+        Some(Intent::Move { step, mode })
     }
 
     /// 編集の意図（ADR 0026 の決定 1・2）。欄で受けたら `None`。表の意図として続けるなら、その意図を返す
@@ -961,17 +958,12 @@ impl Document {
             Intent::Cancel => self.editor = None,
             // 🔴 欄の中の字のコピーと切り取りはまだ（OS のクリップボードへ渡す経路を、別の Issue で足す）。
             Intent::Copy | Intent::Cut => {}
-            Intent::Move { step, mode } => {
-                if editor.arrow(step, mode == SelectionMode::Extend) {
-                    return None;
-                }
-                self.commit_edit();
-                return Some(intent);
-            }
+            Intent::Move { step, mode } => return self.arrow_in_field(step, mode),
             Intent::Confirm => return Some(self.committed_move(CursorStep::Down)),
             Intent::Advance(step) => return Some(self.committed_move(step)),
             // 別のセル・別の行への移動と、表の並びを変える操作と、続けて探すのは、確定してから（保存と元に戻すは `apply` が先に受ける）。
             Intent::FindAgain { .. }
+            | Intent::FillSelection
             | Intent::Save
             | Intent::SaveAs
             | Intent::NewTable
@@ -1065,7 +1057,7 @@ impl Document {
                 self.empty_cursor_cell();
                 None
             }
-            Intent::BreakLine => None,
+            Intent::BreakLine | Intent::FillSelection => None,
             Intent::Confirm => Some(plain_move(CursorStep::Down)),
             Intent::Advance(step) => Some(plain_move(step)),
             Intent::Scroll(_)
@@ -1220,6 +1212,41 @@ impl Document {
         if moving && let Some(mark) = cut {
             plan = plan.moving(mark.into_clears());
         }
+        self.request_rows(plan)
+    }
+
+    /// Ctrl+Enter（EDIT-02・GitHub Issue #203）：編集中の欄の文字を、選んだ最初の範囲のすべてのセルに書く。書く道は貼り付けの
+    /// 「1 つの値は範囲を埋める」（ADR 0029 の決定 1）と同じで、1 手で戻り、上限も同じ。欄の字は引用を解かずにそのまま 1 つの
+    /// 値にする（改行やタブを含んでも分けない）。範囲が 1 つのセルなら、動かずに確定するだけ。編集していなければ何もしない。
+    pub fn fill_selection(&mut self) -> PasteRequest {
+        if self.closing != CloseState::Open {
+            return PasteRequest::Done;
+        }
+        let Some(editor) = self.editor.as_ref() else {
+            return PasteRequest::Done;
+        };
+        if self.saving {
+            self.notice = Some(Notice::StillSaving);
+            return PasteRequest::Done;
+        }
+        let range = self.ranges().all().next().unwrap_or(self.selection);
+        if range.top_left() == range.bottom_right() {
+            self.commit_edit();
+            return PasteRequest::Done;
+        }
+        let value = String::from(editor.field().text());
+        self.notice = None;
+        self.pasting = None;
+        // 書けないとき（大きすぎる・索引を待つ）は、欄を残して打った字を失わない。
+        let Some(plan) = self.paste_plan(alloc::vec![alloc::vec![value]]) else {
+            return PasteRequest::Done;
+        };
+        self.editor = None;
+        self.request_rows(plan)
+    }
+
+    /// 待たせる貼り付け `plan` の行を読ませる（表の終わりより下は足す行なので読まない）。
+    fn request_rows(&mut self, plan: PendingPaste) -> PasteRequest {
         let first_line = self.line_of(plan.top());
         // 表の終わりより下は足す行なので読まない。
         let (known, _) = self.known_body_rows();
@@ -2501,6 +2528,7 @@ impl Document {
             | Intent::Edit
             | Intent::Delete
             | Intent::BreakLine
+            | Intent::FillSelection
             | Intent::Advance(_)
             | Intent::Save
             | Intent::SaveAs
@@ -2718,6 +2746,7 @@ impl Document {
             | Intent::Edit
             | Intent::Delete
             | Intent::BreakLine
+            | Intent::FillSelection
             | Intent::Advance(_)
             | Intent::Save
             | Intent::SaveAs
@@ -4520,6 +4549,30 @@ fn find_columns(
 }
 
 /// 意図 `intent` の後も切り取りの枠を残すか（見るだけ・選ぶだけ・動くだけの意図）。表の値・並び・列の見せる順を変える
+/// 表を変える意図か（保存の途中は受けない・SAVE-02）。
+fn changes_the_table(intent: Intent) -> bool {
+    matches!(
+        intent,
+        Intent::Type(_)
+            | Intent::Edit
+            | Intent::Delete
+            | Intent::BreakLine
+            | Intent::FillSelection
+            | Intent::Save
+            | Intent::SaveAs
+            | Intent::NewTable
+            | Intent::Paste
+            | Intent::Undo
+            | Intent::Redo
+            | Intent::InsertRows(_)
+            | Intent::RemoveRows
+            | Intent::InsertColumns(_)
+            | Intent::RemoveColumns
+            | Intent::InsertHere
+            | Intent::RemoveHere
+    )
+}
+
 /// 意図・Esc・別のコピーと切り取り・直し始めは消す（ADR 0029 の決定 5）。
 const fn keeps_cut(intent: Intent) -> bool {
     match intent {
@@ -4556,6 +4609,7 @@ const fn keeps_cut(intent: Intent) -> bool {
         | Intent::Edit
         | Intent::Delete
         | Intent::BreakLine
+        | Intent::FillSelection
         | Intent::DoubleClick { .. }
         | Intent::MoveColumns(_)
         | Intent::ResetColumns
@@ -7760,6 +7814,74 @@ mod tests {
             changes.columns().column_at(2).unwrap(),
         );
         assert_eq!(text_of(&document, corner.0, corner.1), Some("s"));
+    }
+
+    /// Ctrl+Enter の一括の入力を、貼り付けと同じく読ませた行に書く。
+    fn filled(document: &mut Document) -> DocumentEffect {
+        match document.fill_selection() {
+            PasteRequest::Done => DocumentEffect::Stay,
+            PasteRequest::Read { first_line, count } => {
+                let rows: Vec<Vec<String>> = editable_rows()
+                    .into_iter()
+                    .skip(usize::try_from(first_line).unwrap_or(usize::MAX))
+                    .take(usize::try_from(count).unwrap_or(0))
+                    .collect();
+                document.paste_rows(first_line, (&rows, &[]), normal())
+            }
+        }
+    }
+
+    /// 範囲を選んで打ち始め、Ctrl+Enter で範囲のすべてのセルに同じ値を書く。改行を含む欄も 1 つの値のまま（分けない）。
+    /// 1 手で戻る（EDIT-02・GitHub Issue #203・ADR 0029 の決定 1 と同じ道）。
+    #[test]
+    fn ctrl_enter_fills_the_selected_range_with_the_typed_value() {
+        let mut document = indexed_editable();
+        for step in [CursorStep::Down, CursorStep::Right] {
+            document.apply(
+                Intent::Move {
+                    step,
+                    mode: SelectionMode::Extend,
+                },
+                normal(),
+            );
+        }
+        for intent in [Intent::Type('a'), Intent::BreakLine, Intent::Type('b')] {
+            document.apply(intent, normal());
+        }
+        filled(&mut document);
+        for (row, column) in [(0, 0), (0, 1), (1, 0), (1, 1)] {
+            assert_eq!(
+                text_of(&document, RowId::Source(row), ColumnId::Source(column)),
+                Some("a\nb"),
+                "{row} {column}"
+            );
+        }
+        assert_eq!(
+            text_of(&document, RowId::Source(2), ColumnId::Source(0)),
+            None
+        );
+        assert!(document.editing_cell().is_none(), "欄は閉じる");
+        document.apply(Intent::Undo, normal());
+        assert!(document.edits().is_empty(), "1 手で戻る");
+    }
+
+    /// 1 つのセルなら動かずに確定するだけ。編集していなければ何もしない。
+    #[test]
+    fn ctrl_enter_on_one_cell_commits_in_place_and_does_nothing_without_editing() {
+        let mut document = indexed_editable();
+        assert_eq!(document.fill_selection(), PasteRequest::Done);
+        assert!(document.edits().is_empty());
+        document.apply(Intent::Type('q'), normal());
+        assert_eq!(document.fill_selection(), PasteRequest::Done);
+        assert_eq!(
+            text_of(&document, RowId::Source(0), ColumnId::Source(0)),
+            Some("q")
+        );
+        assert_eq!(
+            document.selection().cursor(),
+            CellPosition::new(0, 0),
+            "動かない"
+        );
     }
 
     /// 1 つの値を広い範囲に貼れば、範囲のすべてのセルになる（Excel と同じ・ADR 0029 の決定 1）。

@@ -369,7 +369,13 @@ impl Viewer {
 
     /// 表に貼る。貼る行を読んでから書く（書く前の値と原本の値を履歴に残す・ADR 0029）。読めなければ貼らない。
     fn paste_into_table(&mut self, text: &str, view: WindowView) {
-        let PasteRequest::Read { first_line, count } = self.document.paste(text) else {
+        let request = self.document.paste(text);
+        self.finish_paste(request, view);
+    }
+
+    /// 貼り付け（と Ctrl+Enter の一括の入力・EDIT-02）が求めた行を読んで書く。読めなければ書かない。
+    fn finish_paste(&mut self, request: PasteRequest, view: WindowView) {
+        let PasteRequest::Read { first_line, count } = request else {
             return;
         };
         let lines = usize::try_from(count)
@@ -897,6 +903,12 @@ impl Session for Viewer {
         }
         if intent == Intent::NewTable {
             self.open_new_window();
+            return None;
+        }
+        // Ctrl+Enter：編集中の欄の文字を選んだ範囲のすべてのセルに書く（貼り付けと同じ道・EDIT-02）。
+        if intent == Intent::FillSelection {
+            let request = self.document.fill_selection();
+            self.finish_paste(request, view);
             return None;
         }
         if let Intent::Zoom(step) = intent {

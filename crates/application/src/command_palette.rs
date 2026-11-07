@@ -236,6 +236,7 @@ impl CommandPalette {
             | Intent::Edit
             | Intent::Delete
             | Intent::BreakLine
+            | Intent::FillSelection
             | Intent::Advance(_)
             | Intent::Save
             | Intent::SaveAs
@@ -353,6 +354,7 @@ impl CommandPalette {
             | Intent::Edit
             | Intent::Delete
             | Intent::BreakLine
+            | Intent::FillSelection
             | Intent::Advance(_)
             | Intent::Save
             | Intent::SaveAs
