@@ -78,6 +78,9 @@ pub(crate) struct Viewer {
     replacing: Option<SplitJob<ReplaceFold>>,
     /// 前に置き換えた文字（次に置換の欄を開くときに入れておく）。
     replacement: String,
+    /// 検索と置換の欄が開いている間の、表の印の問い（欄の文字と条件が変わったときだけ作り直す・描くたびに正規表現を
+    /// 組み立てない・GitHub Issue #189）。
+    found: Option<FindQuery>,
     /// 読み方を試している間の、元の画面（Esc で戻す・Issue #52）。
     trial: Option<Document>,
     /// 裏で回っている保存（ADR 0026 の決定 6）。
@@ -108,6 +111,7 @@ impl Viewer {
             finding: None,
             replacing: None,
             replacement: String::new(),
+            found: None,
             trial: None,
             saving: None,
             saving_as: None,
@@ -459,6 +463,8 @@ impl Viewer {
     fn opened_palette(&mut self, intent: Intent) -> bool {
         let colors = self.preferences.theme().palette();
         if let Intent::OpenFind { replace } = intent {
+            // 前の全部の置換の結果は、開き直した欄の案内に出さない（GitHub Issue #189）。
+            self.document.end_replace_note();
             if replace {
                 self.open_replace();
             } else {
@@ -812,6 +818,83 @@ impl Viewer {
             }
         }
     }
+
+    /// 利用者の意図を取り込む（`Session::intent` の中身。取り込んだ後に表の印の問いをそろえる）。
+    fn apply_intent(&mut self, intent: Intent, view: WindowView) -> Option<ClipboardText> {
+        let palette_took_last = core::mem::replace(&mut self.palette_took_last, false);
+        // パレットを押して閉じた直後の 2 度目の押しは、表では 1 度の押し（直し始めない）。
+        let intent = if let Intent::DoubleClick { at } = intent
+            && (palette_took_last || self.palette.is_some())
+        {
+            Intent::Point {
+                at,
+                mode: SelectionMode::Collapse,
+            }
+        } else {
+            intent
+        };
+        if self.palette.is_some() {
+            self.palette_took_last = true;
+            return self.palette_intent(intent, view);
+        }
+        if self.opened_palette(intent) {
+            return None;
+        }
+        if intent == Intent::NewTable {
+            self.open_new_window();
+            return None;
+        }
+        if let Intent::Zoom(step) = intent {
+            // 文字の大きさも配色と同じく、ファイルの画面の状態ではないので設定として持つ（ADR 0020）。
+            let zoom = self.zoom().stepped(step);
+            let saved = self.preferences.set_zoom(zoom);
+            self.notify_saved(Notice::Zoom(zoom), saved);
+            return None;
+        }
+        if let Intent::Theme(step) = intent {
+            // 配色はファイルの画面の状態ではないので設定として持つ。替えたら名前を知らせる。
+            let saved = self.preferences.step_theme(step);
+            let theme = self.preferences.theme();
+            let notice = Notice::Theme {
+                name: theme.name(),
+                position: theme.position(),
+            };
+            self.notify_saved(notice, saved);
+            return None;
+        }
+        let effect = self.document.apply(intent, view);
+        if intent == Intent::ToggleDetail
+            && self.preferences.set_detail(self.document.detail()).is_err()
+        {
+            self.document.notify(Notice::SettingsUnsaved);
+        }
+        let copied = self.effect(effect);
+        self.refresh_totals();
+        self.sync_ticker();
+        copied
+    }
+
+    /// 開いている検索と置換の欄の問いを、表の印の問いにそろえる。欄の文字と条件が同じなら作り直さない。
+    fn sync_found(&mut self) {
+        let wanted = self.palette.as_ref().and_then(|open| {
+            let state = open.state();
+            matches!(
+                state.mode(),
+                PaletteMode::Find | PaletteMode::Replace { .. }
+            )
+            .then(|| (state.query(), state.find_options()))
+        });
+        let same = match (&self.found, wanted) {
+            (Some(found), Some((text, options))) => {
+                found.text() == text && found.options() == options
+            }
+            (None, None) => true,
+            (Some(_), None) | (None, Some(_)) => false,
+        };
+        if !same {
+            self.found = self.palette.as_ref().and_then(|open| open.state().found());
+        }
+    }
 }
 
 impl Session for Viewer {
@@ -831,10 +914,10 @@ impl Session for Viewer {
 
     fn frame(&self, view: WindowView) -> Frame {
         // 検索と置換の欄が開いている間は、打っている問いに当たる見えているセルと字に印を付ける（GitHub Issue #189）。
-        let found = self.palette.as_ref().and_then(|open| open.state().found());
-        let frame =
-            self.document
-                .frame_found(view, self.preferences.theme().palette(), found.as_ref());
+        let found = self.found.as_ref();
+        let frame = self
+            .document
+            .frame_found(view, self.preferences.theme().palette(), found);
         let Some(open) = &self.palette else {
             return frame;
         };
@@ -887,56 +970,8 @@ impl Session for Viewer {
 
     /// 意図を画面の状態に取り込み、求められたことをして、選んだ範囲の集計を作り直す。
     fn intent(&mut self, intent: Intent, view: WindowView) -> Option<ClipboardText> {
-        let palette_took_last = core::mem::replace(&mut self.palette_took_last, false);
-        // パレットを押して閉じた直後の 2 度目の押しは、表では 1 度の押し（直し始めない）。
-        let intent = if let Intent::DoubleClick { at } = intent
-            && (palette_took_last || self.palette.is_some())
-        {
-            Intent::Point {
-                at,
-                mode: SelectionMode::Collapse,
-            }
-        } else {
-            intent
-        };
-        if self.palette.is_some() {
-            self.palette_took_last = true;
-            return self.palette_intent(intent, view);
-        }
-        if self.opened_palette(intent) {
-            return None;
-        }
-        if intent == Intent::NewTable {
-            self.open_new_window();
-            return None;
-        }
-        if let Intent::Zoom(step) = intent {
-            // 文字の大きさも配色と同じく、ファイルの画面の状態ではないので設定として持つ（ADR 0020）。
-            let zoom = self.zoom().stepped(step);
-            let saved = self.preferences.set_zoom(zoom);
-            self.notify_saved(Notice::Zoom(zoom), saved);
-            return None;
-        }
-        if let Intent::Theme(step) = intent {
-            // 配色はファイルの画面の状態ではないので設定として持つ。替えたら名前を知らせる。
-            let saved = self.preferences.step_theme(step);
-            let theme = self.preferences.theme();
-            let notice = Notice::Theme {
-                name: theme.name(),
-                position: theme.position(),
-            };
-            self.notify_saved(notice, saved);
-            return None;
-        }
-        let effect = self.document.apply(intent, view);
-        if intent == Intent::ToggleDetail
-            && self.preferences.set_detail(self.document.detail()).is_err()
-        {
-            self.document.notify(Notice::SettingsUnsaved);
-        }
-        let copied = self.effect(effect);
-        self.refresh_totals();
-        self.sync_ticker();
+        let copied = self.apply_intent(intent, view);
+        self.sync_found();
         copied
     }
 

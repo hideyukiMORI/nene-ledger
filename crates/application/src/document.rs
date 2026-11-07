@@ -1782,15 +1782,28 @@ impl Document {
     /// Esc はやめる（欄は開いたまま）。ほかの意図（欄に打つ・条件を替える）は置き換えをやめ、使い切らない（欄が受け取る）。
     /// 全部の置換が無ければ `None`。
     pub fn replace_prompt_intent(&mut self, intent: Intent) -> Option<(DocumentEffect, bool)> {
-        let counted = self.replacing.as_ref()?.counted().is_some();
+        let Some(run) = self.replacing.as_ref() else {
+            // 全部の置換が終わった後の、欄への次の意図。置換の知らせ（案内の行にも出す）はここまで。
+            self.end_replace_note();
+            return None;
+        };
+        let counted = run.counted().is_some();
+        // 表を眺める（スクロール・ドラッグ・離す）は、数えも確かめもやめない（印を見て確かめられる）。
+        if matches!(
+            intent,
+            Intent::Scroll(_) | Intent::Drag { .. } | Intent::Release
+        ) {
+            return Some((DocumentEffect::Stay, false));
+        }
         let consumed = matches!(intent, Intent::Confirm | Intent::Cancel);
         if !counted {
-            let effect = if intent == Intent::Confirm {
-                DocumentEffect::Stay
-            } else {
-                DocumentEffect::StopReplacing
-            };
-            return Some((effect, consumed));
+            if intent == Intent::Confirm {
+                return Some((DocumentEffect::Stay, true));
+            }
+            // 数えをやめたら、すぐに手放す（やめる前に数え終えた結果が後から届いても、古い問いの件数を見せない）。
+            self.replacing = None;
+            self.notice = Some(Notice::Replace(ReplaceNotice::Stopped));
+            return Some((DocumentEffect::StopReplacing, consumed));
         }
         if intent == Intent::Confirm {
             return Some((self.apply_replace(), true));
@@ -1798,6 +1811,14 @@ impl Document {
         self.replacing = None;
         self.notice = Some(Notice::Replace(ReplaceNotice::Stopped));
         Some((DocumentEffect::Stay, consumed))
+    }
+
+    /// 全部の置換の結果の知らせ（状態の行と置換の欄の案内）を消す。欄に次の意図が来たときと、欄を開き直したとき
+    /// （古い結果で案内のキーを隠さない・GitHub Issue #189）。
+    pub fn end_replace_note(&mut self) {
+        if let Some(Notice::Replace(_)) = self.notice {
+            self.notice = None;
+        }
     }
 
     /// 置換の欄の案内に出す、全部の置換の短い 1 行（GitHub Issue #189）。数えている間は進み具合、件数を見せている間は
@@ -8401,15 +8422,22 @@ mod tests {
             None,
             "置換が無い"
         );
-        assert_eq!(document.replace_all(query, "#"), DocumentEffect::Replace);
+        assert_eq!(
+            document.replace_all(query.clone(), "#"),
+            DocumentEffect::Replace
+        );
         assert_eq!(
             document.replace_guide().as_deref(),
             Some("置き換えるセルを数えています… · Esc やめる")
         );
         for (intent, answer) in [
             (Intent::Confirm, (DocumentEffect::Stay, true)),
+            // 表を眺めても数えはやめない。
+            (
+                Intent::Scroll(Scroll::Down { rows: 1 }),
+                (DocumentEffect::Stay, false),
+            ),
             (Intent::Cancel, (DocumentEffect::StopReplacing, true)),
-            (Intent::Type('x'), (DocumentEffect::StopReplacing, false)),
         ] {
             assert_eq!(
                 document.replace_prompt_intent(intent),
@@ -8417,6 +8445,31 @@ mod tests {
                 "{intent:?}"
             );
         }
+        let mut typed = indexed_editable();
+        assert_eq!(typed.replace_all(query, "#"), DocumentEffect::Replace);
+        assert_eq!(
+            typed.replace_prompt_intent(Intent::Type('x')),
+            Some((DocumentEffect::StopReplacing, false))
+        );
+    }
+
+    /// 欄で数えをやめたら、すぐに手放す。やめる前に数え終えた結果が後から届いても、古い問いの件数を見せず、置き換えない。
+    /// 結果の知らせは、欄への次の意図で消える（GitHub Issue #189）。
+    #[test]
+    fn a_count_stopped_from_the_field_ignores_a_late_result() {
+        let mut document = indexed_editable();
+        let query = FindQuery::new("1", FindOptions::standard());
+        assert_eq!(document.replace_all(query, "#"), DocumentEffect::Replace);
+        let late = counted_replacements(&mut document);
+        document.replace_prompt_intent(Intent::Type('2'));
+        document.replace_counted((late, 0), false);
+        assert_eq!(
+            document.replace_guide().as_deref(),
+            Some("置き換えませんでした（訳は下の状態の行）")
+        );
+        assert_eq!(document.replace_prompt_intent(Intent::Confirm), None);
+        assert_eq!(document.replace_guide(), None);
+        assert!(document.edits().is_empty());
     }
 
     /// 置換の欄が開いている間に件数を見せる（GitHub Issue #189）：件数と確かめを案内の 1 行に出し、数えた問いに印を付け、

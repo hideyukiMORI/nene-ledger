@@ -59,6 +59,8 @@ const CUT_DASH: u32 = 4;
 const FROZEN_LINE: u32 = 2;
 /// 編集の欄のカーソルの棒の太さ（論理の画素）。
 const CARET_WIDTH: u32 = 2;
+/// 印を付けるセルの値の長さの上限（バイト）。これより長い値は描くたびに照らさない（GitHub Issue #189）。
+const FOUND_LIMIT: usize = 64 * 1024;
 /// 確定前の文字列の下線の太さ（論理の画素）。
 const UNDERLINE: u32 = 1;
 
@@ -277,6 +279,10 @@ impl<'view> FramePainter<'view> {
 
     /// 本体の行のセルの値 `value` の中で、問いに当たった字の範囲（表示の 1 行の中のバイト）。見出しの行は探さないので空。
     fn found_in(&self, style: RowStyle, value: &str) -> Vec<Range<usize>> {
+        // 長い値は描くたびに全体を照らさない（描く手間を画面の大きさに比例させる・cell_display の約束）。印は付けない。
+        if value.len() > FOUND_LIMIT {
+            return Vec::new();
+        }
         match (style, self.found) {
             (RowStyle::Body(_), Some(query)) => shown_spans(value, &query.spans(value)),
             (RowStyle::Header | RowStyle::Numbers | RowStyle::Body(_), _) => Vec::new(),
@@ -537,18 +543,31 @@ impl<'view> FramePainter<'view> {
         };
         self.fill(rect, background);
         if !text.is_empty() {
-            self.text(rect, text, self.palette.text());
-            self.found_marks(rect, text, found);
+            // 収めた文字列と基準線は 1 度だけ決め、字と印の両方に使う。
+            let (shown, baseline) = self.placed(rect, text);
+            let marks = self.found_marks(rect, (text, &shown, baseline), found);
+            self.commands.push(DrawCommand::Text {
+                baseline,
+                text: shown,
+                color: self.palette.text(),
+                clip: rect,
+                role: TextRole::Content,
+            });
+            self.commands.extend(marks);
         }
     }
 
-    /// `rect` に書いた `text` の、当たった字の範囲 `found` に印（明るい背景と濃い字）を付ける。`…` で切った後ろの当たりは
-    /// `…` に付ける。
-    fn found_marks(&mut self, rect: PixelRect, text: &str, found: &[Range<usize>]) {
+    /// `rect` に、基準線 `baseline` から収めた文字列 `shown` として書く値 `text` の、当たった字の範囲 `found` の印（明るい
+    /// 背景と濃い字）の命令。字の命令の後に置く。`…` で切った後ろの当たりは `…` に付ける。
+    fn found_marks(
+        &self,
+        rect: PixelRect,
+        (text, shown, baseline): (&str, &str, PixelPoint),
+        found: &[Range<usize>],
+    ) -> Vec<DrawCommand> {
         if found.is_empty() {
-            return;
+            return Vec::new();
         }
-        let (shown, baseline) = self.placed(rect, text);
         let spare = rect
             .size()
             .height()
@@ -563,18 +582,19 @@ impl<'view> FramePainter<'view> {
                 self.metrics.line_height().min(rect.size().height()),
             ),
         );
-        for span in fitted_spans(text, &shown, found) {
-            self.commands.push(DrawCommand::TextSpan {
+        fitted_spans(text, shown, found)
+            .into_iter()
+            .map(|span| DrawCommand::TextSpan {
                 baseline,
-                text: shown.clone(),
+                text: String::from(shown),
                 start: span.start,
                 end: span.end,
                 band,
                 color: self.palette.found_text(),
                 ink: self.palette.found_ink(),
                 role: TextRole::Content,
-            });
-        }
+            })
+            .collect()
     }
 
     /// 矩形を塗る。
@@ -1033,6 +1053,18 @@ mod tests {
         let breaks = [row(1, &["a\r\nb", "x"])];
         let broken = paint_found(&breaks, &line, &ColumnWidths::fit(&[breaks[0].cells()]));
         assert_eq!(spans(&broken), vec![("a¶b", 3, 4)]);
+    }
+
+    /// 64 KiB を超える値は、描くたびに照らさない（印を付けない）。
+    #[test]
+    fn values_longer_than_the_limit_are_not_marked() {
+        let long = alloc::format!("tok{}", "x".repeat(FOUND_LIMIT));
+        let rows = [row(1, &["a", long.as_str()])];
+        let found = FindQuery::new("tok", FindOptions::standard());
+        let narrow = ColumnWidths::fit(&[&[String::from("a"), String::from("abcdef")][..]]);
+        let commands = paint_found(&rows, &found, &narrow);
+        assert!(spans(&commands).is_empty());
+        assert!(fills_of(&commands, palette().found()).is_empty());
     }
 
     /// セルに収まらず `…` で切った値は、切った後ろの当たりを `…` の印で知らせる。

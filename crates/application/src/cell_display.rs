@@ -83,7 +83,8 @@ pub fn shown_spans(value: &str, spans: &[Range<usize>]) -> Vec<Range<usize>> {
 /// 切った後ろにかかる範囲は、見えている頭の部分までと `…` に印を付ける（切った後ろに当たりがあることが見える）。
 #[must_use]
 pub fn fitted_spans(text: &str, fitted: &str, spans: &[Range<usize>]) -> Vec<Range<usize>> {
-    let cut = fitted.len() != text.len();
+    // 🔴 バイトの長さでは決められない（3 バイトの `…` が 1 バイトの字 3 つと入れ替わると同じ長さになる）。
+    let cut = fitted.len() != text.len() || fitted != text;
     let head = if cut {
         fitted.len().saturating_sub(ELLIPSIS.len_utf8())
     } else {
@@ -209,6 +210,10 @@ mod tests {
         assert_eq!(fitted_spans(text, &cut, &one(6..7)), one(4..7));
         assert_eq!(fitted_spans(text, &cut, &[3..5, 6..7]), one(3..7));
         assert_eq!(fitted_spans("ab", "ab", &one(0..2)), one(0..2));
+        // 切った後もバイトの長さが同じ（「abcde」→「ab…」はどちらも 5 バイト）でも、切ったと分かる。
+        let same_length = fitted("abcde", 4);
+        assert_eq!(same_length, "ab…");
+        assert_eq!(fitted_spans("abcde", &same_length, &one(3..5)), one(2..5));
     }
 
     #[test]

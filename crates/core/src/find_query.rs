@@ -123,10 +123,15 @@ impl FindQuery {
     /// セル全体の一致ならセルの全体。
     #[must_use]
     pub fn spans(&self, cell: &str) -> Vec<Range<usize>> {
-        if !self.matches(cell) {
+        if self.folded.is_empty() {
             return Vec::new();
         }
-        if let Some(regex) = &self.regex {
+        // 当たるかを先に `matches` で確かめると、同じセルを 2 回畳むことになる。範囲が空なら当たらない（`matches` と同じ
+        // 答えであることはテストで固定している）。
+        if self.options.regex() {
+            let Some(regex) = &self.regex else {
+                return Vec::new();
+            };
             let (folded, origins) = fold_with_origins(cell, self.options);
             let found = regex
                 .find_iter(folded.as_str())
@@ -135,7 +140,11 @@ impl FindQuery {
             return without_overlaps(found);
         }
         if self.options.whole_cell() {
-            return alloc::vec![0..cell.len()];
+            return if self.matches(cell) {
+                alloc::vec![0..cell.len()]
+            } else {
+                Vec::new()
+            };
         }
         self.plain_spans(cell)
     }
