@@ -48,7 +48,7 @@ ADR は「なぜそう決めたか」「何を却下したか」を書く。
 | [0030](0030-find-and-replace.md) | 検索はパレットの欄の段で、見えている値（原本 ＋ 差分）を裏で探す。置換は 1 手の束にし、全部の置換は件数を見せてから | 受理 |
 | [0031](0031-regex-in-core.md) | 正規表現の照合は core に置き、`regex-automata`（`no_std`）を使う（ADR 0030 の決定 5 を直す） | 受理 |
 | [0032](0032-preview-release-on-github.md) | プレビュー版（0.1.0-preview.1）を、Windows の exe の zip だけで GitHub Releases に置く | 受理 |
-| [0033](0033-window-keeps-visible-columns.md) | 窓の行は見えている列の範囲だけを持ち、レコードは読みながら行にする | 提案 |
+| [0033](0033-window-keeps-visible-columns.md) | 窓の行は見えている列の範囲だけを持ち、レコードは読みながら行にする | 受理 |
 
 ## これから書くもの（Issue が立ったら）
 
