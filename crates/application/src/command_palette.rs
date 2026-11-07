@@ -204,8 +204,8 @@ impl CommandPalette {
             return outcome;
         }
         match intent {
-            Intent::Type(character) => self.edit_query(Some(character)),
-            Intent::Erase => self.edit_query(None),
+            Intent::Type(character) => self.insert_text(character.encode_utf8(&mut [0_u8; 4])),
+            Intent::Erase => self.erase_query(),
             Intent::Move { step, .. } => self.step(step),
             Intent::Confirm => self.confirmed(current_theme),
             Intent::Cancel | Intent::OpenPalette | Intent::OpenGoTo | Intent::OpenFind { .. } => {
@@ -308,7 +308,6 @@ impl CommandPalette {
     /// （Esc などはパレットの共通の扱い）。
     fn replace_intent(&mut self, intent: Intent, with: bool) -> Option<PaletteOutcome> {
         match intent {
-            Intent::Type(character) if with => self.replacement.push(character),
             Intent::Erase if with => drop(self.replacement.pop()),
             Intent::Advance(CursorStep::Right | CursorStep::Left) => {
                 self.mode = PaletteMode::Replace { with: !with };
@@ -453,32 +452,28 @@ impl CommandPalette {
         }
     }
 
-    /// 欄に字 `typed` を足す（`None` は 1 字消す）。上書きを尋ねていればやめ、候補を頭から選び直す。
-    /// 貼った文字列 `text` を、打っている欄（置換の段で置き換える欄を打っていればそちら、ほかは検索の欄）に一度に足す。
-    /// 改行・タブなどの制御文字は打たない。1 字ずつ `Intent::Type` を渡したときと同じ欄・同じ答えになるが、候補を探し
-    /// 直すのは 1 回だけ（1 字ごとに探し直すと、長い文字列で字の数の 2 乗の手間になり窓が止まった・GitHub Issue #207）。
+    /// 文字列 `text` を、打っている欄（置換の段で置き換える欄を打っていればそちら、ほかは検索の欄）に足す。字を打つ・
+    /// 貼る・IME の確定の、欄に字を足すただ 1 つの道（ARC-001）。改行・タブなどの制御文字は打たない。検索の欄なら上書きを
+    /// 尋ねていればやめ、候補を頭から選び直す。長い文字列でも候補を探し直すのは 1 回だけ（1 字ごとに探し直すと、字の数の
+    /// 2 乗の手間になり窓が止まった・GitHub Issue #207）。
     pub fn insert_text(&mut self, text: &str) -> PaletteOutcome {
-        let typed: String = text
-            .chars()
-            .filter(|character| !character.is_control())
-            .collect();
-        if typed.is_empty() {
+        let field = if self.mode == (PaletteMode::Replace { with: true }) {
+            &mut self.replacement
+        } else {
+            &mut self.query
+        };
+        let before = field.len();
+        field.extend(text.chars().filter(|character| !character.is_control()));
+        if field.len() == before || self.mode == (PaletteMode::Replace { with: true }) {
             return PaletteOutcome::Stay;
         }
-        if self.mode == (PaletteMode::Replace { with: true }) {
-            self.replacement.push_str(&typed);
-            return PaletteOutcome::Stay;
-        }
-        self.query.push_str(&typed);
         self.stop_asking();
         self.retarget(0)
     }
 
-    fn edit_query(&mut self, typed: Option<char>) -> PaletteOutcome {
-        match typed {
-            Some(character) => self.query.push(character),
-            None => drop(self.query.pop()),
-        }
+    /// 検索の欄の最後の字を 1 つ消す。上書きを尋ねていればやめ、候補を頭から選び直す。
+    fn erase_query(&mut self) -> PaletteOutcome {
+        self.query.pop();
         self.stop_asking();
         self.retarget(0)
     }
@@ -1014,6 +1009,34 @@ mod tests {
         assert_eq!(commands.mode(), PaletteMode::Commands);
     }
 
+    /// 配色の段で貼った文字列は、合う配色を試す（`Preview`）。上書きを尋ねている欄に貼れば尋ねるのをやめる。
+    #[test]
+    fn pasting_previews_a_theme_and_stops_asking_to_overwrite() {
+        let mut themes = choosing_a_theme();
+        assert!(matches!(
+            themes.insert_text("light"),
+            PaletteOutcome::Preview(_)
+        ));
+        let mut asking = asking_to_overwrite();
+        asking.insert_text("x");
+        assert_eq!(asking.mode(), PaletteMode::SaveAs { overwrite: false });
+    }
+
+    /// 名前を付けて保存の段で、上書きを尋ねている欄（打てば尋ねるのをやめる）。
+    fn asking_to_overwrite() -> CommandPalette {
+        let mut palette = CommandPalette::open_save_as(String::from("/tmp/a.csv"));
+        palette.ask_overwrite();
+        palette
+    }
+
+    /// 配色を選ぶ段（打つと候補を試す `Preview` を返す）。
+    fn choosing_a_theme() -> CommandPalette {
+        let mut palette = CommandPalette::open();
+        typed(&mut palette, "theme");
+        palette.handle(Intent::Confirm, 5);
+        palette
+    }
+
     /// `start` から `text` を 1 字ずつ打った欄と、最後の答え（制御文字は打たない）。
     fn typed_one_by_one(start: &CommandPalette, text: &str) -> (CommandPalette, PaletteOutcome) {
         let mut typed = start.clone();
@@ -1035,8 +1058,10 @@ mod tests {
             CommandPalette::open_replace("", "", options),
             CommandPalette::open_replace("a", "b", options),
             CommandPalette::open_save_as(String::from("/tmp/")),
+            asking_to_overwrite(),
+            choosing_a_theme(),
         ];
-        for text in ["", "hozon", "12,3", "東京\tx\r\ny", "about"] {
+        for text in ["", "hozon", "12,3", "東京\tx\r\ny", "about", "da", "light"] {
             for start in &starts {
                 let (typed, last) = typed_one_by_one(start, text);
                 let mut inserted = start.clone();

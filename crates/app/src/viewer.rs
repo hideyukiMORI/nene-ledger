@@ -367,6 +367,16 @@ impl Viewer {
         }
     }
 
+    /// 開いているパレットの欄に、貼った・IME で確定した文字列を一度に足す（改行とタブは打たない・候補を探し直すのは 1 回・
+    /// GitHub Issue #207）。字を足してもクリップボードに置くものは出ない。
+    fn type_into_palette(&mut self, text: &str, view: WindowView) {
+        let outcome = self.palette.as_mut().map_or(PaletteOutcome::Stay, |open| {
+            open.state_mut().insert_text(text)
+        });
+        self.palette_took_last = true;
+        let _clipboard = self.after_palette(outcome, view);
+    }
+
     /// 表に貼る。貼る行を読んでから書く（書く前の値と原本の値を履歴に残す・ADR 0029）。読めなければ貼らない。
     fn paste_into_table(&mut self, text: &str, view: WindowView) {
         let PasteRequest::Read { first_line, count } = self.document.paste(text) else {
@@ -941,10 +951,7 @@ impl Session for Viewer {
             self.document.commit_text(text);
             return;
         }
-        for character in text.chars() {
-            // 字を打ってもクリップボードに置くものは出ない。
-            let _clipboard = self.intent(Intent::Type(character), view);
-        }
+        self.type_into_palette(text, view);
     }
 
     fn paste(&mut self, text: &str, view: WindowView) {
@@ -953,12 +960,7 @@ impl Session for Viewer {
             self.refresh_totals();
             return;
         }
-        // パレットの欄には 1 行の字として一度に足す（改行とタブは打たない・候補を探し直すのは 1 回・GitHub Issue #207）。
-        let outcome = self.palette.as_mut().map_or(PaletteOutcome::Stay, |open| {
-            open.state_mut().insert_text(text)
-        });
-        self.palette_took_last = true;
-        let _clipboard = self.after_palette(outcome, view);
+        self.type_into_palette(text, view);
     }
 
     fn composition_area(&self, view: WindowView) -> Option<PixelRect> {
