@@ -119,6 +119,8 @@ Xvfb の上での表示確認は「仮想の X サーバでの確認」であり
 **Windows で動かすまで「Windows で動く」と書かない。** ビルドが通ることは動くことの証拠ではない（NeNeDocket の Windows 版は組み立てただけで、長く Windows で動いていなかった）。
 Windows の exe は `make build-windows` で組み立て、施主の実機で確かめて gate-proofs に記録する（2026-10-27 から・第 42 節。2026-10-22 の検疫（公開前の Issue #7）はこの exe では起きていない）。配る exe は ADR 0032 のとおりタグから GitHub Actions で作る。画面の確かめ方は [DEVELOPMENT_WORKFLOW.md](DEVELOPMENT_WORKFLOW.md) 第 9 節。
 
+**Windows のターゲットの単体テストは `make test-windows` で、WSL から Windows の OS の上で走らせる**（GitHub Issue #211・2026-11-07 から）。`make test` は Linux のターゲットだけを走らせ、`make lint-windows` は組み立てるだけなので、ui-win32・adapters-windows のテストと、scan・store・app の Windows での振る舞いは、これまでどこでも走っていなかった（#200 で `key_intent` に足した Alt+Z・Alt+K を窓の `ALT_KEYS` に足し忘れたのを、テストでは見つけられなかった）。WSL の相互運用が無い機械では走らない（終了 2）。これは単体テストを Windows で走らせるだけで、窓・IME・倍率・クリップボードの施主の実機での確かめの代わりではない。CI では走らせていない（GitHub Actions の Windows の走り手は ADR 0032 の配る exe だけに使う）。
+
 - 機械強制: **planned**
 
 ### QLT-014 — 速さの主張は実測で書く
@@ -331,6 +333,7 @@ CNF-009（予定）が「本文に定義があるのにここに行が無い」�
 | `lint` | 型安全・網羅性・警告ゼロ・二段構えの抑制 | clippy ＋ `[workspace.lints]` ＋ `clippy.toml` |
 | `lint-windows` | Windows のクレートを Windows のターゲットで検査する | clippy `--target x86_64-pc-windows-gnu` |
 | `test` | 振る舞い・検査器の正例と反例 | `cargo test --workspace` |
+| `test-windows` | Windows のターゲットの単体テストを Windows で走らせる（WSL の上でだけ・Issue #211） | `tools/windows-tests.sh`（`cargo test --no-run --target x86_64-pc-windows-gnu` ＋ WSL の相互運用 ＋ `subst`） |
 | `conformance` | NeNe Ledger 固有（CNF-0xx） | `xtask conformance` |
 | `deny` | ライセンス・脆弱性・重複版・取得元 | cargo-deny / `deny.toml` |
 | `doc-check` | rustdoc の警告 | `RUSTDOCFLAGS=-D warnings` |

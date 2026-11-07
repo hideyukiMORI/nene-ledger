@@ -6,7 +6,7 @@
 #    全件は限定した検証で影響を覆えない理由を REASON= に添えたときだけ回す（QLT-001 / ADR 0003）。
 CARGO ?= cargo
 
-.PHONY: all dist notices notices-check check ci fmt fmt-check lint lint-windows build-windows test conformance validate-git coverage deny doc-check build prove screenshot bench-pollock fetch-corpus bench-corpus doctor clean
+.PHONY: all dist test-windows notices notices-check check ci fmt fmt-check lint lint-windows build-windows test conformance validate-git coverage deny doc-check build prove screenshot bench-pollock fetch-corpus bench-corpus doctor clean
 
 all: doctor
 
@@ -44,6 +44,11 @@ WINDOWS_TARGET := x86_64-pc-windows-gnu
 WINDOWS_EXCLUDE := --exclude nene-ledger-ui-x11 --exclude nene-ledger-adapters-x11
 lint-windows:
 	$(CARGO) clippy --workspace $(WINDOWS_EXCLUDE) --all-targets --locked --target $(WINDOWS_TARGET) -- -D warnings
+
+## test-windows — Windows のターゲットの単体テストを、WSL の相互運用で Windows で直に走らせる（WSL の上でだけ・GitHub Issue #211）。
+## 単体テストを Windows の OS で走らせるだけで、窓・IME・倍率の実機の確かめ（QLT-013）の代わりではない。
+test-windows:
+	bash tools/windows-tests.sh
 
 ## build-windows — Windows の exe を作る（mingw-w64 のリンカ）。施主の実機で確かめる exe と、配る exe（ADR 0032）。target/x86_64-pc-windows-gnu/release/nene-ledger.exe
 build-windows:
