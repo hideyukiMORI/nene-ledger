@@ -43,12 +43,17 @@ impl SelectionStats {
 
     /// 行 `row`（復号した値）の、列 `columns` のセルを足す。セルが無い列は数えない。
     pub fn add_row(&mut self, row: &[String], columns: &[RangeInclusive<usize>]) {
-        for value in columns
-            .iter()
-            .cloned()
-            .flatten()
-            .filter_map(|column| row.get(column))
-        {
+        self.add_cells(|column| row.get(column).map(String::as_str), columns);
+    }
+
+    /// 列 → セルの値（無ければ `None`）の `cell` で引ける 1 行の、列 `columns` のセルを足す（セルを `String` の並びで
+    /// 持たない行・GitHub Issue #22）。セルが無い列は数えない。
+    pub fn add_cells<'value, F: Fn(usize) -> Option<&'value str>>(
+        &mut self,
+        cell: F,
+        columns: &[RangeInclusive<usize>],
+    ) {
+        for value in columns.iter().cloned().flatten().filter_map(cell) {
             self.add(value);
         }
     }

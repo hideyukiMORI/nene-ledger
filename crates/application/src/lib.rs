@@ -15,6 +15,7 @@ pub mod cell_editor;
 mod cell_mark;
 pub mod cell_position;
 pub mod cell_restore;
+pub mod cell_row;
 mod chrome_icon;
 mod chrome_painter;
 mod client_bands;
