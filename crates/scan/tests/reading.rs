@@ -25,7 +25,7 @@ mod reading {
     use nene_ledger_scan::source::Source;
     use nene_ledger_scan::sparse_index::SparseIndex;
     use nene_ledger_scan::window_record::{RECORD_READ_LIMIT, WindowRecord};
-    use nene_ledger_scan::windowing::read_records;
+    use nene_ledger_scan::windowing::{read_records, read_records_after};
 
     /// テストごとに別の名前で一時ファイルを置く（テストは並列に走る）。
     fn fixture(name: &str, contents: &[u8]) -> PathBuf {
@@ -577,6 +577,61 @@ mod reading {
                 assert_window_matches_in(input, &source, (&index, dialect), range);
             }
         }
+    }
+
+    /// 次に読む最初のレコード。たいていは先へ、ときどき後ろへ。
+    fn next_first(rng: &mut Xorshift, first: u64, records: usize) -> u64 {
+        let step = u64::try_from(rng.below(records / 10 + 2)).unwrap();
+        if rng.below(6) == 0 {
+            first.saturating_sub(step)
+        } else {
+            first.saturating_add(step)
+        }
+    }
+
+    /// 前に読んだ最後のレコードの始まりから探しても、目印から探したときと同じ範囲を返す。番号の順に進む読みと、後ろへ
+    /// 戻る読み（覚えた始まりは使わない）を混ぜる（GitHub Issue #209）。
+    fn assert_known_marks_change_nothing(
+        rng: &mut Xorshift,
+        input: &[u8],
+        name: &str,
+        sizes: &[usize],
+    ) {
+        let source = Source::open(&fixture(name, input)).unwrap();
+        let cases = random_dialects()
+            .into_iter()
+            .flat_map(|dialect| sizes.iter().map(move |&size| (dialect, size)));
+        for (dialect, size) in cases {
+            let records = Records::new(input, dialect).count();
+            let index = index_with(&source, dialect, size);
+            let format = utf8(dialect);
+            let mut known = None;
+            let mut first = 0_u64;
+            for _ in 0..40_u32 {
+                let range = RecordRange::new(first, 1 + rng.below(3));
+                let plain = read_records(&source, &index, format, range).unwrap();
+                let after = read_records_after(&source, &index, format, (range, known)).unwrap();
+                assert_eq!(after, plain, "{name} {size} {range:?} {known:?}");
+                known = after.last_mark(first).or(known);
+                first = next_first(rng, first, records);
+            }
+        }
+    }
+
+    #[test]
+    fn reading_on_from_the_last_record_matches_reading_from_the_marks() {
+        let mut rng = Xorshift(0x9E37_79B9_7F4A_7C15);
+        for round in 0..4_u32 {
+            let input = random_table(&mut rng, 9000, round == 3);
+            assert_known_marks_change_nothing(
+                &mut rng,
+                &input,
+                &format!("known-{round}"),
+                &[7, 4096, 1 << 20_u32],
+            );
+        }
+        let input = sample(5000);
+        assert_known_marks_change_nothing(&mut rng, &input, "known-sample", &[4096]);
     }
 
     #[test]
