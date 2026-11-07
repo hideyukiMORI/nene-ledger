@@ -120,7 +120,7 @@
 
 | 番号 | 機能 | フェーズ | 状態 | FR | 競合 | 根拠 |
 | --- | --- | --- | --- | --- | --- | --- |
-| EDIT-01 | セルの書き換え（セルの中で・詳細ペインで） | 1 | 未着手 | FR-005 | 多 | ADR 0026。表の上で直すこと（打ち始め・F2・確定して動く・やめる・書き換えを表と詳細ペインとコピーに重ねる）は GitHub Issue #69（application のテスト・gate-proofs 第 57 節）。画面からの保存・詳細ペインで直すこと・Windows の実機はまだなので状態は変えない。ダブルクリックで直し始めるのは GitHub Issue #120（gate-proofs 第 71 節）。施主の Windows の実機で、IME の確定・F2・Tab・Delete を確かめた（gate-proofs 第 60 節） |
+| EDIT-01 | セルの書き換え（セルの中で・詳細ペインで） | 1 | 未着手 | FR-005 | 多 | ADR 0026。表の上で直すこと（打ち始め・F2・確定して動く・やめる・書き換えを表と詳細ペインとコピーに重ねる）は GitHub Issue #69（application のテスト・gate-proofs 第 57 節）。画面からの保存は GitHub Issue #71。詳細ペインで直すことはまだなので状態は変えない。ダブルクリックで直し始めるのは GitHub Issue #120（gate-proofs 第 71 節）。施主の Windows の実機で、IME の確定・F2・Tab・Delete を確かめた（gate-proofs 第 60 節） |
 | EDIT-02 | 複数セルへの一括の入力 | 1 | 実装済み | FR-005 | 一部 | 競合・Modern / SmoothCSV。範囲を選んで打ち、Ctrl+Enter で範囲のすべてのセルに書く（GitHub Issue #203・ADR 0029 の決定 6・貼り付けの「1 つの値は範囲を埋める」と同じ道で 1 手で戻る・X11 は Xvfb で確かめた）。Windows の実機はまだ |
 | EDIT-03 | 行と列の挿入・削除・複製・移動（ドラッグも） | 1 | 未着手 | FR-005 | 多 | 競合・見え方と操作は ADR 0027。行の並び（GitHub Issue #87）・保存の計画（#91）・画面の読み出し（#93）・行を足す・消す・戻す（#95・パレットから・gate-proofs 第 63 節）。列の並びと保存（#97）・列を足す・消す・戻す（#99・パレットから・gate-proofs 第 64 節）。キーは Ctrl++ と Ctrl+-（#103・ADR 0020 の施主の判断）。複製・移動・Windows の実機はまだなので状態は変えない |
 | EDIT-04 | 見出しの名前の変更 | 1 | 未着手 | FR-005 | 多 | 要望 10 |
@@ -129,20 +129,20 @@
 | EDIT-07 | 列の追加（式・連番・固定値・ID） | 2 | 未着手 | FR-005 | 一部 | 競合・Delimit / Modern |
 | EDIT-08 | 列の結合と分割（区切り・正規表現・固定幅） | 1 | 未着手 | FR-011 | 多 | 競合 |
 | EDIT-09 | 複数の値を含むセルを行に分ける・行をまとめる（explode / implode） | 2 | 未着手 | FR-005 | 少 | 要望・qsv / OpenRefine |
-| EDIT-10 | セルの中の改行を安全に入力・編集 | 1 | 未着手 | FR-005 | 一部 | 要望・翻訳・Alt+Enter で欄の中に改行（GitHub Issue #69・gate-proofs 第 57 節）。保存でその行の終わり方に揃える規則は core（#56）。画面からの保存はまだ。Alt+Enter は施主の Windows の実機でも確かめた（gate-proofs 第 60 節） |
+| EDIT-10 | セルの中の改行を安全に入力・編集 | 1 | 確認済み | FR-005 | 一部 | 要望・翻訳・Alt+Enter で欄の中に改行（GitHub Issue #69・gate-proofs 第 57 節）。保存でその行の終わり方に揃える規則は core（#56）。画面からの保存は GitHub Issue #71（core のテスト `line_breaks_follow_the_row`・欄の規則は `a_newline_character_is_a_line_break_inside_the_cell`）。Alt+Enter は施主の Windows の実機でも確かめた（gate-proofs 第 60 節） |
 | EDIT-11 | IME の確定前の文字列をセルの中に出す | 1 | 未着手 | FR-020 | 一部 | 討議・方式は ADR 0026（Windows は IMM32、X11 は当面の貼り付け）。欄の規則（確定前の文字列の差し込みと下線の範囲）は core の `text_edit`（GitHub Issue #65・core のテスト）。Windows の IMM32 の経路（組み立ての窓を消す・確定前の文字列をセルに描く・確定を欄に挿す・候補の窓をセルの左下に置く・表の上で打ち始めて編集に入る）は GitHub Issue #81（application のテスト）。施主の Windows の実機で 6 項目を確かめた（gate-proofs 第 61 節）。X11 の XIM はまだなので状態は変えない |
 | EDIT-12 | 入力の候補（同じ列の既存の値から） | 3 | 未着手 | FR-005 | 少 | 競合・Easy |
 | EDIT-13 | 読み取り専用で開く（誤って変えない） | 1 | 未着手 | FR-005 | 一部 | 競合・今は編集が無いので、いつも読むだけ。「読み取り専用で開く」の指定と、タイトルバーの印（WIN-01）はまだ |
 | EDIT-14 | 隔離した壊れた行（OPEN-15）を元のバイト列のまま手で直し、読み直して列数が合うことを確かめる | 1 | 未着手 | FR-023 | 無 | GitHub Issue #8・ペルソナ ETL / EC（ローダーの reject を GUI で直す。「見せる」だけでは CLI の `store_rejects` と同じ） |
-| EDIT-15 | 新規作成（空の表から始め、保存のときに名前と方言を決める） | 1 | 実装済み | FR-005 | 多 | GitHub Issue #85（施主 2026-11-05「行や列を追加できないと、新規で作れない」・一覧の漏れ）。行と列を足す EDIT-03 と、名前を付けて保存 SAVE-11 と組。GitHub Issue #109 で `--new` から 1 行 × 3 列の新しい表を開けるようにし、#111 で Ctrl+S が名前を付けて保存になり、#113 で Ctrl+N とパレットから新しい窓で開けるようになった（ADR 0028。X11 は Xvfb で確かめた・gate-proofs 第 67〜69 節。起動の入口と Windows の実機はまだ） |
-| EDIT-16 | 切り取りと貼り付け（Ctrl+X → Ctrl+V で、セル・行全体・列全体を動かす。貼るまでは元を消さず、点線の枠で示す） | 1 | 実装済み | FR-005 | 多 | GitHub Issue #105（施主 2026-11-06「カットペーストが欲しくなる」・一覧の漏れ）。GitHub Issue #149（ADR 0029 の決定 5・6）：Ctrl+X とパレットで点線の枠、この窓で貼ったら元を空のセルにして 1 手で戻る。行全体・列全体も値を動かす（並びは変えない）。Esc・直し始め・表を変える操作で枠は消える（gate-proofs 第 76 節）。行と列そのものを動かす（切り取ったセルの挿入・見出しのドラッグ）・Windows の実機はまだ |
+| EDIT-15 | 新規作成（空の表から始め、保存のときに名前と方言を決める） | 1 | 実装済み | FR-005 | 多 | GitHub Issue #85（施主 2026-11-05「行や列を追加できないと、新規で作れない」・一覧の漏れ）。行と列を足す EDIT-03 と、名前を付けて保存 SAVE-11 と組。GitHub Issue #109 で `--new` から 1 行 × 3 列の新しい表を開けるようにし、#111 で Ctrl+S が名前を付けて保存になり、#113 で Ctrl+N とパレットから新しい窓で開けるようになった（ADR 0028。X11 は Xvfb で確かめた・gate-proofs 第 67〜69 節。起動の入口はまだ。Ctrl+N は施主の Windows の実機で確かめた・gate-proofs 第 86 節） |
+| EDIT-16 | 切り取りと貼り付け（Ctrl+X → Ctrl+V で、セル・行全体・列全体を動かす。貼るまでは元を消さず、点線の枠で示す） | 1 | 実装済み | FR-005 | 多 | GitHub Issue #105（施主 2026-11-06「カットペーストが欲しくなる」・一覧の漏れ）。GitHub Issue #149（ADR 0029 の決定 5・6）：Ctrl+X とパレットで点線の枠、この窓で貼ったら元を空のセルにして 1 手で戻る。行全体・列全体も値を動かす（並びは変えない）。Esc・直し始め・表を変える操作で枠は消える（gate-proofs 第 76 節）。行と列そのものを動かす（切り取ったセルの挿入・見出しのドラッグ）はまだ（EDIT-03）。施主の Windows の実機で切り取りと貼り付けを確かめた（gate-proofs 第 86 節） |
 | EDIT-17 | 選んだ範囲の枠をドラッグして動かす・Ctrl+ドラッグで写す（セル・行全体・列全体） | 1 | 未着手 | FR-005 | 多 | GitHub Issue #105（施主 2026-11-06「ドラッグドロップが欲しくなる」・一覧の漏れ）。Excel の枠のドラッグ。行と列の見出しのドラッグでの移動は EDIT-03 |
 
 ## 7. 元に戻す・履歴・安全網（UNDO）
 
 | 番号 | 機能 | フェーズ | 状態 | FR | 競合 | 根拠 |
 | --- | --- | --- | --- | --- | --- | --- |
-| UNDO-01 | 無制限の元に戻す / やり直す（一括の操作も 1 手で） | 1 | 実装済み | FR-006 | 多 | セルの書き換えの元に戻す・やり直す（Ctrl+Z・Ctrl+Y・Ctrl+Shift+Z・パレット）は GitHub Issue #75（application の `edit_history`・無作為の 500 列で全部戻すと差分が空・全部やり直すと元の差分）。保存の後も戻せる（触ったセルのファイルの値を保存した値に進める）。貼り付けの束（書き換え・足した行・足した列）を 1 手で戻すのは GitHub Issue #146（`EditStep::Batch`・ADR 0029 の決定 3）。置換の束・Windows の実機はまだ。施主の Windows の実機で、保存の後に戻すことも確かめた（gate-proofs 第 60 節） |
+| UNDO-01 | 無制限の元に戻す / やり直す（一括の操作も 1 手で） | 1 | 確認済み | FR-006 | 多 | セルの書き換えの元に戻す・やり直す（Ctrl+Z・Ctrl+Y・Ctrl+Shift+Z・パレット）は GitHub Issue #75（application の `edit_history`・無作為の 500 列で全部戻すと差分が空・全部やり直すと元の差分）。保存の後も戻せる（触ったセルのファイルの値を保存した値に進める）。貼り付けの束（書き換え・足した行・足した列）を 1 手で戻すのは GitHub Issue #146（`EditStep::Batch`・ADR 0029 の決定 3）。置換の束は GitHub Issue #163（application のテスト `replacing_all_shows_the_count_first_and_undoes_in_one_step`）。施主の Windows の実機で、保存の後に戻すことも確かめた（gate-proofs 第 60 節） |
 | UNDO-02 | 操作の履歴の一覧（何をしたか・どこまで戻すか選べる） | 2 | 未着手 | FR-006 | 少 | 文献・Wrangler |
 | UNDO-03 | 未保存の変更の自動の退避と、落ちた後の復元（hot exit） | 2 | 未着手 | FR-006 | 少 | 競合・SmoothCSV |
 | UNDO-04 | 保存の前の差分の確認（何行変わるか） | 2 | 未着手 | FR-006 | 無 | 討議 B |
@@ -152,12 +152,12 @@
 
 | 番号 | 機能 | フェーズ | 状態 | FR | 競合 | 根拠 |
 | --- | --- | --- | --- | --- | --- | --- |
-| FIND-01 | 検索（大文字小文字・セル全体の一致・列を限る・選択範囲を限る） | 1 | 未着手 | FR-008 | 多 | 競合。照合の規則（大文字小文字・セル全体・全角半角・ひらがなカタカナ・ADR 0030 の決定 3）と見えている値で照らすことは GitHub Issue #151（core `find_query`・application `find_scope`）。画面は GitHub Issue #152（Ctrl+F の探す段・Enter / F3 で次・Shift+Enter / Shift+F3 で前・端から回る知らせ・Alt+C / Alt+W・足した行も・gate-proofs 第 77 節）。欄が開いている間は見えている当たったセルと字に印を付ける（GitHub Issue #189・ADR 0030 の決定 7・gate-proofs 第 87 節）。列と選択範囲を限るのと、条件を設定に残すのはまだ |
+| FIND-01 | 検索（大文字小文字・セル全体の一致・列を限る・選択範囲を限る） | 1 | 未着手 | FR-008 | 多 | 競合。照合の規則（大文字小文字・セル全体・全角半角・ひらがなカタカナ・ADR 0030 の決定 3）と見えている値で照らすことは GitHub Issue #151（core `find_query`・application `find_scope`）。画面は GitHub Issue #152（Ctrl+F の探す段・Enter / F3 で次・Shift+Enter / Shift+F3 で前・端から回る知らせ・Alt+C / Alt+W・足した行も・gate-proofs 第 77 節）。欄が開いている間は見えている当たったセルと字に印を付ける（GitHub Issue #189・ADR 0030 の決定 7・gate-proofs 第 87 節）。条件は設定に残し、次の起動でも同じ条件で欄を開く（GitHub Issue #213）。列と選択範囲を限るのはまだ |
 | FIND-02 | 置換（同じ条件・件数の事前表示・プレビュー） | 1 | 未着手 | FR-008 | 一部 | 競合・Modern。当たった所だけを元の字のまま置き換える規則は GitHub Issue #161（core `FindQuery::replaced`）。1 つずつと、件数を見せてから 1 手の束で書く全部の置換は GitHub Issue #163（Ctrl+Z 1 回で戻る・100 万セルまで）。画面は GitHub Issue #165（Ctrl+H の置換の段・Tab で欄を替える・Enter で 1 つ・Alt+A で全部・gate-proofs 第 78 節・benchmarks 第 9 節）。全部の置換の件数と確かめはパレットの中に出し、数えた当たりに印を付ける（GitHub Issue #189・gate-proofs 第 87 節）。プレビューの表（ADR 0030 でフェーズ 2）はまだ |
-| FIND-03 | 正規表現 | 1 | 未着手 | FR-008 | 多 | 要望 5・競合。GitHub Issue #8（業務ペルソナ 5 人の洗い出し・`_work/reports/2026-11-05-nene-ledger-persona-needs.md`）でフェーズ 1 へ。照合と置換（`$1`・`${name}` は元の字で埋める）は GitHub Issue #171（core の `regex-automata`・ADR 0031）。画面の切り替え（Alt+R・読めない式の知らせ）は GitHub Issue #173（gate-proofs 第 81 節・1 GB の時間は benchmarks 第 10 節・普通の検索の 2.5 倍ほど） |
+| FIND-03 | 正規表現 | 1 | 実装済み | FR-008 | 多 | 要望 5・競合。GitHub Issue #8（業務ペルソナ 5 人の洗い出し・`_work/reports/2026-11-05-nene-ledger-persona-needs.md`）でフェーズ 1 へ。照合と置換（`$1`・`${name}` は元の字で埋める）は GitHub Issue #171（core の `regex-automata`・ADR 0031）。画面の切り替え（Alt+R・読めない式の知らせ）は GitHub Issue #173（gate-proofs 第 81 節・1 GB の時間は benchmarks 第 10 節・普通の検索の 2.5 倍ほど）。施主の Windows の実機で検索と置換を確かめた（gate-proofs 第 86 節）。正規表現そのものの Windows の実機での確認と、速い道（`perf-literal-*`・ADR 0031 の決定 2）はまだ |
 | FIND-04 | 一致の件数・全一致の選択・一致した行だけを見る | 2 | 未着手 | FR-008 | 一部 | 競合・Modern / CSView |
-| FIND-05 | 巨大なファイルでも裏で検索し、見つかった順に出す | 1 | 未着手 | FR-010 | 少 | 速さ。原本を塊ごとに照らして最初に当たった所で止まる畳み込みは GitHub Issue #151（`--find` で 1 GB の最後の行まで 9.1〜9.8 s・benchmarks 第 8 節）。画面からの裏の検索（進み具合・Esc で止める）は #152（1 GB の最後の行まで 9.2〜9.3 s）。GitHub Issue #157 で索引の目印で分けて並列に（8 スレッド・1.6〜1.8 s・benchmarks 第 8 節） |
-| FIND-06 | 全角半角・ひらがなカタカナを同一視する検索（選べる） | 1 | 未着手 | FR-008 | 無 | 要望・日本。GitHub Issue #8（業務ペルソナ 5 人の洗い出し・`_work/reports/2026-11-05-nene-ledger-persona-needs.md`）でフェーズ 1 へ |
+| FIND-05 | 巨大なファイルでも裏で検索し、見つかった順に出す | 1 | 実装済み | FR-010 | 少 | 速さ。原本を塊ごとに照らして最初に当たった所で止まる畳み込みは GitHub Issue #151（`--find` で 1 GB の最後の行まで 9.1〜9.8 s・benchmarks 第 8 節）。画面からの裏の検索（進み具合・Esc で止める）は #152（1 GB の最後の行まで 9.2〜9.3 s）。GitHub Issue #157 で索引の目印で分けて並列に（8 スレッド・1.6〜1.8 s・benchmarks 第 8 節）。施主の Windows の実機で検索を確かめた（gate-proofs 第 86 節・小さなファイル）。Windows の実機の 1 GB はまだ |
+| FIND-06 | 全角半角・ひらがなカタカナを同一視する検索（選べる） | 1 | 実装済み | FR-008 | 無 | 要望・日本。GitHub Issue #8（業務ペルソナ 5 人の洗い出し・`_work/reports/2026-11-05-nene-ledger-persona-needs.md`）でフェーズ 1 へ。照合の規則（全角半角は既定で区別しない・ひらがなカタカナは既定で区別する・ADR 0030 の決定 3）は core の `find_folding`（GitHub Issue #151・テスト `the_standard_ignores_case_and_width_and_keeps_kana_and_toggles_flip_one_each`）。画面で選ぶ切り替え（決定 3 の「パレットの切り替え」）は検索の欄の Alt+Z・Alt+K（GitHub Issue #199・gate-proofs 第 88 節・X11 は Xvfb で確かめた）。Windows の実機はまだ |
 | FIND-07 | 複数のファイルをまたいだ検索 | 3 | 未着手 | FR-008 | 少 | — |
 
 ## 9. 並べ替え（SORT）
@@ -254,8 +254,8 @@
 
 | 番号 | 機能 | フェーズ | 状態 | FR | 競合 | 根拠 |
 | --- | --- | --- | --- | --- | --- | --- |
-| SAVE-01 | 一時ファイルに書いて置き換える保存（途中で落ちても元は残る） | 1 | 実装済み | FR-007 | 無（明記なし） | ADR 0005。保存の経路（store）と `--resave` の往復の実測は GitHub Issue #58（benchmarks 第 4 節）。画面からの保存はまだなので状態は変えない。画面から Ctrl+S（とパレットの「直したセルを保存する」）で、計画を作って裏の `SaveJob` で書いて置き換え、開き直すのは GitHub Issue #71（gate-proofs 第 58 節・X11 で直した 2 つのセルだけが変わり、引用と CRLF は元のまま）。Windows の実機での確認・進み具合と中止（SAVE-02）・別名で保存はまだ。未保存のまま閉じるときに尋ねる（保存して閉じる・保存しないで閉じる・やめる）のは GitHub Issue #73（gate-proofs 第 59 節）。施主の Windows の実機で、保存（`ReplaceFileW`）・Excel が開いているときに止まること・閉じるときに尋ねて保存することを確かめた（gate-proofs 第 60 節） |
-| SAVE-02 | 保存を裏で・進み具合・中止・空きの事前の確認 | 1 | 未着手 | FR-007 | 無 | 討議 B・失敗のときに一時ファイルを消す経路（`discard`）は store にある。計画を作ることも裏で行い（GitHub Issue #130）、進み具合を状態の行に出して Esc でやめられる（GitHub Issue #132・store のテスト・1 GB で Esc・gate-proofs 第 73 節）。空きの事前の確認と Windows の実機はまだなので状態は変えない。空きの事前の確認は依存を入れずに進め、`rustix` を足すかは M2 の終わりに決める（ADR 0025 の施主の判断 6）。裏で回すことは ADR 0026 の決定 6 |
+| SAVE-01 | 一時ファイルに書いて置き換える保存（途中で落ちても元は残る） | 1 | 確認済み | FR-007 | 無（明記なし） | ADR 0005。保存の経路（store）と `--resave` の往復の実測は GitHub Issue #58（benchmarks 第 4 節）。画面から Ctrl+S（とパレットの「直したセルを保存する」）で、計画を作って裏の `SaveJob` で書いて置き換え、開き直すのは GitHub Issue #71（gate-proofs 第 58 節・X11 で直した 2 つのセルだけが変わり、引用と CRLF は元のまま）。進み具合と中止は SAVE-02、別名で保存は SAVE-11。未保存のまま閉じるときに尋ねる（保存して閉じる・保存しないで閉じる・やめる）のは GitHub Issue #73（gate-proofs 第 59 節）。施主の Windows の実機で、保存（`ReplaceFileW`）・Excel が開いているときに止まること・閉じるときに尋ねて保存することを確かめた（gate-proofs 第 60 節） |
+| SAVE-02 | 保存を裏で・進み具合・中止・空きの事前の確認 | 1 | 未着手 | FR-007 | 無 | 討議 B・失敗のときに一時ファイルを消す経路（`discard`）は store にある。計画を作ることも裏で行い（GitHub Issue #130）、進み具合を状態の行に出して Esc でやめられる（GitHub Issue #132・store のテスト・1 GB で Esc・gate-proofs 第 73 節）。施主の Windows の実機で保存の Esc を確かめた（gate-proofs 第 86 節）。空きの事前の確認はまだなので状態は変えない。空きの事前の確認は依存を入れずに進め、`rustix` を足すかは M2 の終わりに決める（ADR 0025 の施主の判断 6）。裏で回すことは ADR 0026 の決定 6 |
 | SAVE-03 | 方言を変えて書き出す（文字コード・BOM・区切り・改行・引用の方針: 必要なときだけ / 全セル / 文字列だけ / なし） | 1 | 未着手 | FR-007 | 一部 | 要望 4・日本 |
 | SAVE-04 | 保存の前の文字コードの検査（表せない文字・往復で変わる文字の一覧と置換の候補） | 1 | 未着手 | FR-023 | 無 | 討議 F |
 | SAVE-05 | Excel 向けの書き出し（BOM・全セルの引用・数式の無害化を選べる）と「Excel で壊れる値」の警告 | 2 | 未着手 | FR-007 | 無 | 討議 E |
@@ -264,13 +264,13 @@
 | SAVE-08 | xlsx の書き出し（全セルを文字列として保存し、相手の Excel で壊れない） | 2 | 未着手 | FR-030 | 無 | ADR 0008 |
 | SAVE-09 | xlsx の読み込み（値と表示の書式のどちらを取るかを選ぶ） | 3 | 未着手 | FR-030 | 一部 | ADR 0008 |
 | SAVE-10 | Parquet の読み書き（依存は導入の Issue で ADR） | 3 | 未着手 | FR-030 | 少 | ADR 0008 |
-| SAVE-11 | 名前を付けて保存（別の名前・場所に、同じ方言で書く。元のファイルは変えない） | 1 | 実装済み | FR-007 | 多 | FR-007 の本文にあるのに行が無かった（GitHub Issue #85・一覧の漏れ）。書き方は保存の置き換え（ADR 0025）と同じ経路で、置き換え先だけが違う。GitHub Issue #111 で入れた：Ctrl+Shift+S・パレット。Windows は OS の画面（`GetSaveFileNameW`）、X11 はパレットの欄。まだ無いファイルは store の `save_absent` で作る（ADR 0028）。Windows の実機はまだ |
+| SAVE-11 | 名前を付けて保存（別の名前・場所に、同じ方言で書く。元のファイルは変えない） | 1 | 確認済み | FR-007 | 多 | FR-007 の本文にあるのに行が無かった（GitHub Issue #85・一覧の漏れ）。書き方は保存の置き換え（ADR 0025）と同じ経路で、置き換え先だけが違う。GitHub Issue #111 で入れた：Ctrl+Shift+S・パレット。Windows は OS の画面（`GetSaveFileNameW`）、X11 はパレットの欄。まだ無いファイルは store の `save_absent` で作る（ADR 0028）。施主の Windows の実機で確かめた（gate-proofs 第 86 節） |
 
 ## 17. クリップボード・他のアプリ（CLIP）
 
 | 番号 | 機能 | フェーズ | 状態 | FR | 競合 | 根拠 |
 | --- | --- | --- | --- | --- | --- | --- |
-| CLIP-01 | Excel とのコピー / 貼り付け（タブ区切り・HTML）。貼り付けでも型を推し量らない | 1 | 未着手 | FR-016 | 一部 | 要望・X11 のタブ区切りのコピーは Issue #30（gate-proofs 第 21 節）。貼り付けは GitHub Issue #115 で 1 つのセルと編集中の欄・パレットの欄まで（両方の OS・Excel の引用を解く `parse_tsv`・gate-proofs 第 70 節）。表への複数のセルの貼り付けは GitHub Issue #146（ADR 0029 の決定 1〜4・左上から束のまま・表の端を越えれば行と列を足す・1 つの値は範囲を埋める・1 手で戻す・100 万セルまで・gate-proofs 第 75 節・benchmarks 第 7 節）。HTML・Windows の実機はまだ。X11 の大きな中身（`INCR`）は GitHub Issue #140 で受け取る（64 MiB まで・gate-proofs 第 74 節） |
+| CLIP-01 | Excel とのコピー / 貼り付け（タブ区切り・HTML）。貼り付けでも型を推し量らない | 1 | 未着手 | FR-016 | 一部 | 要望・X11 のタブ区切りのコピーは Issue #30（gate-proofs 第 21 節）。貼り付けは GitHub Issue #115 で 1 つのセルと編集中の欄・パレットの欄まで（両方の OS・Excel の引用を解く `parse_tsv`・gate-proofs 第 70 節）。表への複数のセルの貼り付けは GitHub Issue #146（ADR 0029 の決定 1〜4・左上から束のまま・表の端を越えれば行と列を足す・1 つの値は範囲を埋める・1 手で戻す・100 万セルまで・gate-proofs 第 75 節・benchmarks 第 7 節）。HTML はまだ。施主の Windows の実機で貼り付けを確かめた（gate-proofs 第 86 節）。X11 の大きな中身（`INCR`）は GitHub Issue #140 で受け取る（64 MiB まで・gate-proofs 第 74 節） |
 | CLIP-02 | 見出し付きでコピー・形式を選んでコピー（CSV / Markdown / JSON / SQL） | 2 | 未着手 | FR-016 | 一部 | 競合・SmoothCSV |
 | CLIP-03 | 外から貼った表の大きさが選択と違うときの扱い（はみ出し・行の追加）を確かめる | 1 | 未着手 | FR-016 | 少 | — |
 | CLIP-04 | ドラッグ＆ドロップでファイルを開く | 1 | 未着手 | FR-016 | 多 | ファイルのドラッグ＆ドロップの受け取り（X11 の XDND・Windows）はまだ |
@@ -351,7 +351,7 @@
 
 | 番号 | 機能 | フェーズ | 状態 | FR | 競合 | 根拠 |
 | --- | --- | --- | --- | --- | --- | --- |
-| WIN-01 | 自前のタイトルバー（アプリ名・ファイル名・未保存と読み取り専用の印） | 1 | 実装済み | FR-025 | 無 | ADR 0013・X11 は Issue #27（アプリ名とファイル名まで。未保存と読み取り専用の印は編集を入れてから・Windows は Issue #55 で施主の実機で確かめた（gate-proofs 第 42 節））。未保存の印 `●` は GitHub Issue #69（保存すると消える・#71）。OS の窓の名前（タスクバー・Alt+Tab）にも同じ印と、名前を付けて保存した後の名前を出すのは GitHub Issue #167（X11 は gate-proofs 第 79 節・Windows の実機はまだ） |
+| WIN-01 | 自前のタイトルバー（アプリ名・ファイル名・未保存と読み取り専用の印） | 1 | 実装済み | FR-025 | 無 | ADR 0013・X11 は Issue #27（アプリ名とファイル名まで。未保存と読み取り専用の印は編集を入れてから・Windows は Issue #55 で施主の実機で確かめた（gate-proofs 第 42 節））。未保存の印 `●` は GitHub Issue #69（保存すると消える・#71）。OS の窓の名前（タスクバー・Alt+Tab）にも同じ印と、名前を付けて保存した後の名前を出すのは GitHub Issue #167（X11 は gate-proofs 第 79 節・Windows の実機は gate-proofs 第 86 節）。読み取り専用の印はまだ（2026-11-07 にコードに無いことを確かめた）なので状態は変えない |
 | WIN-02 | 最小化・最大化 / 元に戻す・閉じるのボタン（自前で描く） | 1 | 確認済み | FR-025 | 無 | ADR 0013・X11 は Issue #27・WSLg で施主確認（gate-proofs 第 17 節）。Windows は Issue #55 で施主の実機で確かめた（gate-proofs 第 42 節） |
 | WIN-03 | タイトルバーのドラッグで移動・ダブルクリックで最大化 / 元に戻す | 1 | 確認済み | FR-025 | 無 | ADR 0013・X11 は Issue #27・WSLg で施主確認（gate-proofs 第 17 節）。Windows は Issue #55 で施主の実機で確かめた（gate-proofs 第 42 節） |
 | WIN-04 | 枠と角のドラッグでリサイズ（見えない縁の当たり判定とカーソル） | 1 | 確認済み | FR-025 | 無 | ADR 0013・X11 は Issue #27・WSLg で施主確認（gate-proofs 第 17 節）。Windows は Issue #55 で施主の実機で確かめた（gate-proofs 第 42 節） |
