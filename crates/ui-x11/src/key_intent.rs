@@ -31,6 +31,7 @@ const XK_C: u32 = 0x63;
 const XK_S: u32 = 0x73;
 const XK_Y: u32 = 0x79;
 const XK_Z: u32 = 0x7a;
+const XK_K: u32 = 0x6b;
 const XK_G: u32 = 0x67;
 const XK_N: u32 = 0x6e;
 const XK_V: u32 = 0x76;
@@ -164,9 +165,29 @@ pub(crate) fn button_intent(button: u8, state: KeyButMask, x: i16, y: i16) -> Op
     Some(Intent::Scroll(scroll))
 }
 
+/// 検索と置換の欄の Alt の字：条件の切り替え（Alt+C・Alt+W・Alt+R・Alt+Z・Alt+K・ADR 0030 の決定 3・GitHub Issue #199）と
+/// 置換の全部（Alt+A・決定 6）。表の上では何もしない。
+fn find_field_intent(keysym: u32) -> Option<Intent> {
+    let toggle = match keysym {
+        XK_C => FindToggle::Case,
+        XK_W => FindToggle::WholeCell,
+        XK_R => FindToggle::Regex,
+        XK_Z => FindToggle::Width,
+        XK_K => FindToggle::Kana,
+        XK_A => return Some(Intent::ReplaceAll),
+        _ => return None,
+    };
+    Some(Intent::FindToggle(toggle))
+}
+
 /// パレットを開く・決める・やめる・消す・字を打つ・セルを直す（ADR 0026 の決定 1・2）。
 /// Ctrl と組んだ字は字として打たない（Ctrl+C など）。Alt+Enter はセルの中の改行、Shift+Enter・Tab・Shift+Tab は確定して動く。
 fn editing_intent(keysym: u32, typed: Option<char>, state: KeyButMask) -> Option<Intent> {
+    if alt_only(state)
+        && let Some(intent) = find_field_intent(keysym)
+    {
+        return Some(intent);
+    }
     let shift = state.contains(KeyButMask::SHIFT);
     match keysym {
         XK_F1 => Some(Intent::OpenPalette),
@@ -174,12 +195,6 @@ fn editing_intent(keysym: u32, typed: Option<char>, state: KeyButMask) -> Option
         XK_F3 if shift => Some(Intent::FindAgain { forward: false }),
         XK_F3 => Some(Intent::FindAgain { forward: true }),
         XK_ESCAPE => Some(Intent::Cancel),
-        // 検索の欄の条件の切り替え（ADR 0030 の決定 3）。表の上では何もしない。
-        XK_C if alt_only(state) => Some(Intent::FindToggle(FindToggle::Case)),
-        XK_W if alt_only(state) => Some(Intent::FindToggle(FindToggle::WholeCell)),
-        XK_R if alt_only(state) => Some(Intent::FindToggle(FindToggle::Regex)),
-        // 置換の欄の全部（ADR 0030 の決定 6）。表の上では何もしない。
-        XK_A if alt_only(state) => Some(Intent::ReplaceAll),
         XK_RETURN | XK_KP_ENTER if state.contains(KeyButMask::MOD1) => Some(Intent::BreakLine),
         XK_RETURN | XK_KP_ENTER if shift => Some(Intent::Advance(CursorStep::Up)),
         XK_RETURN | XK_KP_ENTER => Some(Intent::Confirm),
@@ -680,6 +695,14 @@ mod tests {
         assert_eq!(
             key_intent(XK_R, Some('r'), KeyButMask::MOD1),
             Some(Intent::FindToggle(FindToggle::Regex))
+        );
+        assert_eq!(
+            key_intent(XK_Z, Some('z'), KeyButMask::MOD1),
+            Some(Intent::FindToggle(FindToggle::Width))
+        );
+        assert_eq!(
+            key_intent(XK_K, Some('k'), KeyButMask::MOD1),
+            Some(Intent::FindToggle(FindToggle::Kana))
         );
     }
 

@@ -47,6 +47,7 @@ const VK_P: u16 = 0x50;
 const VK_S: u16 = 0x53;
 const VK_Y: u16 = 0x59;
 const VK_Z: u16 = 0x5A;
+const VK_K: u16 = 0x4B;
 const VK_T: u16 = 0x54;
 const VK_U: u16 = 0x55;
 const VK_NUMPAD0: u16 = 0x60;
@@ -92,6 +93,8 @@ pub(crate) fn key_intent(key: u16, modifiers: Modifiers) -> Option<Intent> {
         VK_C if alt && !control => return Some(Intent::FindToggle(FindToggle::Case)),
         VK_W if alt && !control => return Some(Intent::FindToggle(FindToggle::WholeCell)),
         VK_R if alt && !control => return Some(Intent::FindToggle(FindToggle::Regex)),
+        VK_Z if alt && !control => return Some(Intent::FindToggle(FindToggle::Width)),
+        VK_K if alt && !control => return Some(Intent::FindToggle(FindToggle::Kana)),
         VK_A if alt && !control => return Some(Intent::ReplaceAll),
         VK_ESCAPE => return Some(Intent::Cancel),
         // Alt+Enter は `WM_SYSKEYDOWN` で届く（ui の側で同じ関数に渡す）。
@@ -522,6 +525,14 @@ mod tests {
         assert_eq!(
             key_intent(VK_R, Modifiers::new(false, false, true)),
             Some(Intent::FindToggle(FindToggle::Regex))
+        );
+        assert_eq!(
+            key_intent(VK_Z, Modifiers::new(false, false, true)),
+            Some(Intent::FindToggle(FindToggle::Width))
+        );
+        assert_eq!(
+            key_intent(VK_K, Modifiers::new(false, false, true)),
+            Some(Intent::FindToggle(FindToggle::Kana))
         );
     }
 }
