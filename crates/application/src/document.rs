@@ -16,6 +16,7 @@ use crate::cell_display::single_line;
 use crate::cell_editor::CellEditor;
 use crate::cell_position::CellPosition;
 use crate::cell_restore::CellRestore;
+use crate::cell_row::CellRow;
 use crate::chrome_painter::ChromePainter;
 use crate::client_bands::ClientBands;
 use crate::clipboard_text::ClipboardText;
@@ -635,24 +636,34 @@ impl Document {
             .unwrap_or(ColumnId::Source(column))
     }
 
-    /// 原本の順のセル `cells` を、表の列の順に並べる（列を足し消ししていなければそのまま）。足した列は空のセル。
-    /// 原本に無いセルは、後ろに書くセルが無ければ書かない（「セルが無い」のまま）。
-    fn arranged(&self, cells: &[String]) -> Vec<String> {
+    /// 原本の順のセル `cells` を、表の列の順に並べた行（列を足し消ししていなければそのまま）。足した列は空のセル。
+    /// 原本に無いセルは、後ろに書くセルが無ければ書かない（「セルが無い」のまま）。セルごとに `String` を作らず 1 本の
+    /// 文字列で作る（GitHub Issue #22）。
+    fn arranged_row(&self, cells: &[String]) -> CellRow {
         if self.columns.is_whole() {
-            return cells.to_vec();
+            return CellRow::new(cells);
         }
         let ids = self.table_ids();
         let last = ids.iter().rposition(|id| match id {
             ColumnId::Source(source) => *source < cells.len(),
             ColumnId::Added(_) => true,
         });
-        ids.iter()
-            .take(last.map_or(0, |last| last.saturating_add(1)))
-            .map(|id| match id {
-                ColumnId::Source(source) => cells.get(*source).cloned().unwrap_or_default(),
-                ColumnId::Added(_) => String::new(),
-            })
-            .collect()
+        CellRow::collect(
+            ids.iter()
+                .take(last.map_or(0, |last| last.saturating_add(1)))
+                .map(|id| match id {
+                    ColumnId::Source(source) => cells.get(*source).map_or("", String::as_str),
+                    ColumnId::Added(_) => "",
+                }),
+        )
+    }
+
+    /// [`Self::arranged_row`] と同じ並びを、セルごとの `String` で（書き換えを重ねるコピーと集計の写し）。
+    fn arranged(&self, cells: &[String]) -> Vec<String> {
+        if self.columns.is_whole() {
+            return cells.to_vec();
+        }
+        self.arranged_row(cells).to_strings()
     }
 
     /// 本体の `body` 番目の行の、行の並びの位置（読み始める所・前書きと見出しも数える）。
@@ -679,7 +690,7 @@ impl Document {
             .map(|(cells, line)| {
                 let row = self.rows.row_at(line).unwrap_or(RowId::Source(line));
                 match row {
-                    RowId::Source(_) => ViewRow::new(line, &self.arranged(cells)),
+                    RowId::Source(_) => ViewRow::from_values(line, self.arranged_row(cells)),
                     RowId::Added(_) => ViewRow::new(line, &vec![String::new(); columns]),
                 }
                 .with_row(row)
@@ -3785,7 +3796,7 @@ impl Document {
         }
         let (first, last) = self.row_span();
         if let Some(rows) = self.visible_rows(first, last) {
-            let stats = self.visible_stats(first, rows);
+            let stats = self.stats_of(first, rows.iter(), |row, column| row.values().get(column));
             self.totals = SelectionTotals::Counted(stats);
             return TotalsRequest::Settled;
         }
@@ -3810,31 +3821,18 @@ impl Document {
     }
 
     /// 本体の `first` 番目から続く行 `rows`（復号した値）を、選んだ範囲の帯で数える（重なりは 1 回だけ）。
-    fn stats_of<'rows>(
-        &self,
-        first: u64,
-        rows: impl Iterator<Item = &'rows [String]>,
-    ) -> SelectionStats {
+    fn stats_of<R, C>(&self, first: u64, rows: impl Iterator<Item = R>, cell: C) -> SelectionStats
+    where
+        C: for<'row> Fn(&'row R, usize) -> Option<&'row str>,
+    {
         let bands = self.ranges().bands();
         let mut stats = SelectionStats::empty();
         for (row, body) in rows.zip(first..) {
-            if let Some(band) = bands.iter().find(|band| band.rows().contains(&body)) {
-                stats.add_row(row, &self.source_columns(band.columns()));
-            }
-        }
-        stats
-    }
-
-    /// 本体の `first` 番目からの見えている行 `rows` の、選んだ範囲の集計（重なりは 1 回だけ）。
-    fn visible_stats(&self, first: u64, rows: &[ViewRow]) -> SelectionStats {
-        let bands = self.ranges().bands();
-        let mut stats = SelectionStats::empty();
-        for (row, body) in rows.iter().zip(first..) {
             let Some(band) = bands.iter().find(|band| band.rows().contains(&body)) else {
                 continue;
             };
             stats.add_cells(
-                |column| row.values().get(column),
+                |column| cell(&row, column),
                 &self.source_columns(band.columns()),
             );
         }
@@ -3872,7 +3870,9 @@ impl Document {
     pub fn count_totals(&mut self, first_record: u64, rows: &[Vec<String>]) {
         let body = self.body_cells(first_record, rows);
         let (first, _) = self.ranges().row_span();
-        let stats = self.stats_of(first, body.into_iter());
+        let stats = self.stats_of(first, body.into_iter(), |row, column| {
+            row.get(column).map(String::as_str)
+        });
         self.totals = SelectionTotals::Counted(stats);
     }
 
@@ -4409,14 +4409,11 @@ impl Document {
 
 /// 行 `rows` の表示の文字列から、今より多い列の幅を決めて `widths` に足す（VIEW-02・今ある列の幅は変えない）。
 fn widen_to(widths: &mut ColumnWidths, rows: &[&ViewRow]) {
-    let count = rows.iter().map(|row| row.cells().len()).max().unwrap_or(0);
-    widths.widen_by(count, |column| {
-        rows.iter()
-            .filter_map(|row| row.cells().get(column))
-            .map(display_columns)
-            .max()
-            .unwrap_or(0)
-    });
+    widths.widen_with(
+        rows,
+        |row| row.cells().len(),
+        |row, column| row.cells().get(column),
+    );
 }
 
 /// 列 `column` の左端（行番号の列を除いた画素・`whole` は最初の列からの配置）。

@@ -33,22 +33,30 @@ impl ColumnWidths {
 
     /// `rows` に、今より多い列があれば、その列の幅だけを `rows` から決めて足す。今ある列の幅は変えない。
     pub fn widen(&mut self, rows: &[&[String]]) {
-        let count = rows.iter().map(|row| row.len()).max().unwrap_or(0);
-        self.widen_by(count, |column| {
-            rows.iter()
-                .filter_map(|row| row.get(column))
-                .map(|cell| display_columns(cell))
-                .max()
-                .unwrap_or(0)
-        });
+        self.widen_with(
+            rows,
+            |row| row.len(),
+            |row, column| row.get(column).map(String::as_str),
+        );
     }
 
-    /// 列の数が `count` になるまで、足す列の幅を `widest`（列 → いちばん広い値の字数）から決めて足す。今ある列の幅は
-    /// 変えない（セルを `String` の並びで持たない行から決めるとき・GitHub Issue #22）。
-    pub fn widen_by<F: Fn(usize) -> u32>(&mut self, count: usize, widest: F) {
+    /// [`Self::widen`] の正本。行 `rows` の列の数を `len`、セルを `cell`（行・列 → 値）で引く（セルを `String` の並びで
+    /// 持たない行からも決められる・GitHub Issue #22）。今より多い列の幅だけを、その列のいちばん広い値から決めて足す。
+    pub fn widen_with<R, L, C>(&mut self, rows: &[R], len: L, cell: C)
+    where
+        L: Fn(&R) -> usize,
+        C: for<'row> Fn(&'row R, usize) -> Option<&'row str>,
+    {
+        let count = rows.iter().map(&len).max().unwrap_or(0);
         for column in self.columns.len()..count {
+            let widest = rows
+                .iter()
+                .filter_map(|row| cell(row, column))
+                .map(display_columns)
+                .max()
+                .unwrap_or(0);
             self.columns
-                .push(widest(column).clamp(MIN_COLUMN_COLUMNS, MAX_COLUMN_COLUMNS));
+                .push(widest.clamp(MIN_COLUMN_COLUMNS, MAX_COLUMN_COLUMNS));
         }
     }
 

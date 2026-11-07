@@ -16,7 +16,27 @@ impl CellRow {
     /// セルの文字列の並び `cells` から作る。
     #[must_use]
     pub fn new<S: AsRef<str>>(cells: &[S]) -> Self {
-        Self::collect(cells.iter().map(AsRef::as_ref))
+        let bytes = cells.iter().map(|cell| cell.as_ref().len()).sum();
+        let mut text = String::with_capacity(bytes);
+        let mut ends = Vec::with_capacity(cells.len());
+        for cell in cells {
+            text.push_str(cell.as_ref());
+            ends.push(text.len());
+        }
+        Self { text, ends }
+    }
+
+    /// 各セルを `write`（セル → 書き足す先）で書き替えた行（表示の文字列など）。セルごとに `String` を作らない。
+    #[must_use]
+    pub fn mapped<F: Fn(&str, &mut String)>(&self, write: F) -> Self {
+        let mut text = String::with_capacity(self.text.len());
+        let mut ends = Vec::with_capacity(self.ends.len());
+        for cell in self.iter() {
+            write(cell, &mut text);
+            ends.push(text.len());
+        }
+        text.shrink_to_fit();
+        Self { text, ends }
     }
 
     /// セルの文字列を順に出す `cells` から作る。

@@ -1,10 +1,8 @@
 //! 見えている 1 行。
 
-use alloc::string::String;
-
 use nene_ledger_core::row_id::RowId;
 
-use crate::cell_display::{is_single_line, single_line};
+use crate::cell_display::{is_single_line, push_single_line};
 use crate::cell_row::CellRow;
 
 /// 見えている 1 行。行の並びの位置（0 始まり・前書きと見出しも数える・ADR 0027 の決定 1）と、行の同一性と、
@@ -31,10 +29,7 @@ impl ViewRow {
     /// 元の値 `values` から作る。
     #[must_use]
     pub fn from_values(line: u64, values: CellRow) -> Self {
-        let shown = (!values.iter().all(is_single_line)).then(|| {
-            let lines: alloc::vec::Vec<String> = values.iter().map(single_line).collect();
-            CellRow::new(&lines)
-        });
+        let shown = (!values.iter().all(is_single_line)).then(|| values.mapped(push_single_line));
         Self {
             line,
             row: RowId::Source(line),
