@@ -221,6 +221,12 @@ impl CommandPalette {
 
     /// 意図を受ける。`current_theme` は今の配色の位置（配色を選ぶ段へ入るとき、元に戻す先として覚える）。
     pub fn handle(&mut self, intent: Intent, current_theme: usize) -> PaletteOutcome {
+        // パレットの欄では Ctrl+Enter も Enter と同じ（表の一括の入力・EDIT-02 は表の上だけ）。
+        let intent = if intent == Intent::FillSelection {
+            Intent::Confirm
+        } else {
+            intent
+        };
         if let Some(outcome) = self.mode_intent(intent) {
             return outcome;
         }
@@ -257,6 +263,7 @@ impl CommandPalette {
             | Intent::Edit
             | Intent::Delete
             | Intent::BreakLine
+            | Intent::FillSelection
             | Intent::Advance(_)
             | Intent::Save
             | Intent::SaveAs
@@ -374,6 +381,7 @@ impl CommandPalette {
             | Intent::Edit
             | Intent::Delete
             | Intent::BreakLine
+            | Intent::FillSelection
             | Intent::Advance(_)
             | Intent::Save
             | Intent::SaveAs
@@ -1062,5 +1070,19 @@ mod tests {
         assert_eq!(CommandPalette::open_find("", options).found(), None);
         assert_eq!(CommandPalette::open().found(), None);
         assert_eq!(CommandPalette::open_go_to().found(), None);
+    }
+
+    /// パレットの欄では Ctrl+Enter も Enter と同じ（表の一括の入力・EDIT-02 は表の上だけ・GitHub Issue #203）。
+    #[test]
+    fn ctrl_enter_confirms_in_the_palette_like_enter() {
+        let mut by_enter = CommandPalette::open_go_to();
+        let mut by_ctrl_enter = CommandPalette::open_go_to();
+        for palette in [&mut by_enter, &mut by_ctrl_enter] {
+            palette.handle(Intent::Type('3'), 0);
+        }
+        assert_eq!(
+            by_ctrl_enter.handle(Intent::FillSelection, 0),
+            by_enter.handle(Intent::Confirm, 0)
+        );
     }
 }

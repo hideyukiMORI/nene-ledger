@@ -100,6 +100,7 @@ pub(crate) fn key_intent(key: u16, modifiers: Modifiers) -> Option<Intent> {
         // Alt+Enter は `WM_SYSKEYDOWN` で届く（ui の側で同じ関数に渡す）。
         VK_RETURN if alt => return Some(Intent::BreakLine),
         VK_RETURN if shift => return Some(Intent::Advance(CursorStep::Up)),
+        VK_RETURN if control => return Some(Intent::FillSelection),
         VK_RETURN => return Some(Intent::Confirm),
         VK_TAB if shift => return Some(Intent::Advance(CursorStep::Left)),
         VK_TAB => return Some(Intent::Advance(CursorStep::Right)),
@@ -283,6 +284,10 @@ mod tests {
             KeyGuide::BreakLine => {
                 key_intent(VK_RETURN, Modifiers::new(false, false, true)) == Some(Intent::BreakLine)
             }
+            KeyGuide::FillSelection => {
+                key_intent(VK_RETURN, Modifiers::new(false, true, false))
+                    == Some(Intent::FillSelection)
+            }
             KeyGuide::Advance => {
                 key_intent(VK_TAB, plain()) == Some(Intent::Advance(CursorStep::Right))
                     && key_intent(VK_TAB, shift) == Some(Intent::Advance(CursorStep::Left))
@@ -358,6 +363,7 @@ mod tests {
                 KeyGuide::EditCell
                 | KeyGuide::ClearCell
                 | KeyGuide::BreakLine
+                | KeyGuide::FillSelection
                 | KeyGuide::Advance => editing_bound(guide),
             };
             assert!(bound, "{guide:?}");
@@ -416,6 +422,20 @@ mod tests {
         assert_eq!(
             key_intent(VK_T, Modifiers::new(true, true, true)),
             Some(Intent::Theme(ThemeStep::Previous))
+        );
+    }
+
+    /// Ctrl+Enter は、編集中の欄の文字を選んだ範囲のすべてのセルに書く（EDIT-02・GitHub Issue #203）。
+    #[test]
+    fn control_enter_fills_the_selection() {
+        assert_eq!(
+            key_intent(VK_RETURN, control()),
+            Some(Intent::FillSelection)
+        );
+        // Ctrl+Shift+Enter は今までどおり確定して上へ。
+        assert_eq!(
+            key_intent(VK_RETURN, control_shift()),
+            Some(Intent::Advance(CursorStep::Up))
         );
     }
 

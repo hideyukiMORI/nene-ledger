@@ -10,6 +10,14 @@ pub enum DocumentEffect {
         /// 本体の何番目から。
         first_body: u64,
     },
+    /// 行の並びの位置 `first_line` から `count` 行を読んで `Document::paste_rows` に渡す（Ctrl+Enter の一括の入力・
+    /// 貼り付けと同じ 2 段・EDIT-02）。読めなければ `Document::paste_unread`。
+    ReadPasted {
+        /// 最初の行の位置。
+        first_line: u64,
+        /// 読む行の数（0 なら読まずに渡す）。
+        count: u64,
+    },
     /// 書き換え（`Document::edits`）を保存する（Ctrl+S）。始めたら `Document::begin_saving`、終わったら
     /// `Document::saved` か `Document::save_failed` を呼ぶ。
     Save,
