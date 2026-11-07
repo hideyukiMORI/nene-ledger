@@ -25,24 +25,40 @@ const ZERO_WIDTH: char = '¦';
 #[must_use]
 pub fn single_line(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
+    push_single_line(value, &mut out);
+    out
+}
+
+/// `single_line(value)` を `out` の後ろに足す（セルごとに `String` を作らずに 1 本の文字列へ書く・GitHub Issue #22）。
+pub fn push_single_line(value: &str, out: &mut String) {
     let mut characters = value.chars().peekable();
     while let Some(character) = characters.next() {
-        let shown = match character {
-            '\r' => {
-                characters.next_if_eq(&'\n');
-                LINE_BREAK
-            }
-            '\n' | '\u{2028}' | '\u{2029}' => LINE_BREAK,
-            '\t' => TAB,
-            '\u{3000}' => IDEOGRAPHIC_SPACE,
-            '\u{a0}' | '\u{202f}' => NO_BREAK_SPACE,
-            '\u{200b}'..='\u{200d}' | '\u{2060}' | '\u{feff}' => ZERO_WIDTH,
-            other if other.is_control() => CONTROL,
-            other => other,
-        };
-        out.push(shown);
+        if character == '\r' {
+            characters.next_if_eq(&'\n');
+        }
+        out.push(mark_of(character).unwrap_or(character));
     }
-    out
+}
+
+/// 字 `character` を表示で替える印（替えなければ `None`）。`single_line` と `is_single_line` の正本（2 つが食い違わない
+/// ように表を 1 つにする）。`\r\n` の `\n` は `single_line` が `\r` と合わせて 1 つの印にする。
+const fn mark_of(character: char) -> Option<char> {
+    match character {
+        '\r' | '\n' | '\u{2028}' | '\u{2029}' => Some(LINE_BREAK),
+        '\t' => Some(TAB),
+        '\u{3000}' => Some(IDEOGRAPHIC_SPACE),
+        '\u{a0}' | '\u{202f}' => Some(NO_BREAK_SPACE),
+        '\u{200b}'..='\u{200d}' | '\u{2060}' | '\u{feff}' => Some(ZERO_WIDTH),
+        other if other.is_control() => Some(CONTROL),
+        _ => None,
+    }
+}
+
+/// `value` が表示の 1 行そのものか（`single_line(value) == value`・印に替える字が無い）。写しを作らずに確かめる
+/// （窓の行は、表示の文字列が元の値と同じなら写しを持たない・GitHub Issue #22）。
+#[must_use]
+pub fn is_single_line(value: &str) -> bool {
+    value.chars().all(|character| mark_of(character).is_none())
 }
 
 /// 省略の印（U+2026）。
@@ -111,6 +127,38 @@ mod tests {
         assert_eq!(single_line("a\tb\u{0}c"), "a→b·c");
         assert_eq!(single_line(" 00123 "), " 00123 ");
         assert_eq!(single_line(""), "");
+    }
+
+    /// 写しを作らない確かめは、写しと比べたときと同じ答え。
+    #[test]
+    fn single_line_values_are_recognised_without_a_copy() {
+        for value in [
+            "",
+            "abc",
+            "東京",
+            "a\r\nb",
+            "a\rb",
+            "a\nb",
+            "a\tb",
+            "\u{0}",
+            "山田\u{3000}太郎",
+            "10\u{a0}000",
+            "ab\u{200b}c",
+            "一\u{2028}二",
+            "¶",
+            "→",
+            "\r",
+            "\r\n",
+            "x\u{7f}",
+            "x\u{85}",
+            "\u{2060}\u{feff}",
+        ] {
+            assert_eq!(
+                is_single_line(value),
+                single_line(value) == value,
+                "{value:?}"
+            );
+        }
     }
 
     #[test]
