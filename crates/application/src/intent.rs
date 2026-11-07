@@ -107,6 +107,9 @@ pub enum Intent {
     Delete,
     /// セルの中の改行（Alt+Enter・EDIT-10）。
     BreakLine,
+    /// 編集中の欄の文字を、選んだ範囲のすべてのセルに書く（Ctrl+Enter・EDIT-02・GitHub Issue #203）。合成ルートが
+    /// `Document::fill_selection` に渡す（貼り付けと同じく、書く行を読んでから書く）。
+    FillSelection,
     /// 確定してその向きへ動く（Tab・Shift+Tab・Shift+Enter）。編集していなければ動くだけ。
     Advance(CursorStep),
     /// 書き換えを保存する（Ctrl+S・ADR 0026 の決定 6）。

@@ -35,13 +35,15 @@ pub enum KeyGuide {
     ClearCell,
     /// セルの中の改行（EDIT-10）。
     BreakLine,
+    /// 選んだ範囲のすべてのセルに書く（Ctrl+Enter・EDIT-02・GitHub Issue #203）。
+    FillSelection,
     /// 確定して右・左・上へ動く。
     Advance,
 }
 
 impl KeyGuide {
     /// すべて（一覧の順）。
-    pub const ALL: [Self; 16] = [
+    pub const ALL: [Self; 17] = [
         Self::MoveCursor,
         Self::ExtendSelection,
         Self::Page,
@@ -57,6 +59,7 @@ impl KeyGuide {
         Self::EditCell,
         Self::ClearCell,
         Self::BreakLine,
+        Self::FillSelection,
         Self::Advance,
     ];
 
@@ -79,6 +82,7 @@ impl KeyGuide {
             Self::EditCell => "セルを続きから直す（入力と編集を替える）",
             Self::ClearCell => "セルを空にする",
             Self::BreakLine => "セルの中で改行する",
+            Self::FillSelection => "選んだ範囲のすべてのセルに書く",
             Self::Advance => "確定して右・左・上へ動く",
         }
     }
@@ -102,6 +106,7 @@ impl KeyGuide {
             Self::EditCell => "せるをつづきからなおす",
             Self::ClearCell => "せるをからにする",
             Self::BreakLine => "せるのなかでかいぎょうする",
+            Self::FillSelection => "えらんだはんいのすべてのせるにかく",
             Self::Advance => "かくていしてうごく",
         }
     }
@@ -125,6 +130,7 @@ impl KeyGuide {
             Self::EditCell => "F2",
             Self::ClearCell => "Delete",
             Self::BreakLine => "Alt+Enter",
+            Self::FillSelection => "Ctrl+Enter",
             Self::Advance => "Tab / Shift+Tab / Shift+Enter",
         }
     }
