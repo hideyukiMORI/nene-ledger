@@ -16,6 +16,7 @@ use crate::cell_display::single_line;
 use crate::cell_editor::CellEditor;
 use crate::cell_position::CellPosition;
 use crate::cell_restore::CellRestore;
+use crate::cell_row::CellRow;
 use crate::chrome_painter::ChromePainter;
 use crate::client_bands::ClientBands;
 use crate::clipboard_text::ClipboardText;
@@ -250,16 +251,14 @@ impl Document {
             Some(ViewRow::new(record, cells))
         });
         let view = TableView::from_records(0, rows, header.as_ref().map(ViewRow::line));
-        let header_source = header.as_ref().map(|row| row.values().to_vec());
-        let cells: Vec<&[String]> = header
-            .iter()
-            .chain(view.rows())
-            .map(ViewRow::cells)
-            .collect();
+        let header_source = header.as_ref().map(|row| row.values().to_strings());
+        let mut widths = ColumnWidths::fit(&[]);
+        let shown: Vec<&ViewRow> = header.iter().chain(view.rows()).collect();
+        widen_to(&mut widths, &shown);
         Self {
             title,
             format,
-            widths: ColumnWidths::fit(&cells),
+            widths,
             header,
             view,
             first_column: 0,
@@ -499,10 +498,9 @@ impl Document {
             self.source_width = self.columns.len(self.source_width);
         }
         if let Some(line) = self.header_line() {
-            self.header = self
-                .header
-                .take()
-                .map(|header| ViewRow::new(line, header.values()).with_row(RowId::Source(line)));
+            self.header = self.header.take().map(|header| {
+                ViewRow::from_values(line, header.values().clone()).with_row(RowId::Source(line))
+            });
         }
         self.rows = RowOrder::whole();
         self.columns = ColumnOrder::whole();
@@ -638,24 +636,34 @@ impl Document {
             .unwrap_or(ColumnId::Source(column))
     }
 
-    /// 原本の順のセル `cells` を、表の列の順に並べる（列を足し消ししていなければそのまま）。足した列は空のセル。
-    /// 原本に無いセルは、後ろに書くセルが無ければ書かない（「セルが無い」のまま）。
-    fn arranged(&self, cells: &[String]) -> Vec<String> {
+    /// 原本の順のセル `cells` を、表の列の順に並べた行（列を足し消ししていなければそのまま）。足した列は空のセル。
+    /// 原本に無いセルは、後ろに書くセルが無ければ書かない（「セルが無い」のまま）。セルごとに `String` を作らず 1 本の
+    /// 文字列で作る（GitHub Issue #22）。
+    fn arranged_row(&self, cells: &[String]) -> CellRow {
         if self.columns.is_whole() {
-            return cells.to_vec();
+            return CellRow::new(cells);
         }
         let ids = self.table_ids();
         let last = ids.iter().rposition(|id| match id {
             ColumnId::Source(source) => *source < cells.len(),
             ColumnId::Added(_) => true,
         });
-        ids.iter()
-            .take(last.map_or(0, |last| last.saturating_add(1)))
-            .map(|id| match id {
-                ColumnId::Source(source) => cells.get(*source).cloned().unwrap_or_default(),
-                ColumnId::Added(_) => String::new(),
-            })
-            .collect()
+        CellRow::collect(
+            ids.iter()
+                .take(last.map_or(0, |last| last.saturating_add(1)))
+                .map(|id| match id {
+                    ColumnId::Source(source) => cells.get(*source).map_or("", String::as_str),
+                    ColumnId::Added(_) => "",
+                }),
+        )
+    }
+
+    /// [`Self::arranged_row`] と同じ並びを、セルごとの `String` で（書き換えを重ねるコピーと集計の写し）。
+    fn arranged(&self, cells: &[String]) -> Vec<String> {
+        if self.columns.is_whole() {
+            return cells.to_vec();
+        }
+        self.arranged_row(cells).to_strings()
     }
 
     /// 本体の `body` 番目の行の、行の並びの位置（読み始める所・前書きと見出しも数える）。
@@ -682,7 +690,7 @@ impl Document {
             .map(|(cells, line)| {
                 let row = self.rows.row_at(line).unwrap_or(RowId::Source(line));
                 match row {
-                    RowId::Source(_) => ViewRow::new(line, &self.arranged(cells)),
+                    RowId::Source(_) => ViewRow::from_values(line, self.arranged_row(cells)),
                     RowId::Added(_) => ViewRow::new(line, &vec![String::new(); columns]),
                 }
                 .with_row(row)
@@ -696,8 +704,8 @@ impl Document {
         if view.rows().is_empty() && !emptied {
             return;
         }
-        let cells: Vec<&[String]> = view.rows().iter().map(ViewRow::cells).collect();
-        self.widths.widen(&cells);
+        let fresh: Vec<&ViewRow> = view.rows().iter().collect();
+        widen_to(&mut self.widths, &fresh);
         self.view = view;
         self.cuts.clear();
     }
@@ -1126,10 +1134,13 @@ impl Document {
         self.cut = None;
         let cursor = self.selection.cursor();
         let column = self.source_column(cursor.column());
-        let Some((line, row, source)) = self
-            .view_row(cursor.body())
-            .map(|row| (row.line(), row.row(), row.values().get(column).cloned()))
-        else {
+        let Some((line, row, source)) = self.view_row(cursor.body()).map(|row| {
+            (
+                row.line(),
+                row.row(),
+                row.values().get(column).map(String::from),
+            )
+        }) else {
             return false;
         };
         if self.cuts.iter().any(|cut| cut.record() == line) {
@@ -1656,7 +1667,11 @@ impl Document {
             return None;
         }
         let id = self.column_id(table);
-        let file = row.values().get(table).cloned().unwrap_or_default();
+        let file = row
+            .values()
+            .get(table)
+            .map(String::from)
+            .unwrap_or_default();
         let shown = match self.edits.get(row.row(), id) {
             Some(CellValue::Text(value)) => value.clone(),
             Some(CellValue::Absent) => return None,
@@ -3863,7 +3878,7 @@ impl Document {
         }
         let (first, last) = self.row_span();
         if let Some(rows) = self.visible_rows(first, last) {
-            let stats = self.stats_of(first, rows.iter().map(ViewRow::values));
+            let stats = self.stats_of(first, rows.iter(), |row, column| row.values().get(column));
             self.totals = SelectionTotals::Counted(stats);
             return TotalsRequest::Settled;
         }
@@ -3888,17 +3903,20 @@ impl Document {
     }
 
     /// 本体の `first` 番目から続く行 `rows`（復号した値）を、選んだ範囲の帯で数える（重なりは 1 回だけ）。
-    fn stats_of<'rows>(
-        &self,
-        first: u64,
-        rows: impl Iterator<Item = &'rows [String]>,
-    ) -> SelectionStats {
+    fn stats_of<R, C>(&self, first: u64, rows: impl Iterator<Item = R>, cell: C) -> SelectionStats
+    where
+        C: for<'row> Fn(&'row R, usize) -> Option<&'row str>,
+    {
         let bands = self.ranges().bands();
         let mut stats = SelectionStats::empty();
         for (row, body) in rows.zip(first..) {
-            if let Some(band) = bands.iter().find(|band| band.rows().contains(&body)) {
-                stats.add_row(row, &self.source_columns(band.columns()));
-            }
+            let Some(band) = bands.iter().find(|band| band.rows().contains(&body)) else {
+                continue;
+            };
+            stats.add_cells(
+                |column| cell(&row, column),
+                &self.source_columns(band.columns()),
+            );
         }
         stats
     }
@@ -3934,7 +3952,9 @@ impl Document {
     pub fn count_totals(&mut self, first_record: u64, rows: &[Vec<String>]) {
         let body = self.body_cells(first_record, rows);
         let (first, _) = self.ranges().row_span();
-        let stats = self.stats_of(first, body.into_iter());
+        let stats = self.stats_of(first, body.into_iter(), |row, column| {
+            row.get(column).map(String::as_str)
+        });
         self.totals = SelectionTotals::Counted(stats);
     }
 
@@ -4294,8 +4314,7 @@ impl Document {
             self.line_of(cursor.body()),
             self.source_column(cursor.column()),
             self.header()
-                .and_then(|header| header.cells().get(self.source_column(cursor.column())))
-                .map(String::as_str),
+                .and_then(|header| header.cells().get(self.source_column(cursor.column()))),
         );
         DetailPainter::new(pane, metrics, palette, self.format.format().encoding())
             .paint(place, self.detail_content())
@@ -4482,6 +4501,15 @@ impl Document {
             .collect();
         Some(ViewRow::new(0, &numbers))
     }
+}
+
+/// 行 `rows` の表示の文字列から、今より多い列の幅を決めて `widths` に足す（VIEW-02・今ある列の幅は変えない）。
+fn widen_to(widths: &mut ColumnWidths, rows: &[&ViewRow]) {
+    widths.widen_with(
+        rows,
+        |row| row.cells().len(),
+        |row, column| row.cells().get(column),
+    );
 }
 
 /// 列 `column` の左端（行番号の列を除いた画素・`whole` は最初の列からの配置）。
@@ -6734,7 +6762,7 @@ mod tests {
         );
         assert_eq!(document.selection().cursor(), CellPosition::new(1, 0));
         // 原本の表示は原本のまま（派生値は描くときに重ねる）。
-        assert_eq!(document.view().rows()[0].values()[0], "0012");
+        assert_eq!(document.view().rows()[0].values().get(0), Some("0012"));
         let frame = document.frame(normal(), palette());
         text_at(&frame, "13");
         text_at(&frame, "● e.csv — NeNe Ledger");
@@ -6894,7 +6922,7 @@ mod tests {
             .view()
             .rows()
             .iter()
-            .map(|row| row.cells().first().cloned().unwrap_or_default())
+            .map(|row| row.cells().get(0).map(String::from).unwrap_or_default())
             .collect()
     }
 
@@ -7023,7 +7051,7 @@ mod tests {
     fn header_cells(document: &Document) -> Vec<String> {
         document
             .header()
-            .map(|row| row.cells().to_vec())
+            .map(|row| row.cells().to_strings())
             .unwrap_or_default()
     }
 
@@ -7037,9 +7065,12 @@ mod tests {
         assert!(matches!(effect, DocumentEffect::Read { .. }));
         reread(&mut document, &three_rows());
         assert_eq!(header_cells(&document), ["a", "", "b", "c"]);
-        assert_eq!(document.view().rows()[0].cells(), ["1", "", "2", "3"]);
+        assert_eq!(
+            document.view().rows()[0].cells().to_strings(),
+            ["1", "", "2", "3"]
+        );
         // 短い行は「セルが無い」のまま。足した列までは空のセル。
-        assert_eq!(document.view().rows()[1].cells(), ["4", ""]);
+        assert_eq!(document.view().rows()[1].cells().to_strings(), ["4", ""]);
         assert_eq!(document.widths.columns().len(), 4);
         assert_eq!(document.selection().cursor().column(), 1);
         text_at(&document.frame(normal(), palette()), "1 列を足しました");
@@ -7089,7 +7120,7 @@ mod tests {
         document.apply(Intent::RemoveColumns, normal());
         reread(&mut document, &three_rows());
         assert_eq!(header_cells(&document), ["b", "c"]);
-        assert_eq!(document.view().rows()[0].cells(), ["2", "3"]);
+        assert_eq!(document.view().rows()[0].cells().to_strings(), ["2", "3"]);
         // 「4」だけの行は、最初の列を消すとセルが無い。
         assert!(document.view().rows()[1].cells().is_empty());
         text_at(
@@ -7203,7 +7234,7 @@ mod tests {
         assert_eq!(ids, vec![RowId::Source(0), added[0], RowId::Source(1)]);
         // 足した行は表の幅まで空のセル。番号は上から通し番号（ADR 0027 の決定 1）。
         assert_eq!(
-            document.view().rows()[1].cells(),
+            document.view().rows()[1].cells().to_strings(),
             &[String::new(), String::new()]
         );
         assert_eq!(document.view().rows()[2].line(), 2);
@@ -7626,7 +7657,7 @@ mod tests {
         reread(&mut document, &[]);
         assert_eq!(document.header(), None);
         assert_eq!(document.view().rows().len(), 1);
-        assert_eq!(document.view().rows()[0].cells(), ["", "", ""]);
+        assert_eq!(document.view().rows()[0].cells().to_strings(), ["", "", ""]);
         assert_eq!(document.widths().columns().len(), 3);
         assert!(!document.has_unsaved());
         text_at(&document.frame(normal(), palette()), "無題 — NeNe Ledger");

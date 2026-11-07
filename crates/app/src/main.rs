@@ -156,7 +156,7 @@ fn open_and_show(path: &Path, theme: Option<ThemeState>) -> ExitCode {
     let stamp = nene_ledger_store::stamping::stamp_of(path).ok();
     match opening::open(path) {
         Ok(opened) if opened.looks_binary() && !open_anyway(path) => ExitCode::SUCCESS,
-        Ok(opened) => show(path, &opened, (theme, stamp)),
+        Ok(opened) => show(path, opened, (theme, stamp)),
         Err(failure) => {
             report(&describe(&failure));
             ExitCode::FAILURE
@@ -194,18 +194,20 @@ struct Start {
     stamp: Option<FileStamp>,
 }
 
-/// 窓を開き、その起こす口で裏の索引の仕事を始め、閉じられるまで描く。
+/// 窓を開き、その起こす口で裏の索引の仕事を始め、閉じられるまで描く。開いた先頭の行は画面を作ったら手放す（窓が開いている
+/// 間ずっと、セルごとの `String` の写しを持たない・GitHub Issue #22）。
 fn show(
     path: &Path,
-    opened: &opening::Opened,
+    opened: opening::Opened,
     (theme, stamp): (Option<ThemeState>, Option<FileStamp>),
 ) -> ExitCode {
     let start = Start {
-        document: first_document(opened),
+        document: first_document(&opened),
         format: opened.summary().format(),
         path: Some(path.to_path_buf()),
         stamp,
     };
+    drop(opened);
     let open_source =
         || Source::open(path).map_err(|failure| format!("ファイルを読めなかった: {failure:?}"));
     match run_window(start, open_source, theme) {

@@ -70,7 +70,7 @@ mod tests {
         let view = TableView::from_records(41, &rows(3), None);
         assert_eq!(view.first_body(), 41);
         assert_eq!(records(&view), vec![41, 42, 43]);
-        assert_eq!(view.rows()[0].cells(), &[String::from("0")]);
+        assert_eq!(view.rows()[0].cells().to_strings(), &[String::from("0")]);
     }
 
     #[test]
@@ -91,7 +91,10 @@ mod tests {
     fn cells_become_single_lines() {
         let multi = vec![vec![String::from("東京\n都")]];
         let view = TableView::from_records(0, &multi, None);
-        assert_eq!(view.rows()[0].cells(), &[String::from("東京¶都")]);
+        assert_eq!(
+            view.rows()[0].cells().to_strings(),
+            &[String::from("東京¶都")]
+        );
         assert!(TableView::from_records(7, &[], None).rows().is_empty());
     }
 }

@@ -263,7 +263,7 @@ impl<'view> FramePainter<'view> {
             Some(CellValue::Text(value)) => {
                 let shown = single_line(value);
                 let found = self.found_in(style, value);
-                self.paint_cell(rect, Some(&shown), (mark, &found));
+                self.paint_cell(rect, Some(shown.as_str()), (mark, &found));
             }
             Some(CellValue::Absent) => self.paint_cell(rect, None, (mark, &[])),
             None => {
@@ -515,7 +515,7 @@ impl<'view> FramePainter<'view> {
     fn paint_cell(
         &mut self,
         rect: PixelRect,
-        cell: Option<&String>,
+        cell: Option<&str>,
         (mark, found): (CellMark, &[Range<usize>]),
     ) {
         let (background, missing) = match mark {
@@ -685,7 +685,7 @@ mod tests {
 
     /// 本体の続いた行 `rows`（最初のレコードの番号から本体の番目も同じ）。
     fn view(rows: &[ViewRow]) -> TableView {
-        let cells: Vec<Vec<String>> = rows.iter().map(|row| row.cells().to_vec()).collect();
+        let cells: Vec<Vec<String>> = rows.iter().map(|row| row.cells().to_strings()).collect();
         TableView::from_records(rows.first().map_or(0, ViewRow::line), &cells, None)
     }
 
@@ -731,7 +731,12 @@ mod tests {
         selection: Option<Selection>,
         first_column: usize,
     ) -> Vec<DrawCommand> {
-        let cells: Vec<&[String]> = header.into_iter().chain(rows).map(ViewRow::cells).collect();
+        let owned: Vec<Vec<String>> = header
+            .into_iter()
+            .chain(rows)
+            .map(|row| row.cells().to_strings())
+            .collect();
+        let cells: Vec<&[String]> = owned.iter().map(Vec::as_slice).collect();
         let last = rows.last().map_or(0, |row| row.line() + 1);
         let layout = TableLayout::new(&ColumnWidths::fit(&cells), first_column, last, metrics());
         let painter = FramePainter::new(&layout, metrics(), palette(), size);
@@ -746,10 +751,11 @@ mod tests {
     fn frozen_columns_are_painted_left_of_the_scrolled_ones_with_an_edge() {
         let header = row(0, &["aaaaa", "bbbbbbbbbb", "c", "dd"]);
         let body = [row(1, &["x1", "x2", "x3", "x4"])];
-        let cells: Vec<&[String]> = core::iter::once(&header)
+        let owned: Vec<Vec<String>> = core::iter::once(&header)
             .chain(&body)
-            .map(ViewRow::cells)
+            .map(|row| row.cells().to_strings())
             .collect();
+        let cells: Vec<&[String]> = owned.iter().map(Vec::as_slice).collect();
         // 1 列目を固定し、表示は 3 列目から。2 列目は描かない。
         let layout = TableLayout::new(&ColumnWidths::fit(&cells), 2, 2, metrics()).with_frozen(1);
         let commands = FramePainter::new(&layout, metrics(), palette(), PixelSize::new(800, 600))
@@ -1030,7 +1036,8 @@ mod tests {
         ];
         let found = FindQuery::new("tok", FindOptions::standard());
         let header_cells = [String::from("tok"), String::from("tok")];
-        let mut cells: Vec<&[String]> = rows.iter().map(ViewRow::cells).collect();
+        let owned: Vec<Vec<String>> = rows.iter().map(|row| row.cells().to_strings()).collect();
+        let mut cells: Vec<&[String]> = owned.iter().map(Vec::as_slice).collect();
         cells.push(&header_cells);
         let commands = paint_found(&rows, &found, &ColumnWidths::fit(&cells));
         assert_eq!(
@@ -1051,7 +1058,8 @@ mod tests {
         // 改行の後ろの当たりは表示の 1 行の `¶` の後ろの位置。
         let line = FindQuery::new("b", FindOptions::standard());
         let breaks = [row(1, &["a\r\nb", "x"])];
-        let broken = paint_found(&breaks, &line, &ColumnWidths::fit(&[breaks[0].cells()]));
+        let shown = breaks[0].cells().to_strings();
+        let broken = paint_found(&breaks, &line, &ColumnWidths::fit(&[&shown]));
         assert_eq!(spans(&broken), vec![("a¶b", 3, 4)]);
     }
 

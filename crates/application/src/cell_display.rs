@@ -27,30 +27,47 @@ const ZERO_WIDTH: char = '¦';
 #[must_use]
 pub fn single_line(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
-    out.extend(shown_characters(value).map(|(_, shown)| shown));
+    push_single_line(value, &mut out);
     out
 }
 
+/// `single_line(value)` を `out` の後ろに足す（セルごとに `String` を作らずに 1 本の文字列へ書く・GitHub Issue #22）。
+pub fn push_single_line(value: &str, out: &mut String) {
+    out.extend(shown_characters(value).map(|(_, shown)| shown));
+}
+
 /// `value` を前から 1 字ずつ表示の字にした並び（元の字の始まりのバイトと、表示の字）。`\r\n` は 1 つの `¶` になる。
+/// 字ごとの印は [`mark_of`] の表で決める（`single_line`・`is_single_line`・当たった字の位置の写しが同じ表を使う）。
 fn shown_characters(value: &str) -> impl Iterator<Item = (usize, char)> + '_ {
     let mut characters = value.char_indices().peekable();
     core::iter::from_fn(move || {
         let (at, character) = characters.next()?;
-        let shown = match character {
-            '\r' => {
-                characters.next_if(|&(_, next)| next == '\n');
-                LINE_BREAK
-            }
-            '\n' | '\u{2028}' | '\u{2029}' => LINE_BREAK,
-            '\t' => TAB,
-            '\u{3000}' => IDEOGRAPHIC_SPACE,
-            '\u{a0}' | '\u{202f}' => NO_BREAK_SPACE,
-            '\u{200b}'..='\u{200d}' | '\u{2060}' | '\u{feff}' => ZERO_WIDTH,
-            other if other.is_control() => CONTROL,
-            other => other,
-        };
-        Some((at, shown))
+        if character == '\r' {
+            characters.next_if(|&(_, next)| next == '\n');
+        }
+        Some((at, mark_of(character).unwrap_or(character)))
     })
+}
+
+/// 字 `character` を表示で替える印（替えなければ `None`）。`single_line` と `is_single_line` の正本（2 つが食い違わない
+/// ように表を 1 つにする）。`\r\n` の `\n` は `single_line` が `\r` と合わせて 1 つの印にする。
+const fn mark_of(character: char) -> Option<char> {
+    match character {
+        '\r' | '\n' | '\u{2028}' | '\u{2029}' => Some(LINE_BREAK),
+        '\t' => Some(TAB),
+        '\u{3000}' => Some(IDEOGRAPHIC_SPACE),
+        '\u{a0}' | '\u{202f}' => Some(NO_BREAK_SPACE),
+        '\u{200b}'..='\u{200d}' | '\u{2060}' | '\u{feff}' => Some(ZERO_WIDTH),
+        other if other.is_control() => Some(CONTROL),
+        _ => None,
+    }
+}
+
+/// `value` が表示の 1 行そのものか（`single_line(value) == value`・印に替える字が無い）。写しを作らずに確かめる
+/// （窓の行は、表示の文字列が元の値と同じなら写しを持たない・GitHub Issue #22）。
+#[must_use]
+pub fn is_single_line(value: &str) -> bool {
+    value.chars().all(|character| mark_of(character).is_none())
 }
 
 /// 元の値 `value` の中の左から並んだ重ならないバイトの範囲 `spans` を、`single_line(value)` の中のバイトの範囲に写す
@@ -214,6 +231,38 @@ mod tests {
         let same_length = fitted("abcde", 4);
         assert_eq!(same_length, "ab…");
         assert_eq!(fitted_spans("abcde", &same_length, &one(3..5)), one(2..5));
+    }
+
+    /// 写しを作らない確かめは、写しと比べたときと同じ答え。
+    #[test]
+    fn single_line_values_are_recognised_without_a_copy() {
+        for value in [
+            "",
+            "abc",
+            "東京",
+            "a\r\nb",
+            "a\rb",
+            "a\nb",
+            "a\tb",
+            "\u{0}",
+            "山田\u{3000}太郎",
+            "10\u{a0}000",
+            "ab\u{200b}c",
+            "一\u{2028}二",
+            "¶",
+            "→",
+            "\r",
+            "\r\n",
+            "x\u{7f}",
+            "x\u{85}",
+            "\u{2060}\u{feff}",
+        ] {
+            assert_eq!(
+                is_single_line(value),
+                single_line(value) == value,
+                "{value:?}"
+            );
+        }
     }
 
     #[test]
