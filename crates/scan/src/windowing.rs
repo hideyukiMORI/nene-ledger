@@ -32,7 +32,30 @@ pub fn read_records(
     format: TextFormat,
     range: RecordRange,
 ) -> Result<RecordWindow, ScanFailure> {
-    let mark = nearest_mark(source, index, format, range.first())?;
+    read_records_after(source, index, format, (range, None))
+}
+
+/// [`read_records`] と同じ答えを、前に読んで始まりが分かっているレコード `known`（[`RecordWindow::last_mark`]）からも
+/// 探して返す。`known` が `range` の最初のレコードより前で、索引の目印より近ければ、そこから境目を探す（番号の順に 1 行
+/// ずつ引く保存の計画で、行ごとに目印から探し直すと目印の中で行の数の 2 乗の手間になった・GitHub Issue #209）。
+///
+/// # Errors
+///
+/// 読み出しの失敗。
+pub fn read_records_after(
+    source: &Source,
+    index: &SparseIndex,
+    format: TextFormat,
+    (range, known): (RecordRange, Option<Mark>),
+) -> Result<RecordWindow, ScanFailure> {
+    let known = known.filter(|known| known.record() <= range.first());
+    let mark = match (known, index.mark_at_or_before(range.first())) {
+        (Some(known), Some(indexed)) if known.record() > indexed.record() => known,
+        (_, Some(indexed)) => indexed,
+        // 目印が無ければ BOM の後ろ（レコード 0）。覚えた始まりはそれより前ではないので、あればそちら。
+        (Some(known), None) => known,
+        (None, None) => nearest_mark(source, index, format, range.first())?,
+    };
     read_records_from(source, (index, format), mark, range)
 }
 
@@ -67,6 +90,11 @@ pub(crate) fn read_records_from(
 ) -> Result<RecordWindow, ScanFailure> {
     let dialect = format.dialect();
     let spans = record_spans(source, (index, dialect), mark, range)?;
+    // 境目を探した最後のレコードの番号と始まり（`spans` は範囲の最初のレコードから 1 つずつ続く）。
+    let last = spans.last().and_then(|span| {
+        let before = u64::try_from(spans.len().checked_sub(1)?).ok()?;
+        Some(Mark::new(range.first().checked_add(before)?, span.start()))
+    });
     let limit = u64::try_from(RECORD_READ_LIMIT.get())?;
     let mut records = Vec::with_capacity(spans.len());
     for batch in batches(&spans, limit) {
@@ -81,7 +109,7 @@ pub(crate) fn read_records_from(
             _ => records.extend(read_batch(source, dialect, batch)?),
         }
     }
-    Ok(RecordWindow::new(records))
+    Ok(RecordWindow::new(records, last))
 }
 
 /// 上限までの長さが分かっているレコードか（まとめて読める）。
