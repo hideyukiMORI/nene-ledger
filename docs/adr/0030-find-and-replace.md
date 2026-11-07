@@ -73,6 +73,30 @@ M2 は「探して置き換え、壊れた行を直す」束を含む（ROADMAP�
 - **全部の置換は 100 万セルまで**（ADR 0029 の決定 4 と同じ）。超えれば置き換えずに知らせる。それより大きな置換は、M3 の「変換の規則」（ADR 0005 の「原本 ＋ 差分 ＋ **変換の規則**」・セルごとに持たない層）で扱う
 - 置き換えた結果は文字列のまま。表せない字（文字コード）は保存のときに知らせる（今と同じ・SAVE-04）
 
+### 7. 当たりの見え方（2026-11-07 追記・**提案**・GitHub Issue #189）
+
+> 施主の声（2026-11-06・0.1.0-preview.1 を実機で触って）：「選択されている文字が色変わるとか背景色が変わるとかしないと何をやっているのか、どの文字を変えるのかがわからないかも」。施主が外出中に作ったので、この節は**提案**。下の表の推しで作ってあり、施主の判断を待ってからマージする。
+
+- **印を付ける間**：検索の欄と置換の欄が開いている間（打っている途中の問いで、Enter を待たない）と、全部の置換の件数を見せている間。欄を閉じれば消す（F3 で続けて探すときは印を付けない）
+- **印を付ける所**：見えている行の本体のセルだけ（見出しの行は探さないので付けない）。画面に描く分だけ照らすので、1 GB の表でも全体を走らせない
+- **当たったセルの背景**：選んでいないセル（と帯）を「当たったセル」の薄い黄にする。選んだセルとカーソルのセルは選択の色のまま
+- **当たった字**：明るい黄（蛍光ペン）の背景に、濃い字で書き直す（Vim の検索の強調と同じ）。暗い配色でも同じ。`…` で切った後ろに当たりがあれば `…` に印を付ける。改行などの印（`¶`・`→`・`□`）の後ろの位置も合わせる
+- **色**：配色の役割を 3 つ足す（当たったセル・当たった字の背景・その上の字）。配色の強調の色に依らない印の黄（`#FFC400`）を背景から混ぜて導く。125 配色すべてで、当たったセルの上の字と当たった字が 4.5 の比で読め、当たった字の背景がほかの面（背景・面・選択・帯・当たったセル）から離れていることをテストで確かめる
+- **字の幅**：字の幅は UI が字体で測る（比例の字体では半角 1・全角 2 の近似が合わない）。描く命令に「字の一部に印を付ける」を足し、X11（cairo）と Windows（DirectWrite）の両方で描く
+- **全部の置換の件数と確かめ**：Alt+A で欄を閉じず、置換の欄の 1 行目のキーの案内の代わりに「n セルを置き換えます · Enter 置き換える · Esc やめる」を強調の色で出す。Enter で置き換え、Esc でやめる（欄は開いたまま）。欄に打てば置き換えをやめて打った字が欄に入る。置き換えた後は「n セルを置き換えました · 表で Ctrl+Z で戻す」。長い知らせ（1 MiB で切り詰めた行を飛ばした数など）は今までどおり状態の行
+
+#### 判断の前に並べた選択肢（施主に諮る）
+
+| # | 問い | 推し（作った形） | ほかの案 |
+| --- | --- | --- | --- |
+| 1 | 印を付ける間 | 欄が開いている間（打つたびに）＋ 件数を見せている間 | Enter で探した後も、次の検索まで残す（VS Code の欄を閉じた後と同じ）／ Enter を押してから |
+| 2 | 当たった字の見え方 | 明るい黄の背景 ＋ 濃い字（どの配色でも同じ） | 配色の強調の色の背景（配色に馴染むが、選択の色と紛れる・暗い配色で字が読めなくなる）／ 下線だけ |
+| 3 | 当たったセルの背景 | 選んでいないセルを薄い黄 | 付けない（字の印だけ）／ セルの枠 |
+| 4 | 件数と確かめの置き場 | パレットの中（置換の欄の 1 行目） | 今までどおり状態の行（欄を閉じる）／ 両方 |
+| 5 | 色の役割を足す | 3 つ（配色の数は変えない・導出で作る） | 2 つ（字の色は配色の字のまま・暗い配色で比 4.5 に届かず薄くなる。試して捨てた） |
+
+試して捨てた形（2026-11-07）：当たった字の背景を「背景から黄へ寄せ、字が読めるまで背景へ戻す」で作ると、暗い配色（solarized-dark・abyss など）では当たったセルの色とほぼ同じになり（チャンネルの差の和が 1）、見分けられなかった。字の色を濃くして書き直す形に変えると、全配色で差の和 107 以上・字の比 4.5 以上になった。
+
 ## 強制
 
 - **active**（GitHub Issue #151 で入れた）:
@@ -91,6 +115,12 @@ M2 は「探して置き換え、壊れた行を直す」束を含む（ROADMAP�
   - 裏の数えは塊の大きさと分け方に依らず、見出し・書き換えた値・消した行の扱いが検索と同じ（app のテスト `matching_cells_are_collected_in_record_order_over_shown_values`・`edits_removed_rows_and_the_limit_are_respected`）
 - **active**（GitHub Issue #165 で入れた）:
   - 置換の段のキー（Ctrl+H・Tab で欄を替える・Enter で 1 つ・Alt+A で全部・Shift+Enter と条件は探す段と同じ）（application のテスト `the_replace_step_types_into_two_fields`・`the_replace_step_replaces_one_or_all_and_finds_like_the_find_step`・`the_replace_step_shows_both_fields_and_its_keys`・ui-x11 と ui-win32 の `replace_keys`）
+- **active**（GitHub Issue #189 で入れた・決定 7 は提案）:
+  - 当たった所の元の字の範囲は、置き換える所と同じで、当たるときだけ空でない（core のテスト `spans_are_the_parts_that_replacing_rewrites`・`spans_are_the_matched_parts_of_the_original_cell`）
+  - 字の一部の印は字体で測った幅で塗り、帯の外と字の境目に無い範囲は塗らない（ui-x11 のテスト `a_text_span_fills_behind_the_measured_characters_inside_its_band`。Windows は `make lint-windows` まで・実機はまだ）
+  - 125 配色すべてで、当たったセルの上の字と当たった字が読め、当たった字の背景がほかの面から離れている（core のテスト `every_builtin_theme_marks_found_cells_and_characters_readably`）
+  - 当たった字の印は字を書いた後に置き、表示の 1 行（`¶` など）と `…` で切った後ろに合わせる。見出しの行には付けない（application のテスト `found_cells_and_characters_are_marked_after_their_text`・`a_match_past_the_cut_marks_the_ellipsis`・`spans_in_the_value_map_onto_the_single_line`・`spans_past_the_cut_mark_the_ellipsis`）
+  - 印を付ける問いは探す段と置換の段だけ（`only_the_find_and_replace_steps_mark_the_table`）。件数と確かめは置換の欄の案内に出し、Enter / Esc / 欄に打つ の扱いが決まっている（`counting_inside_the_open_field_waits_for_the_count`・`replacing_all_is_confirmed_inside_the_open_field`・`replacing_all_inside_the_open_field_can_be_declined`・`the_replace_step_shows_the_count_and_the_confirmation_in_place_of_its_keys`）
 - **planned（実装の Issue で active にする）**:
   - 正規表現の逆戻りで止まらない（病的な式と入力の時間を測る・gate-proofs）
   - 1 GB の表で、最後の行にだけある値を見つける時間を DuckDB / qsv / EmEditor と同じファイルで記録（QLT-014。`grep` と `rg` との比べは benchmarks 第 8 節）

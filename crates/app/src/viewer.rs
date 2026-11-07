@@ -499,8 +499,8 @@ impl Viewer {
             )
         })?;
         self.replacement.clone_from(&replacement);
+        // 全部の置換は欄を開いたまま数え、件数と確かめを欄の案内に出す（GitHub Issue #189）。
         let effect = if all {
-            self.palette = None;
             self.document.replace_all(query, &replacement)
         } else {
             self.document.replace_one(query, &replacement)
@@ -626,6 +626,13 @@ impl Viewer {
 
     /// パレットが開いている間の意図。どのキーもパレットへ渡し、表には届けない（Issue #41）。
     fn palette_intent(&mut self, intent: Intent, view: WindowView) -> Option<ClipboardText> {
+        // 全部の置換を数えている間と件数を見せている間は、Enter と Esc を確かめに使う（欄は開いたまま・GitHub Issue #189）。
+        if let Some((effect, consumed)) = self.document.replace_prompt_intent(intent) {
+            let copied = self.effect(effect);
+            if consumed {
+                return copied;
+            }
+        }
         let current = self.preferences.theme().position();
         let outcome = {
             let open = self.palette.as_mut()?;
@@ -823,17 +830,21 @@ impl Session for Viewer {
     }
 
     fn frame(&self, view: WindowView) -> Frame {
-        let frame = self
-            .document
-            .frame(view, self.preferences.theme().palette());
+        // 検索と置換の欄が開いている間は、打っている問いに当たる見えているセルと字に印を付ける（GitHub Issue #189）。
+        let found = self.palette.as_ref().and_then(|open| open.state().found());
+        let frame =
+            self.document
+                .frame_found(view, self.preferences.theme().palette(), found.as_ref());
         let Some(open) = &self.palette else {
             return frame;
         };
         let mut commands = frame.into_commands();
-        commands.extend(
-            open.state()
-                .paint(view, open.colors(), self.document.detail()),
-        );
+        let note = self.document.replace_guide();
+        commands.extend(open.state().paint_noted(
+            view,
+            (open.colors(), self.document.detail()),
+            note.as_deref(),
+        ));
         Frame::new(view.size(), commands)
     }
 

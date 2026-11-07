@@ -1,6 +1,8 @@
 //! セルの値を、表の 1 行に収まる表示の文字列にする（見えない文字は印に・VIEW-05）。
 
 use alloc::string::String;
+use alloc::vec::Vec;
+use core::ops::Range;
 
 use nene_ledger_core::display_width::char_columns;
 
@@ -25,11 +27,18 @@ const ZERO_WIDTH: char = '¦';
 #[must_use]
 pub fn single_line(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
-    let mut characters = value.chars().peekable();
-    while let Some(character) = characters.next() {
+    out.extend(shown_characters(value).map(|(_, shown)| shown));
+    out
+}
+
+/// `value` を前から 1 字ずつ表示の字にした並び（元の字の始まりのバイトと、表示の字）。`\r\n` は 1 つの `¶` になる。
+fn shown_characters(value: &str) -> impl Iterator<Item = (usize, char)> + '_ {
+    let mut characters = value.char_indices().peekable();
+    core::iter::from_fn(move || {
+        let (at, character) = characters.next()?;
         let shown = match character {
             '\r' => {
-                characters.next_if_eq(&'\n');
+                characters.next_if(|&(_, next)| next == '\n');
                 LINE_BREAK
             }
             '\n' | '\u{2028}' | '\u{2029}' => LINE_BREAK,
@@ -40,9 +49,63 @@ pub fn single_line(value: &str) -> String {
             other if other.is_control() => CONTROL,
             other => other,
         };
-        out.push(shown);
+        Some((at, shown))
+    })
+}
+
+/// 元の値 `value` の中の左から並んだ重ならないバイトの範囲 `spans` を、`single_line(value)` の中のバイトの範囲に写す
+/// （検索で当たった字の印・GitHub Issue #189）。`\r\n` の間で切れる範囲は `¶` の後ろに寄せる。長さ 0 になった範囲は落とす。
+#[must_use]
+pub fn shown_spans(value: &str, spans: &[Range<usize>]) -> Vec<Range<usize>> {
+    let points: Vec<usize> = spans
+        .iter()
+        .flat_map(|span| [span.start, span.end])
+        .collect();
+    let mut mapped = Vec::with_capacity(points.len());
+    let mut shown = 0_usize;
+    for (at, character) in shown_characters(value) {
+        while points.get(mapped.len()).is_some_and(|&point| point <= at) {
+            mapped.push(shown);
+        }
+        shown = shown.saturating_add(character.len_utf8());
     }
-    out
+    mapped.resize(points.len(), shown);
+    mapped
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .filter(|&&[start, end]| start < end)
+        .map(|&[start, end]| start..end)
+        .collect()
+}
+
+/// 幅 `columns` に収めた表示の文字列 `text`（[`fitted`]）の中の、印を付ける範囲。`spans` は `text` の中の範囲。`…` で
+/// 切った後ろにかかる範囲は、見えている頭の部分までと `…` に印を付ける（切った後ろに当たりがあることが見える）。
+#[must_use]
+pub fn fitted_spans(text: &str, fitted: &str, spans: &[Range<usize>]) -> Vec<Range<usize>> {
+    let cut = fitted.len() != text.len();
+    let head = if cut {
+        fitted.len().saturating_sub(ELLIPSIS.len_utf8())
+    } else {
+        fitted.len()
+    };
+    let mut marked: Vec<Range<usize>> = Vec::new();
+    for span in spans {
+        let start = span.start.min(head);
+        let end = if span.end > head && cut {
+            fitted.len()
+        } else {
+            span.end.min(head)
+        };
+        if start >= end {
+            continue;
+        }
+        match marked.last_mut() {
+            Some(last) if last.end >= start => last.end = last.end.max(end),
+            Some(_) | None => marked.push(start..end),
+        }
+    }
+    marked
 }
 
 /// 省略の印（U+2026）。
@@ -111,6 +174,41 @@ mod tests {
         assert_eq!(single_line("a\tb\u{0}c"), "a→b·c");
         assert_eq!(single_line(" 00123 "), " 00123 ");
         assert_eq!(single_line(""), "");
+    }
+
+    /// 1 つの範囲の並び。
+    fn one(range: Range<usize>) -> Vec<Range<usize>> {
+        core::iter::once(range).collect()
+    }
+
+    /// 元の値の範囲は、表示の 1 行の同じ字の範囲に写る（`\r\n` は 1 つの `¶`・全角空白は `□`）。
+    #[test]
+    fn spans_in_the_value_map_onto_the_single_line() {
+        let value = "東京\r\nab\tc\u{3000}d";
+        let shown = single_line(value);
+        assert_eq!(shown, "東京¶ab→c□d");
+        // 「ab」（元の 8..10）は表示の 8..10、「\r\n」（元の 6..8）は「¶」（表示の 6..8）、「□d」。
+        assert_eq!(shown_spans(value, &one(8..10)), one(8..10));
+        assert_eq!(shown_spans(value, &one(6..8)), one(6..8));
+        assert_eq!(shown_spans(value, &[0..3, 12..16]), [0..3, 14..18]);
+        assert_eq!(&shown[14..18], "□d");
+        // `\r` だけの範囲は `¶` を含む。`\n` だけの範囲は `¶` の後ろに寄って長さ 0 になる。
+        assert_eq!(shown_spans("a\r\nb", &one(1..2)), one(1..3));
+        assert!(shown_spans("a\r\nb", &one(2..3)).is_empty());
+        assert!(shown_spans("abc", &[]).is_empty());
+    }
+
+    /// 切った後ろにかかる当たりは、見えている頭と `…` に印を付ける。重なった印はまとめる。
+    #[test]
+    fn spans_past_the_cut_mark_the_ellipsis() {
+        let text = "abcdefgh";
+        let cut = fitted(text, 6);
+        assert_eq!(cut, "abcd…");
+        assert_eq!(fitted_spans(text, &cut, &one(1..2)), one(1..2));
+        assert_eq!(fitted_spans(text, &cut, &one(3..6)), one(3..7));
+        assert_eq!(fitted_spans(text, &cut, &one(6..7)), one(4..7));
+        assert_eq!(fitted_spans(text, &cut, &[3..5, 6..7]), one(3..7));
+        assert_eq!(fitted_spans("ab", "ab", &one(0..2)), one(0..2));
     }
 
     #[test]

@@ -41,9 +41,10 @@ pub enum DrawCommand {
         /// 色。
         color: Color,
     },
-    /// 字の一部の背景を塗る（検索で当たった字・GitHub Issue #189）。基準線の左端 `baseline` から `text` を `role` の字で
-    /// 書いたときの、`text` の `start..end` バイトの字が占める横の範囲を、`band` の縦の範囲で塗る。`band` の外は塗らない。
-    /// 字の幅は UI が字体で測る（比例の字体では半角 1・全角 2 の近似と合わないので）。範囲が字の境目に無ければ塗らない。
+    /// 字の一部に印を付ける（検索で当たった字・GitHub Issue #189）。基準線の左端 `baseline` から `text` を `role` の字で
+    /// 書いたときの、`text` の `start..end` バイトの字が占める横の範囲を、`band` の縦の範囲で `color` で塗り、その範囲の中
+    /// だけ `text` を `ink` で書き直す（同じ字を書いた `Text` の後に置く）。`band` の外は描かない。字の幅は UI が字体で測る
+    /// （比例の字体では半角 1・全角 2 の近似と合わないので）。範囲が字の境目に無ければ何もしない。
     TextSpan {
         /// 字を書く基準線の左端（同じ字を書く `Text` と同じ）。
         baseline: PixelPoint,
@@ -55,8 +56,10 @@ pub enum DrawCommand {
         end: usize,
         /// 塗る縦の範囲と、切り取りの矩形。
         band: PixelRect,
-        /// 色。
+        /// 塗る色。
         color: Color,
+        /// 範囲の中の字の色。
+        ink: Color,
         /// どちらの字の大きさで測るか。
         role: TextRole,
     },
@@ -106,6 +109,7 @@ impl DrawCommand {
                 end,
                 band,
                 color,
+                ink,
                 role,
             } => Self::TextSpan {
                 baseline: shift(baseline),
@@ -114,6 +118,7 @@ impl DrawCommand {
                 end,
                 band: shift_rect(band),
                 color,
+                ink,
                 role,
             },
         }
@@ -173,6 +178,7 @@ mod tests {
             end: 2,
             band,
             color,
+            ink: color,
             role: TextRole::Content,
         };
         assert_eq!(

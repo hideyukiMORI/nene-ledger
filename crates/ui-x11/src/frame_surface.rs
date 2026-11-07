@@ -91,19 +91,14 @@ fn draw(context: &Context, command: &DrawCommand, zoom: ZoomLevel) -> Result<(),
             end,
             band,
             color,
+            ink,
             role,
-        } => {
-            let size = match role {
-                TextRole::Chrome => FONT_SIZE,
-                TextRole::Content => content_size(zoom),
-            };
-            span(
-                context,
-                (*baseline, text, *start..*end),
-                (*band, *color),
-                size,
-            )?;
-        }
+        } => span(
+            context,
+            (*baseline, text, *start..*end),
+            (*band, *color, *ink),
+            font_size(*role, zoom),
+        )?,
         DrawCommand::Line {
             from,
             to,
@@ -131,12 +126,12 @@ fn font_size(role: TextRole, zoom: ZoomLevel) -> f64 {
     }
 }
 
-/// 基準線の左端 `baseline` から大きさ `size` で書く `text` の、`range` のバイトの字の背景を、`band` の縦の範囲で塗る
-/// （`band` の外は塗らない・GitHub Issue #189）。範囲が字の境目に無ければ塗らない。
+/// 基準線の左端 `baseline` から大きさ `size` で書く `text` の、`range` のバイトの字の背景を、`band` の縦の範囲で `color`
+/// で塗り、その中だけ字を `ink` で書き直す（`band` の外は描かない・GitHub Issue #189）。範囲が字の境目に無ければ何もしない。
 fn span(
     context: &Context,
     (baseline, text, range): (PixelPoint, &str, core::ops::Range<usize>),
-    (band, color): (PixelRect, Color),
+    (band, color, ink): (PixelRect, Color, Color),
     size: f64,
 ) -> Result<(), UiFailure> {
     let (Some(head), Some(through)) = (text.get(..range.start), text.get(..range.end)) else {
@@ -150,14 +145,18 @@ fn span(
     let right = (origin + context.text_extents(through)?.x_advance()).round();
     add_rect(context, band);
     context.clip();
-    set_color(context, color);
     context.rectangle(
         left,
         f64::from(band.origin().y()),
         (right - left).max(0.0_f64),
         f64::from(band.size().height()),
     );
-    context.fill()?;
+    context.clip();
+    set_color(context, color);
+    context.paint()?;
+    set_color(context, ink);
+    context.move_to(origin, f64::from(baseline.y()));
+    context.show_text(text)?;
     context.restore()?;
     Ok(())
 }
@@ -244,6 +243,7 @@ mod tests {
             end,
             band: PixelRect::new(PixelPoint::new(0, 1), PixelSize::new(width, 2)),
             color: Color::new(0xFF, 0xFF, 0xFF),
+            ink: Color::new(0xFF, 0xFF, 0xFF),
             role: TextRole::Content,
         };
         let stride = usize::try_from(width).unwrap() * 4;

@@ -24,6 +24,7 @@ use crate::reading_aspect::ReadingAspect;
 use crate::reading_choice::ReadingChoice;
 use crate::window_view::WindowView;
 use nene_ledger_core::find_options::FindOptions;
+use nene_ledger_core::find_query::FindQuery;
 
 /// `PageUp` / `PageDown` で動く候補の数。
 const PAGE: usize = 10;
@@ -117,6 +118,26 @@ impl CommandPalette {
     #[must_use]
     pub const fn find_options(&self) -> FindOptions {
         self.find_options
+    }
+
+    /// 検索と置換の段で、表の当たったセルと字に印を付ける問い（打った文字と今の条件・GitHub Issue #189）。ほかの段と、
+    /// 空の問いは `None`。
+    #[must_use]
+    pub fn found(&self) -> Option<FindQuery> {
+        match self.mode {
+            PaletteMode::Find | PaletteMode::Replace { .. } => {
+                let query = FindQuery::new(&self.query, self.find_options);
+                (!query.is_empty()).then_some(query)
+            }
+            PaletteMode::Commands
+            | PaletteMode::GoTo
+            | PaletteMode::Keys
+            | PaletteMode::About
+            | PaletteMode::Themes { .. }
+            | PaletteMode::Reading { .. }
+            | PaletteMode::Candidates { .. }
+            | PaletteMode::SaveAs { .. } => None,
+        }
     }
 
     /// 名前を付けて保存の保存先を打つ段で開く（X11・ADR 0028 の決定 4）。初めの道筋は `initial`（今のファイルのフォルダ）。
@@ -391,7 +412,20 @@ impl CommandPalette {
     /// 窓 `view` に重ねる描画命令。色 `colors` はパレットを開いたときの配色（試しても動かない）。`detail` は詳細ペインの開閉。
     #[must_use]
     pub fn paint(&self, view: WindowView, colors: Palette, detail: DetailPane) -> Vec<DrawCommand> {
+        self.paint_noted(view, (colors, detail), None)
+    }
+
+    /// [`Self::paint`] に、置換の段の 1 行目のキーの案内の代わりの 1 行 `note`（全部の置換の件数と確かめ・GitHub
+    /// Issue #189）を出した命令。
+    #[must_use]
+    pub fn paint_noted(
+        &self,
+        view: WindowView,
+        (colors, detail): (Palette, DetailPane),
+        note: Option<&str>,
+    ) -> Vec<DrawCommand> {
         PalettePainter::new(self, PaletteLayout::new(view, self), view.metrics(), colors)
+            .with_note(note)
             .paint(detail)
     }
 
@@ -992,5 +1026,22 @@ mod tests {
         let mut commands = CommandPalette::open();
         commands.ask_overwrite();
         assert_eq!(commands.mode(), PaletteMode::Commands);
+    }
+
+    /// 表の印に使う問いは、探す段と置換の段で打った文字と今の条件。空の問いとほかの段は無い（GitHub Issue #189）。
+    #[test]
+    fn only_the_find_and_replace_steps_mark_the_table() {
+        let options = FindOptions::standard().toggled_case();
+        assert_eq!(
+            CommandPalette::open_find("tok", options).found(),
+            Some(FindQuery::new("tok", options))
+        );
+        assert_eq!(
+            CommandPalette::open_replace("tok", "x", options).found(),
+            Some(FindQuery::new("tok", options))
+        );
+        assert_eq!(CommandPalette::open_find("", options).found(), None);
+        assert_eq!(CommandPalette::open().found(), None);
+        assert_eq!(CommandPalette::open_go_to().found(), None);
     }
 }
