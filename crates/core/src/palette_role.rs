@@ -35,11 +35,17 @@ pub enum PaletteRole {
     Band,
     /// スクロールバーのつまみ（普段）。
     ScrollThumb,
+    /// 検索で当たったセルの背景（GitHub Issue #189）。
+    Found,
+    /// 検索で当たった字の背景（GitHub Issue #189）。
+    FoundText,
+    /// 検索で当たった字（当たった字の背景の上・GitHub Issue #189）。
+    FoundInk,
 }
 
 impl PaletteRole {
     /// 役割の数。
-    pub const COUNT: usize = 16;
+    pub const COUNT: usize = 19;
 
     /// すべての役割（並びは配色が色を持つ順）。
     pub const ALL: [Self; Self::COUNT] = [
@@ -59,6 +65,9 @@ impl PaletteRole {
         Self::ChromeRule,
         Self::Band,
         Self::ScrollThumb,
+        Self::Found,
+        Self::FoundText,
+        Self::FoundInk,
     ];
 
     /// 配色の中の位置。
@@ -81,6 +90,9 @@ impl PaletteRole {
             Self::ChromeRule => 13,
             Self::Band => 14,
             Self::ScrollThumb => 15,
+            Self::Found => 16,
+            Self::FoundText => 17,
+            Self::FoundInk => 18,
         }
     }
 }

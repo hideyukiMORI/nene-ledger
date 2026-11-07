@@ -123,4 +123,22 @@ impl Palette {
     pub fn scroll_thumb(self) -> Color {
         self.color(PaletteRole::ScrollThumb)
     }
+
+    /// 検索で当たったセルの背景（選んでいないセル・GitHub Issue #189）。
+    #[must_use]
+    pub fn found(self) -> Color {
+        self.color(PaletteRole::Found)
+    }
+
+    /// 検索で当たった字の背景（GitHub Issue #189）。
+    #[must_use]
+    pub fn found_text(self) -> Color {
+        self.color(PaletteRole::FoundText)
+    }
+
+    /// 検索で当たった字（当たった字の背景の上で読める濃い字・GitHub Issue #189）。
+    #[must_use]
+    pub fn found_ink(self) -> Color {
+        self.color(PaletteRole::FoundInk)
+    }
 }

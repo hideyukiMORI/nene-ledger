@@ -1777,6 +1777,88 @@ impl Document {
         (intent == Intent::Cancel).then_some(DocumentEffect::Stay)
     }
 
+    /// 置換の欄が開いている間の、全部の置換の確かめの意図（GitHub Issue #189・件数と確かめをパレットの中に出す）。結果と、
+    /// 意図をここで使い切ったか。数えている間の Enter は何もせず、Esc はやめる。件数を見せている間の Enter は置き換え、
+    /// Esc はやめる（欄は開いたまま）。ほかの意図（欄に打つ・条件を替える）は置き換えをやめ、使い切らない（欄が受け取る）。
+    /// 全部の置換が無ければ `None`。
+    pub fn replace_prompt_intent(&mut self, intent: Intent) -> Option<(DocumentEffect, bool)> {
+        let Some(run) = self.replacing.as_ref() else {
+            // 全部の置換が終わった後の、欄への次の意図。置換の知らせ（案内の行にも出す）はここまで。
+            self.end_replace_note();
+            return None;
+        };
+        let counted = run.counted().is_some();
+        // 表を眺める（スクロール・ドラッグ・離す）は、数えも確かめもやめない（印を見て確かめられる）。
+        if matches!(
+            intent,
+            Intent::Scroll(_) | Intent::Drag { .. } | Intent::Release
+        ) {
+            return Some((DocumentEffect::Stay, false));
+        }
+        let consumed = matches!(intent, Intent::Confirm | Intent::Cancel);
+        if !counted {
+            if intent == Intent::Confirm {
+                return Some((DocumentEffect::Stay, true));
+            }
+            // 数えをやめたら、すぐに手放す（やめる前に数え終えた結果が後から届いても、古い問いの件数を見せない）。
+            self.replacing = None;
+            self.notice = Some(Notice::Replace(ReplaceNotice::Stopped));
+            return Some((DocumentEffect::StopReplacing, consumed));
+        }
+        if intent == Intent::Confirm {
+            return Some((self.apply_replace(), true));
+        }
+        self.replacing = None;
+        self.notice = Some(Notice::Replace(ReplaceNotice::Stopped));
+        Some((DocumentEffect::Stay, consumed))
+    }
+
+    /// 全部の置換の結果の知らせ（状態の行と置換の欄の案内）を消す。欄に次の意図が来たときと、欄を開き直したとき
+    /// （古い結果で案内のキーを隠さない・GitHub Issue #189）。
+    pub fn end_replace_note(&mut self) {
+        if let Some(Notice::Replace(_)) = self.notice {
+            self.notice = None;
+        }
+    }
+
+    /// 置換の欄の案内に出す、全部の置換の短い 1 行（GitHub Issue #189）。数えている間は進み具合、件数を見せている間は
+    /// 件数と確かめのキー、置き換えた直後は置き換えた数。無ければ `None`（いつものキーの案内）。長い知らせは状態の行に出す。
+    #[must_use]
+    pub fn replace_guide(&self) -> Option<String> {
+        if let Some(run) = &self.replacing {
+            return Some(match (run.counted(), run.progress()) {
+                (Some((changes, _)), _) => format!(
+                    "{} セルを置き換えます · Enter 置き換える · Esc やめる",
+                    group_digits(u64::try_from(changes.len()).unwrap_or(u64::MAX))
+                ),
+                (None, Some((done, total))) if total > 0 && total < u64::MAX => {
+                    let percent = u128::from(done).saturating_mul(100) / u128::from(total);
+                    format!(
+                        "置き換えるセルを数えています… {}% · Esc やめる",
+                        percent.min(99)
+                    )
+                }
+                (None, Some(_) | None) => {
+                    String::from("置き換えるセルを数えています… · Esc やめる")
+                }
+            });
+        }
+        match self.notice {
+            Some(Notice::Replace(ReplaceNotice::Replaced { cells, .. })) => Some(format!(
+                "{} セルを置き換えました · 表で Ctrl+Z で戻す",
+                group_digits(u64::try_from(cells).unwrap_or(u64::MAX))
+            )),
+            Some(Notice::Replace(
+                ReplaceNotice::NothingToReplace { .. }
+                | ReplaceNotice::TooMany
+                | ReplaceNotice::Changed
+                | ReplaceNotice::Stopped
+                | ReplaceNotice::Failed,
+            )) => Some(String::from("置き換えませんでした（訳は下の状態の行）")),
+            Some(_) | None => None,
+        }
+    }
+
     /// 数え終えた書き換えを 1 手の束として書く（Ctrl+Z 1 回で戻る・ADR 0029 の決定 3 と同じ形）。
     fn apply_replace(&mut self) -> DocumentEffect {
         let Some(mut run) = self.replacing.take() else {
@@ -4096,10 +4178,23 @@ impl Document {
     /// 窓 `view` の画面。上にタイトルバー、その下に表、下の 1 行に索引の状態、最後に縁の線（ADR 0013）。
     #[must_use]
     pub fn frame(&self, view: WindowView, palette: Palette) -> Frame {
+        self.frame_found(view, palette, None)
+    }
+
+    /// [`Self::frame`] に、問い `found` に当たる見えているセルと字の印を付けた画面（検索と置換の欄が開いている間・
+    /// GitHub Issue #189）。全部の置換の件数を見せている間は、`found` が無くても数えた問いに印を付ける。
+    #[must_use]
+    pub fn frame_found(
+        &self,
+        view: WindowView,
+        palette: Palette,
+        found: Option<&FindQuery>,
+    ) -> Frame {
         let client = view.chrome().client();
         let (dx, dy) = (client.origin().x(), client.origin().y());
+        let found = found.or_else(|| self.replacing.as_ref().map(|run| run.scope().query()));
         let mut commands: Vec<DrawCommand> = self
-            .client_commands(client.size(), view, palette)
+            .client_commands(client.size(), view, (palette, found))
             .into_iter()
             .map(|command| command.offset(dx, dy))
             .collect();
@@ -4117,7 +4212,7 @@ impl Document {
         &self,
         size: PixelSize,
         view: WindowView,
-        palette: Palette,
+        (palette, found): (Palette, Option<&FindQuery>),
     ) -> Vec<DrawCommand> {
         let (metrics, content) = (view.metrics(), view.content_metrics());
         let bands = ClientBands::split(size.height(), view, self.detail);
@@ -4128,7 +4223,7 @@ impl Document {
             PixelSize::new(size.width(), table_height),
         );
         let bars = self.bars_in(area, content);
-        let mut commands = self.table_commands(bars.body().size(), content, palette);
+        let mut commands = self.table_commands(bars.body().size(), content, (palette, found));
         commands.extend(self.bar_commands(bars, view, palette));
         commands.extend(self.drop_line(bars, view, palette));
         if bands.detail() > 0 {
@@ -4349,7 +4444,7 @@ impl Document {
         &self,
         size: PixelSize,
         metrics: GlyphMetrics,
-        palette: Palette,
+        (palette, found): (Palette, Option<&FindQuery>),
     ) -> Vec<DrawCommand> {
         let layout = self.layout(self.first_column, metrics);
         let editing = self.editing_cell();
@@ -4365,6 +4460,7 @@ impl Document {
             .with_column_ids(&ids)
             .with_edits(&self.edits)
             .with_editing(editing.as_ref())
+            .with_found(found)
             .paint(self.header(), self.column_numbers().as_ref(), &self.view)
     }
 
@@ -4668,9 +4764,10 @@ mod tests {
                     clip,
                     ..
                 } if text == wanted => Some((*baseline, *clip)),
-                DrawCommand::Text { .. } | DrawCommand::Fill { .. } | DrawCommand::Line { .. } => {
-                    None
-                }
+                DrawCommand::Text { .. }
+                | DrawCommand::Fill { .. }
+                | DrawCommand::Line { .. }
+                | DrawCommand::TextSpan { .. } => None,
             })
             .unwrap_or_else(|| panic!("{wanted} を書く命令が無い"))
     }
@@ -4682,9 +4779,10 @@ mod tests {
             .iter()
             .filter_map(|command| match command {
                 DrawCommand::Fill { rect, color } if *color == wanted => Some(*rect),
-                DrawCommand::Fill { .. } | DrawCommand::Text { .. } | DrawCommand::Line { .. } => {
-                    None
-                }
+                DrawCommand::Fill { .. }
+                | DrawCommand::Text { .. }
+                | DrawCommand::Line { .. }
+                | DrawCommand::TextSpan { .. } => None,
             })
             .collect()
     }
@@ -4696,7 +4794,9 @@ mod tests {
             .iter()
             .filter_map(|command| match command {
                 DrawCommand::Line { color, .. } => Some(*color),
-                DrawCommand::Fill { .. } | DrawCommand::Text { .. } => None,
+                DrawCommand::Fill { .. }
+                | DrawCommand::Text { .. }
+                | DrawCommand::TextSpan { .. } => None,
             })
             .collect()
     }
@@ -4978,7 +5078,9 @@ mod tests {
             .iter()
             .filter_map(|command| match command {
                 DrawCommand::Text { text, .. } => Some(text.as_str()),
-                DrawCommand::Fill { .. } | DrawCommand::Line { .. } => None,
+                DrawCommand::Fill { .. }
+                | DrawCommand::Line { .. }
+                | DrawCommand::TextSpan { .. } => None,
             })
             .collect()
     }
@@ -5245,7 +5347,9 @@ mod tests {
             .iter()
             .filter_map(|command| match command {
                 DrawCommand::Text { text, .. } => Some(text.as_str()),
-                DrawCommand::Fill { .. } | DrawCommand::Line { .. } => None,
+                DrawCommand::Fill { .. }
+                | DrawCommand::Line { .. }
+                | DrawCommand::TextSpan { .. } => None,
             })
             .collect()
     }
@@ -5438,9 +5542,10 @@ mod tests {
             .rev()
             .find_map(|command| match command {
                 DrawCommand::Text { text, clip, .. } if text == "PRODUCTID" => Some(*clip),
-                DrawCommand::Text { .. } | DrawCommand::Fill { .. } | DrawCommand::Line { .. } => {
-                    None
-                }
+                DrawCommand::Text { .. }
+                | DrawCommand::Fill { .. }
+                | DrawCommand::Line { .. }
+                | DrawCommand::TextSpan { .. } => None,
             })
             .unwrap();
         assert_eq!(name.size().width(), 199);
@@ -5465,7 +5570,9 @@ mod tests {
                 DrawCommand::Text {
                     text, role, clip, ..
                 } => Some((text.clone(), *role, *clip)),
-                DrawCommand::Fill { .. } | DrawCommand::Line { .. } => None,
+                DrawCommand::Fill { .. }
+                | DrawCommand::Line { .. }
+                | DrawCommand::TextSpan { .. } => None,
             })
             .collect();
         let status = roles
@@ -6274,9 +6381,10 @@ mod tests {
             .iter()
             .filter_map(|command| match command {
                 DrawCommand::Text { text, clip, .. } if text == "名前" => Some(*clip),
-                DrawCommand::Text { .. } | DrawCommand::Fill { .. } | DrawCommand::Line { .. } => {
-                    None
-                }
+                DrawCommand::Text { .. }
+                | DrawCommand::Fill { .. }
+                | DrawCommand::Line { .. }
+                | DrawCommand::TextSpan { .. } => None,
             })
             .collect();
         // 同じ名前の見出しは 2 つとも、改名せずにそのまま描く。
@@ -6432,9 +6540,10 @@ mod tests {
                 DrawCommand::Text {
                     text: shown, clip, ..
                 } if shown == text => Some(clip.size().width()),
-                DrawCommand::Text { .. } | DrawCommand::Fill { .. } | DrawCommand::Line { .. } => {
-                    None
-                }
+                DrawCommand::Text { .. }
+                | DrawCommand::Fill { .. }
+                | DrawCommand::Line { .. }
+                | DrawCommand::TextSpan { .. } => None,
             })
             .unwrap()
     }
@@ -8300,6 +8409,120 @@ mod tests {
         }
         document.apply(Intent::Redo, normal());
         assert_eq!(cell_text(&document, 1, 0), Some("b#"));
+    }
+
+    /// 置換の欄が開いている間に数えている（GitHub Issue #189）：案内の 1 行に進み具合を出し、Enter は何もせず、Esc は
+    /// 数えをやめ、ほかの意図（欄に打つ）は数えをやめて欄が受け取る。全部の置換が無ければ確かめの意図は無い。
+    #[test]
+    fn counting_inside_the_open_field_waits_for_the_count() {
+        let mut document = indexed_editable();
+        let query = FindQuery::new("1", FindOptions::standard());
+        assert_eq!(
+            document.replace_prompt_intent(Intent::Confirm),
+            None,
+            "置換が無い"
+        );
+        assert_eq!(
+            document.replace_all(query.clone(), "#"),
+            DocumentEffect::Replace
+        );
+        assert_eq!(
+            document.replace_guide().as_deref(),
+            Some("置き換えるセルを数えています… · Esc やめる")
+        );
+        for (intent, answer) in [
+            (Intent::Confirm, (DocumentEffect::Stay, true)),
+            // 表を眺めても数えはやめない。
+            (
+                Intent::Scroll(Scroll::Down { rows: 1 }),
+                (DocumentEffect::Stay, false),
+            ),
+            (Intent::Cancel, (DocumentEffect::StopReplacing, true)),
+        ] {
+            assert_eq!(
+                document.replace_prompt_intent(intent),
+                Some(answer),
+                "{intent:?}"
+            );
+        }
+        let mut typed = indexed_editable();
+        assert_eq!(typed.replace_all(query, "#"), DocumentEffect::Replace);
+        assert_eq!(
+            typed.replace_prompt_intent(Intent::Type('x')),
+            Some((DocumentEffect::StopReplacing, false))
+        );
+    }
+
+    /// 欄で数えをやめたら、すぐに手放す。やめる前に数え終えた結果が後から届いても、古い問いの件数を見せず、置き換えない。
+    /// 結果の知らせは、欄への次の意図で消える（GitHub Issue #189）。
+    #[test]
+    fn a_count_stopped_from_the_field_ignores_a_late_result() {
+        let mut document = indexed_editable();
+        let query = FindQuery::new("1", FindOptions::standard());
+        assert_eq!(document.replace_all(query, "#"), DocumentEffect::Replace);
+        let late = counted_replacements(&mut document);
+        document.replace_prompt_intent(Intent::Type('2'));
+        document.replace_counted((late, 0), false);
+        assert_eq!(
+            document.replace_guide().as_deref(),
+            Some("置き換えませんでした（訳は下の状態の行）")
+        );
+        assert_eq!(document.replace_prompt_intent(Intent::Confirm), None);
+        assert_eq!(document.replace_guide(), None);
+        assert!(document.edits().is_empty());
+    }
+
+    /// 置換の欄が開いている間に件数を見せる（GitHub Issue #189）：件数と確かめを案内の 1 行に出し、数えた問いに印を付け、
+    /// Enter で置き換えて、置き換えた数を出す。
+    #[test]
+    fn replacing_all_is_confirmed_inside_the_open_field() {
+        let mut document = indexed_editable();
+        replacing_all(&mut document, "1", "#");
+        assert_eq!(
+            document.replace_guide().as_deref(),
+            Some("3 セルを置き換えます · Enter 置き換える · Esc やめる")
+        );
+        // 件数を見せている間は、欄が開いていなくても数えた問いに印を付ける。
+        let marked = document.frame_found(normal(), palette(), None);
+        assert!(
+            marked
+                .commands()
+                .iter()
+                .any(|command| matches!(command, DrawCommand::TextSpan { .. }))
+        );
+        assert_eq!(
+            document.replace_prompt_intent(Intent::Confirm),
+            Some((DocumentEffect::Stay, true))
+        );
+        assert_eq!(cell_text(&document, 1, 0), Some("b#"));
+        assert_eq!(
+            document.replace_guide().as_deref(),
+            Some("3 セルを置き換えました · 表で Ctrl+Z で戻す")
+        );
+        assert_eq!(document.replace_prompt_intent(Intent::Confirm), None);
+    }
+
+    /// 置換の欄が開いている間に件数を見せていて、Esc かほかの意図（欄に打つ）なら置き換えない。ほかの意図は欄が受け取る。
+    #[test]
+    fn replacing_all_inside_the_open_field_can_be_declined() {
+        let mut declined = indexed_editable();
+        replacing_all(&mut declined, "1", "#");
+        assert_eq!(
+            declined.replace_prompt_intent(Intent::Type('2')),
+            Some((DocumentEffect::Stay, false))
+        );
+        assert_eq!(cell_text(&declined, 1, 0), None);
+        assert_eq!(
+            declined.replace_guide().as_deref(),
+            Some("置き換えませんでした（訳は下の状態の行）")
+        );
+        let mut escaped = indexed_editable();
+        replacing_all(&mut escaped, "1", "#");
+        assert_eq!(
+            escaped.replace_prompt_intent(Intent::Cancel),
+            Some((DocumentEffect::Stay, true))
+        );
+        assert_eq!(cell_text(&escaped, 1, 0), None);
     }
 
     /// 件数を見せている間のほかの意図はやめ、数えている間の Esc は数えをやめる。数えている間に表が変われば書かない。

@@ -2,6 +2,7 @@
 
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
+use core::ops::Range;
 
 use nene_ledger_core::cell_edits::CellEdits;
 use nene_ledger_core::cell_value::CellValue;
@@ -9,6 +10,7 @@ use nene_ledger_core::color::Color;
 use nene_ledger_core::column_id::ColumnId;
 use nene_ledger_core::display_width::char_columns;
 use nene_ledger_core::draw_command::DrawCommand;
+use nene_ledger_core::find_query::FindQuery;
 use nene_ledger_core::glyph_metrics::GlyphMetrics;
 use nene_ledger_core::palette::Palette;
 use nene_ledger_core::pixel_point::PixelPoint;
@@ -18,7 +20,7 @@ use nene_ledger_core::row_id::RowId;
 use nene_ledger_core::table_layout::TableLayout;
 use nene_ledger_core::text_role::TextRole;
 
-use crate::cell_display::{fitted, single_line};
+use crate::cell_display::{fitted, fitted_spans, shown_spans, single_line};
 use crate::cell_mark::CellMark;
 use crate::editing_cell::EditingCell;
 use crate::ranges::Ranges;
@@ -40,6 +42,7 @@ pub(crate) struct FramePainter<'view> {
     column_ids: &'view [ColumnId],
     edits: Option<&'view CellEdits>,
     editing: Option<&'view EditingCell>,
+    found: Option<&'view FindQuery>,
     commands: Vec<DrawCommand>,
     overlays: Vec<DrawCommand>,
 }
@@ -56,6 +59,8 @@ const CUT_DASH: u32 = 4;
 const FROZEN_LINE: u32 = 2;
 /// 編集の欄のカーソルの棒の太さ（論理の画素）。
 const CARET_WIDTH: u32 = 2;
+/// 印を付けるセルの値の長さの上限（バイト）。これより長い値は描くたびに照らさない（GitHub Issue #189）。
+const FOUND_LIMIT: usize = 64 * 1024;
 /// 確定前の文字列の下線の太さ（論理の画素）。
 const UNDERLINE: u32 = 1;
 
@@ -78,6 +83,7 @@ impl<'view> FramePainter<'view> {
             column_ids: &[],
             edits: None,
             editing: None,
+            found: None,
             commands: Vec::new(),
             overlays: Vec::new(),
         }
@@ -116,6 +122,11 @@ impl<'view> FramePainter<'view> {
     /// カーソルのセルを、編集の欄として描く（ADR 0026）。
     pub(crate) fn with_editing(self, editing: Option<&'view EditingCell>) -> Self {
         Self { editing, ..self }
+    }
+
+    /// 問い `found` に当たる本体のセルと字に印を付ける（検索と置換の欄が開いている間・GitHub Issue #189）。
+    pub(crate) fn with_found(self, found: Option<&'view FindQuery>) -> Self {
+        Self { found, ..self }
     }
 
     pub(crate) fn with_ranges(self, ranges: Ranges<'view>) -> Self {
@@ -251,10 +262,30 @@ impl<'view> FramePainter<'view> {
         match self.edited(style, row.row(), source) {
             Some(CellValue::Text(value)) => {
                 let shown = single_line(value);
-                self.paint_cell(rect, Some(&shown), mark);
+                let found = self.found_in(style, value);
+                self.paint_cell(rect, Some(&shown), (mark, &found));
             }
-            Some(CellValue::Absent) => self.paint_cell(rect, None, mark),
-            None => self.paint_cell(rect, row.cells().get(source), mark),
+            Some(CellValue::Absent) => self.paint_cell(rect, None, (mark, &[])),
+            None => {
+                let found = row
+                    .values()
+                    .get(source)
+                    .map(|value| self.found_in(style, value))
+                    .unwrap_or_default();
+                self.paint_cell(rect, row.cells().get(source), (mark, &found));
+            }
+        }
+    }
+
+    /// 本体の行のセルの値 `value` の中で、問いに当たった字の範囲（表示の 1 行の中のバイト）。見出しの行は探さないので空。
+    fn found_in(&self, style: RowStyle, value: &str) -> Vec<Range<usize>> {
+        // 長い値は描くたびに全体を照らさない（描く手間を画面の大きさに比例させる・cell_display の約束）。印は付けない。
+        if value.len() > FOUND_LIMIT {
+            return Vec::new();
+        }
+        match (style, self.found) {
+            (RowStyle::Body(_), Some(query)) => shown_spans(value, &query.spans(value)),
+            (RowStyle::Header | RowStyle::Numbers | RowStyle::Body(_), _) => Vec::new(),
         }
     }
 
@@ -480,7 +511,13 @@ impl<'view> FramePainter<'view> {
 
     /// 1 つのセル。列の足りない行（セルが無い）は、空のセルと区別できるよう行番号の列の色で塗る（KEEP-05）。
     /// 見出しの行のセルは行番号の列の色、選んだセルは選択の色を背景にする。
-    fn paint_cell(&mut self, rect: PixelRect, cell: Option<&String>, mark: CellMark) {
+    /// 問いに当たったセル（`found` は当たった字の範囲）は、選んでいなければ当たったセルの色を背景にし、字に印を付ける。
+    fn paint_cell(
+        &mut self,
+        rect: PixelRect,
+        cell: Option<&String>,
+        (mark, found): (CellMark, &[Range<usize>]),
+    ) {
         let (background, missing) = match mark {
             CellMark::Header => (self.palette.gutter(), self.palette.gutter()),
             CellMark::SelectedHeader => (self.palette.selection(), self.palette.selection()),
@@ -495,10 +532,69 @@ impl<'view> FramePainter<'view> {
             self.fill(rect, missing);
             return;
         };
+        let background = match mark {
+            CellMark::Unselected | CellMark::Band if !found.is_empty() => self.palette.found(),
+            CellMark::Header
+            | CellMark::SelectedHeader
+            | CellMark::Unselected
+            | CellMark::Band
+            | CellMark::Selected
+            | CellMark::Cursor => background,
+        };
         self.fill(rect, background);
         if !text.is_empty() {
-            self.text(rect, text, self.palette.text());
+            // 収めた文字列と基準線は 1 度だけ決め、字と印の両方に使う。
+            let (shown, baseline) = self.placed(rect, text);
+            let marks = self.found_marks(rect, (text, &shown, baseline), found);
+            self.commands.push(DrawCommand::Text {
+                baseline,
+                text: shown,
+                color: self.palette.text(),
+                clip: rect,
+                role: TextRole::Content,
+            });
+            self.commands.extend(marks);
         }
+    }
+
+    /// `rect` に、基準線 `baseline` から収めた文字列 `shown` として書く値 `text` の、当たった字の範囲 `found` の印（明るい
+    /// 背景と濃い字）の命令。字の命令の後に置く。`…` で切った後ろの当たりは `…` に付ける。
+    fn found_marks(
+        &self,
+        rect: PixelRect,
+        (text, shown, baseline): (&str, &str, PixelPoint),
+        found: &[Range<usize>],
+    ) -> Vec<DrawCommand> {
+        if found.is_empty() {
+            return Vec::new();
+        }
+        let spare = rect
+            .size()
+            .height()
+            .saturating_sub(self.metrics.line_height());
+        let band = PixelRect::new(
+            PixelPoint::new(
+                rect.origin().x(),
+                rect.origin().y().saturating_add(spare / 2),
+            ),
+            PixelSize::new(
+                rect.size().width(),
+                self.metrics.line_height().min(rect.size().height()),
+            ),
+        );
+        fitted_spans(text, shown, found)
+            .into_iter()
+            .map(|span| DrawCommand::TextSpan {
+                baseline,
+                text: String::from(shown),
+                start: span.start,
+                end: span.end,
+                band,
+                color: self.palette.found_text(),
+                ink: self.palette.found_ink(),
+                role: TextRole::Content,
+            })
+            .collect()
     }
 
     /// 矩形を塗る。
@@ -509,12 +605,23 @@ impl<'view> FramePainter<'view> {
     /// `rect` の中に、左の余白を空けて縦の真ん中に文字を書く。左右の余白の内に収まらなければ `…` で省略し
     /// （GitHub Issue #7）、`rect` の外は切り取る（幅は近似なので）。
     fn text(&mut self, rect: PixelRect, text: &str, color: Color) {
+        let (text, baseline) = self.placed(rect, text);
+        self.commands.push(DrawCommand::Text {
+            baseline,
+            text,
+            color,
+            clip: rect,
+            role: TextRole::Content,
+        });
+    }
+
+    /// `rect` の中に書く文字列（左右の余白の内に収めて `…` で省略したもの）と、その基準線の左端（左の余白・縦の真ん中）。
+    fn placed(&self, rect: PixelRect, text: &str) -> (String, PixelPoint) {
         let room = rect
             .size()
             .width()
             .saturating_sub(self.layout.padding().saturating_mul(2));
         let columns = room / self.metrics.half_width().max(1);
-        let text = fitted(text, columns);
         let spare = rect
             .size()
             .height()
@@ -526,13 +633,7 @@ impl<'view> FramePainter<'view> {
                 .saturating_add(spare / 2)
                 .saturating_add(self.metrics.ascent()),
         );
-        self.commands.push(DrawCommand::Text {
-            baseline,
-            text,
-            color,
-            clip: rect,
-            role: TextRole::Content,
-        });
+        (fitted(text, columns), baseline)
     }
 }
 
@@ -556,6 +657,7 @@ mod tests {
     use super::*;
     use alloc::vec;
     use nene_ledger_core::column_widths::ColumnWidths;
+    use nene_ledger_core::find_options::FindOptions;
     use nene_ledger_core::table_layout::GRID_LINE;
 
     #[test]
@@ -675,7 +777,9 @@ mod tests {
             .iter()
             .filter_map(|command| match command {
                 DrawCommand::Text { text, .. } => Some(text.as_str()),
-                DrawCommand::Fill { .. } | DrawCommand::Line { .. } => None,
+                DrawCommand::Fill { .. }
+                | DrawCommand::Line { .. }
+                | DrawCommand::TextSpan { .. } => None,
             })
             .collect()
     }
@@ -685,9 +789,10 @@ mod tests {
             .iter()
             .filter_map(|command| match command {
                 DrawCommand::Fill { rect, color } if *color == wanted => Some(*rect),
-                DrawCommand::Fill { .. } | DrawCommand::Text { .. } | DrawCommand::Line { .. } => {
-                    None
-                }
+                DrawCommand::Fill { .. }
+                | DrawCommand::Text { .. }
+                | DrawCommand::Line { .. }
+                | DrawCommand::TextSpan { .. } => None,
             })
             .collect()
     }
@@ -732,9 +837,10 @@ mod tests {
                     clip,
                     ..
                 } if text == "abc" => Some((*baseline, *clip)),
-                DrawCommand::Text { .. } | DrawCommand::Fill { .. } | DrawCommand::Line { .. } => {
-                    None
-                }
+                DrawCommand::Text { .. }
+                | DrawCommand::Fill { .. }
+                | DrawCommand::Line { .. }
+                | DrawCommand::TextSpan { .. } => None,
             })
             .unwrap();
         assert_eq!(baseline.x(), clip.origin().x() + 8);
@@ -876,5 +982,103 @@ mod tests {
             )
             .is_empty()
         );
+    }
+
+    /// 問い `found` の印を付けて、本体の `rows`（カーソルは本体の 1 行目の 0 列目）を描く。
+    fn paint_found(rows: &[ViewRow], found: &FindQuery, widths: &ColumnWidths) -> Vec<DrawCommand> {
+        let header = row(0, &["a", "b"]);
+        let layout = TableLayout::new(widths, 0, 10, metrics());
+        FramePainter::new(&layout, metrics(), palette(), PixelSize::new(800, 600))
+            .with_selection(Selection::at(crate::cell_position::CellPosition::new(1, 0)))
+            .with_found(Some(found))
+            .paint(Some(&header), None, &view(rows))
+    }
+
+    /// 字の印の命令（書き直す文字列と範囲）。
+    fn spans(commands: &[DrawCommand]) -> Vec<(&str, usize, usize)> {
+        commands
+            .iter()
+            .filter_map(|command| match command {
+                DrawCommand::TextSpan {
+                    text,
+                    start,
+                    end,
+                    color,
+                    ink,
+                    ..
+                } => {
+                    assert_eq!(
+                        (*color, *ink),
+                        (palette().found_text(), palette().found_ink())
+                    );
+                    Some((text.as_str(), *start, *end))
+                }
+                DrawCommand::Fill { .. } | DrawCommand::Text { .. } | DrawCommand::Line { .. } => {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    /// 当たった字に印を付け、当たったセルは（選んでいなければ）当たったセルの色を背景にする。見出しの行は探さないので
+    /// 印を付けない。カーソルのセルは選択の色のまま、字に印を付ける。印は同じ字を書いた後に置く（GitHub Issue #189）。
+    #[test]
+    fn found_cells_and_characters_are_marked_after_their_text() {
+        let rows = [
+            row(1, &["Tokyo", "kyoto"]),
+            row(2, &["osaka", "TOKYO 東京¶"]),
+        ];
+        let found = FindQuery::new("tok", FindOptions::standard());
+        let header_cells = [String::from("tok"), String::from("tok")];
+        let mut cells: Vec<&[String]> = rows.iter().map(ViewRow::cells).collect();
+        cells.push(&header_cells);
+        let commands = paint_found(&rows, &found, &ColumnWidths::fit(&cells));
+        assert_eq!(
+            spans(&commands),
+            vec![("Tokyo", 0, 3), ("TOKYO 東京¶", 0, 3)]
+        );
+        // 当たったセルの背景は、選んでいない「TOKYO 東京¶」だけ（「Tokyo」はカーソルのセルで選択の色）。
+        assert_eq!(fills_of(&commands, palette().found()).len(), 1);
+        let text_at = |wanted: &str| {
+            commands.iter().position(
+                |command| matches!(command, DrawCommand::Text { text, .. } if text == wanted),
+            )
+        };
+        let span_at = commands.iter().position(
+            |command| matches!(command, DrawCommand::TextSpan { text, .. } if text == "Tokyo"),
+        );
+        assert!(text_at("Tokyo") < span_at);
+        // 改行の後ろの当たりは表示の 1 行の `¶` の後ろの位置。
+        let line = FindQuery::new("b", FindOptions::standard());
+        let breaks = [row(1, &["a\r\nb", "x"])];
+        let broken = paint_found(&breaks, &line, &ColumnWidths::fit(&[breaks[0].cells()]));
+        assert_eq!(spans(&broken), vec![("a¶b", 3, 4)]);
+    }
+
+    /// 64 KiB を超える値は、描くたびに照らさない（印を付けない）。
+    #[test]
+    fn values_longer_than_the_limit_are_not_marked() {
+        let long = alloc::format!("tok{}", "x".repeat(FOUND_LIMIT));
+        let rows = [row(1, &["a", long.as_str()])];
+        let found = FindQuery::new("tok", FindOptions::standard());
+        let narrow = ColumnWidths::fit(&[&[String::from("a"), String::from("abcdef")][..]]);
+        let commands = paint_found(&rows, &found, &narrow);
+        assert!(spans(&commands).is_empty());
+        assert!(fills_of(&commands, palette().found()).is_empty());
+    }
+
+    /// セルに収まらず `…` で切った値は、切った後ろの当たりを `…` の印で知らせる。
+    #[test]
+    fn a_match_past_the_cut_marks_the_ellipsis() {
+        let rows = [row(1, &["x", "abcdefghij-tok"])];
+        let found = FindQuery::new("tok", FindOptions::standard());
+        let narrow = ColumnWidths::fit(&[&[String::from("x"), String::from("abcdef")][..]]);
+        let commands = paint_found(&rows, &found, &narrow);
+        let marks = spans(&commands);
+        let [(text, start, end)] = marks.as_slice() else {
+            panic!("印は 1 つ: {marks:?}");
+        };
+        assert!(text.ends_with('…'), "{text}");
+        assert_eq!((*start, *end), (text.len() - '…'.len_utf8(), text.len()));
     }
 }

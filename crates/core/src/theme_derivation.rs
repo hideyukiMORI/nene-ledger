@@ -40,6 +40,10 @@ struct Weights {
     band: u8,
     /// スクロールバーのつまみ: 面 → 前景。
     thumb: u8,
+    /// 当たったセル: 背景 → 印の色。
+    found: u8,
+    /// 当たった字: 背景 → 印の色。
+    found_text: u8,
 }
 
 const LIGHT: Weights = Weights {
@@ -53,6 +57,8 @@ const LIGHT: Weights = Weights {
     chrome_rule: 22,
     band: 6,
     thumb: 45,
+    found: 18,
+    found_text: 70,
 };
 
 const DARK: Weights = Weights {
@@ -66,17 +72,21 @@ const DARK: Weights = Weights {
     chrome_rule: 24,
     band: 10,
     thumb: 45,
+    found: 18,
+    found_text: 85,
 };
 
 /// 閉じるボタンに指を乗せた背景（Windows の閉じるの赤。配色に依らない）と、その上の印。
 const CLOSE_RED: Color = Color::new(0xC4, 0x2B, 0x1C);
 const WHITE: Color = Color::new(0xFF, 0xFF, 0xFF);
 const BLACK: Color = Color::new(0x00, 0x00, 0x00);
+/// 検索で当たった所の印の色（蛍光ペンの黄。配色の強調の色に依らず、選択の色と分ける・GitHub Issue #189）。
+const MARKER: Color = Color::new(0xFF, 0xC4, 0x00);
 
 /// 配色の元 `seed` の画面の色。
 #[must_use]
 pub fn derive(seed: &ThemeSeed) -> Palette {
-    let (background, foreground, accent) = (seed.background(), seed.foreground(), seed.accent());
+    let (background, foreground) = (seed.background(), seed.foreground());
     let weights = match seed.appearance() {
         Appearance::Light => LIGHT,
         Appearance::Dark => DARK,
@@ -108,20 +118,9 @@ pub fn derive(seed: &ThemeSeed) -> Palette {
         extreme,
         LINE_RATIO,
     );
-    // カーソルの色は、スクロールバーの溝（面）の上で選んだ範囲の印にも使う。
-    let cursor = ensure(
-        accent,
-        &[background, selection, gutter],
-        extreme,
-        LINE_RATIO,
-    );
-    // つまみは溝（面）と、溝の外の背景の両方から見分けられるまで明暗の端へ寄せる。
-    let thumb = ensure(
-        mix(gutter, foreground, weights.thumb),
-        &[gutter, background],
-        extreme,
-        LINE_RATIO,
-    );
+    let (cursor, thumb) = marks_on_lines(seed, weights, (gutter, selection), extreme);
+    let (found, found_text, found_ink) =
+        marks(seed, weights, text, &[background, gutter, selection, band]);
     Palette::from_roles(|role| match role {
         PaletteRole::Background => background,
         PaletteRole::Text | PaletteRole::TitleText => text,
@@ -138,7 +137,66 @@ pub fn derive(seed: &ThemeSeed) -> Palette {
         PaletteRole::ChromeRule => toward_fg(weights.chrome_rule),
         PaletteRole::Band => band,
         PaletteRole::ScrollThumb => thumb,
+        PaletteRole::Found => found,
+        PaletteRole::FoundText => found_text,
+        PaletteRole::FoundInk => found_ink,
     })
+}
+
+/// カーソルの色とスクロールバーのつまみの色。どちらも線の基準に届くまで明暗の端 `extreme` へ寄せる。
+fn marks_on_lines(
+    seed: &ThemeSeed,
+    weights: Weights,
+    (gutter, selection): (Color, Color),
+    extreme: Color,
+) -> (Color, Color) {
+    let (background, foreground) = (seed.background(), seed.foreground());
+    // カーソルの色は、スクロールバーの溝（面）の上で選んだ範囲の印にも使う。
+    let cursor = ensure(
+        seed.accent(),
+        &[background, selection, gutter],
+        extreme,
+        LINE_RATIO,
+    );
+    // つまみは溝（面）と、溝の外の背景の両方から見分けられるまで明暗の端へ寄せる。
+    let thumb = ensure(
+        mix(gutter, foreground, weights.thumb),
+        &[gutter, background],
+        extreme,
+        LINE_RATIO,
+    );
+    (cursor, thumb)
+}
+
+/// 検索で当たったセルの背景・当たった字の背景・その上の字（GitHub Issue #189）。セルは背景から印の色へ少し寄せ、字 `text`
+/// が読めるまで背景へ戻す。当たった字は印の色へ強く寄せ（蛍光ペン）、その上の字は読めるまで黒へ寄せる（暗い配色でも
+/// 明るい黄の上に濃い字・Vim の検索の強調と同じ）。どちらの背景も、ほかの面 `surfaces`（背景・面・選択・帯）と互いに違う色。
+fn marks(
+    seed: &ThemeSeed,
+    weights: Weights,
+    text: Color,
+    surfaces: &[Color],
+) -> (Color, Color, Color) {
+    let background = seed.background();
+    let found = distinct(
+        ensure(
+            mix(background, MARKER, weights.found),
+            &[text],
+            background,
+            TEXT_RATIO,
+        ),
+        surfaces,
+        MARKER,
+    );
+    let mut others = surfaces.to_vec();
+    others.push(found);
+    let found_text = distinct(mix(background, MARKER, weights.found_text), &others, MARKER);
+    let ink = match seed.appearance() {
+        Appearance::Light => text,
+        Appearance::Dark => background,
+    };
+    let found_ink = ensure(ink, &[found_text], BLACK, TEXT_RATIO);
+    (found, found_text, found_ink)
 }
 
 /// 強調の色を混ぜた面の色（選択と帯）。選択は字が読めるまで背景へ戻す。帯は選択より薄く、背景と面 `gutter` のどちらとも
@@ -336,6 +394,53 @@ mod tests {
                     !surfaces[index + 1..].contains(surface),
                     "{}: 面の色が重なる",
                     seed.name()
+                );
+            }
+        }
+    }
+
+    /// 色の離れ（チャンネルごとの差の和）。
+    fn distance(left: Color, right: Color) -> u32 {
+        [
+            (left.red(), right.red()),
+            (left.green(), right.green()),
+            (left.blue(), right.blue()),
+        ]
+        .into_iter()
+        .map(|(a, b)| u32::from(a.abs_diff(b)))
+        .sum()
+    }
+
+    /// 検索の印（GitHub Issue #189）：当たったセルの上の字が読め、当たった字は明るい印の上の濃い字で読め、当たった字の背景は
+    /// ほかの面（背景・面・選択・帯・当たったセル）からはっきり離れている。
+    #[test]
+    fn every_builtin_theme_marks_found_cells_and_characters_readably() {
+        for seed in &SEEDS {
+            let palette = derive(seed);
+            let name = seed.name();
+            assert!(
+                meets(palette.text(), palette.found(), TEXT_RATIO),
+                "{name}: 当たったセルの字"
+            );
+            assert!(
+                meets(palette.found_ink(), palette.found_text(), TEXT_RATIO),
+                "{name}: 当たった字"
+            );
+            let surfaces = [
+                palette.background(),
+                palette.gutter(),
+                palette.selection(),
+                palette.band(),
+            ];
+            assert!(
+                !surfaces.contains(&palette.found()),
+                "{name}: 当たったセルが面と重なる"
+            );
+            for surface in surfaces.into_iter().chain([palette.found()]) {
+                assert!(
+                    distance(palette.found_text(), surface) >= 100,
+                    "{name}: 当たった字の背景 {:?} が {surface:?} に近い",
+                    palette.found_text()
                 );
             }
         }
