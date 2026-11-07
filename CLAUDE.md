@@ -95,6 +95,7 @@ UI に業務の判断（並び・選択肢・状態遷移・並べ替え・集�
 make lint          # clippy（全 target・--locked）
 make lint-windows  # Windows のクレート
 make test          # cargo test（xtask の正例・反例を含む）
+make test-windows  # Windows のターゲットの単体テストを WSL から Windows で走らせる（Windows のクレートを触ったら・Issue #211）
 make conformance   # CNF-0xx
 make deny          # 依存の許可制
 make doc-check     # rustdoc
