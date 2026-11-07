@@ -41,6 +41,25 @@ pub enum DrawCommand {
         /// 色。
         color: Color,
     },
+    /// 字の一部の背景を塗る（検索で当たった字・GitHub Issue #189）。基準線の左端 `baseline` から `text` を `role` の字で
+    /// 書いたときの、`text` の `start..end` バイトの字が占める横の範囲を、`band` の縦の範囲で塗る。`band` の外は塗らない。
+    /// 字の幅は UI が字体で測る（比例の字体では半角 1・全角 2 の近似と合わないので）。範囲が字の境目に無ければ塗らない。
+    TextSpan {
+        /// 字を書く基準線の左端（同じ字を書く `Text` と同じ）。
+        baseline: PixelPoint,
+        /// 書く文字列（1 行）。
+        text: String,
+        /// 塗る字の始まり（`text` のバイト）。
+        start: usize,
+        /// 塗る字の終わり（`text` のバイト・含まない）。
+        end: usize,
+        /// 塗る縦の範囲と、切り取りの矩形。
+        band: PixelRect,
+        /// 色。
+        color: Color,
+        /// どちらの字の大きさで測るか。
+        role: TextRole,
+    },
 }
 
 impl DrawCommand {
@@ -79,6 +98,23 @@ impl DrawCommand {
                 to: shift(to),
                 width,
                 color,
+            },
+            Self::TextSpan {
+                baseline,
+                text,
+                start,
+                end,
+                band,
+                color,
+                role,
+            } => Self::TextSpan {
+                baseline: shift(baseline),
+                text,
+                start,
+                end,
+                band: shift_rect(band),
+                color,
+                role,
             },
         }
     }
@@ -129,6 +165,19 @@ mod tests {
                 width: 2,
                 color,
             }
+        );
+        let span = |baseline, band| DrawCommand::TextSpan {
+            baseline,
+            text: String::from("abc"),
+            start: 1,
+            end: 2,
+            band,
+            color,
+            role: TextRole::Content,
+        };
+        assert_eq!(
+            span(PixelPoint::new(5, 6), rect).offset(10, 20),
+            span(PixelPoint::new(15, 26), moved)
         );
     }
 }

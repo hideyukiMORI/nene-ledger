@@ -675,7 +675,9 @@ mod tests {
             .iter()
             .filter_map(|command| match command {
                 DrawCommand::Text { text, .. } => Some(text.as_str()),
-                DrawCommand::Fill { .. } | DrawCommand::Line { .. } => None,
+                DrawCommand::Fill { .. }
+                | DrawCommand::Line { .. }
+                | DrawCommand::TextSpan { .. } => None,
             })
             .collect()
     }
@@ -685,9 +687,10 @@ mod tests {
             .iter()
             .filter_map(|command| match command {
                 DrawCommand::Fill { rect, color } if *color == wanted => Some(*rect),
-                DrawCommand::Fill { .. } | DrawCommand::Text { .. } | DrawCommand::Line { .. } => {
-                    None
-                }
+                DrawCommand::Fill { .. }
+                | DrawCommand::Text { .. }
+                | DrawCommand::Line { .. }
+                | DrawCommand::TextSpan { .. } => None,
             })
             .collect()
     }
@@ -732,9 +735,10 @@ mod tests {
                     clip,
                     ..
                 } if text == "abc" => Some((*baseline, *clip)),
-                DrawCommand::Text { .. } | DrawCommand::Fill { .. } | DrawCommand::Line { .. } => {
-                    None
-                }
+                DrawCommand::Text { .. }
+                | DrawCommand::Fill { .. }
+                | DrawCommand::Line { .. }
+                | DrawCommand::TextSpan { .. } => None,
             })
             .unwrap();
         assert_eq!(baseline.x(), clip.origin().x() + 8);

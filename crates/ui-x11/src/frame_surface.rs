@@ -6,6 +6,7 @@ use nene_ledger_core::color::Color;
 use nene_ledger_core::draw_command::DrawCommand;
 use nene_ledger_core::frame::Frame;
 use nene_ledger_core::glyph_metrics::GlyphMetrics;
+use nene_ledger_core::pixel_point::PixelPoint;
 use nene_ledger_core::pixel_rect::PixelRect;
 use nene_ledger_core::text_role::TextRole;
 
@@ -75,16 +76,33 @@ fn draw(context: &Context, command: &DrawCommand, zoom: ZoomLevel) -> Result<(),
             role,
         } => {
             context.save()?;
-            context.set_font_size(match role {
-                TextRole::Chrome => FONT_SIZE,
-                TextRole::Content => content_size(zoom),
-            });
+            context.set_font_size(font_size(*role, zoom));
             add_rect(context, *clip);
             context.clip();
             set_color(context, *color);
             context.move_to(f64::from(baseline.x()), f64::from(baseline.y()));
             context.show_text(text)?;
             context.restore()?;
+        }
+        DrawCommand::TextSpan {
+            baseline,
+            text,
+            start,
+            end,
+            band,
+            color,
+            role,
+        } => {
+            let size = match role {
+                TextRole::Chrome => FONT_SIZE,
+                TextRole::Content => content_size(zoom),
+            };
+            span(
+                context,
+                (*baseline, text, *start..*end),
+                (*band, *color),
+                size,
+            )?;
         }
         DrawCommand::Line {
             from,
@@ -102,6 +120,45 @@ fn draw(context: &Context, command: &DrawCommand, zoom: ZoomLevel) -> Result<(),
             context.stroke()?;
         }
     }
+    Ok(())
+}
+
+/// 字の種類 `role` の大きさ（窓の部品は `FONT_SIZE`、中身は拡大 `zoom` に従う・ADR 0020）。
+fn font_size(role: TextRole, zoom: ZoomLevel) -> f64 {
+    match role {
+        TextRole::Chrome => FONT_SIZE,
+        TextRole::Content => content_size(zoom),
+    }
+}
+
+/// 基準線の左端 `baseline` から大きさ `size` で書く `text` の、`range` のバイトの字の背景を、`band` の縦の範囲で塗る
+/// （`band` の外は塗らない・GitHub Issue #189）。範囲が字の境目に無ければ塗らない。
+fn span(
+    context: &Context,
+    (baseline, text, range): (PixelPoint, &str, core::ops::Range<usize>),
+    (band, color): (PixelRect, Color),
+    size: f64,
+) -> Result<(), UiFailure> {
+    let (Some(head), Some(through)) = (text.get(..range.start), text.get(..range.end)) else {
+        return Ok(());
+    };
+    context.save()?;
+    context.set_font_size(size);
+    // 端は画素に丸める（にじまない）。
+    let origin = f64::from(baseline.x());
+    let left = (origin + context.text_extents(head)?.x_advance()).round();
+    let right = (origin + context.text_extents(through)?.x_advance()).round();
+    add_rect(context, band);
+    context.clip();
+    set_color(context, color);
+    context.rectangle(
+        left,
+        f64::from(band.origin().y()),
+        (right - left).max(0.0_f64),
+        f64::from(band.size().height()),
+    );
+    context.fill()?;
+    context.restore()?;
     Ok(())
 }
 
@@ -126,7 +183,6 @@ fn add_rect(context: &Context, rect: PixelRect) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nene_ledger_core::pixel_point::PixelPoint;
     use nene_ledger_core::pixel_size::PixelSize;
 
     #[test]
@@ -174,6 +230,41 @@ mod tests {
                 assert_eq!((pixel(1, 0), pixel(1, 2)), (0, 0));
             })
             .unwrap();
+    }
+
+    /// 字の一部の背景は、字体で測った頭の字の幅から塗り、帯の縦の範囲の外と、字の境目に無い範囲は塗らない（GitHub Issue #189）。
+    #[test]
+    fn a_text_span_fills_behind_the_measured_characters_inside_its_band() {
+        let half = measure(ZoomLevel::hundred()).unwrap().half_width();
+        let width = half * 4;
+        let span = |text: &str, start: usize, end: usize| DrawCommand::TextSpan {
+            baseline: PixelPoint::new(0, 3),
+            text: String::from(text),
+            start,
+            end,
+            band: PixelRect::new(PixelPoint::new(0, 1), PixelSize::new(width, 2)),
+            color: Color::new(0xFF, 0xFF, 0xFF),
+            role: TextRole::Content,
+        };
+        let stride = usize::try_from(width).unwrap() * 4;
+        let pixel = |frame: &Frame, x: u32, y: usize| {
+            let surface = paint(frame, ZoomLevel::hundred()).unwrap();
+            let x = usize::try_from(x).unwrap();
+            let mut value = 0_u8;
+            surface
+                .with_data(|bytes| value = bytes[y * stride + x * 4])
+                .unwrap();
+            value
+        };
+        let frame = Frame::new(PixelSize::new(width, 4), vec![span("0000", 1, 2)]);
+        assert_eq!(pixel(&frame, half - 1, 1), 0);
+        assert_eq!(pixel(&frame, half, 1), 0xFF);
+        assert_eq!(pixel(&frame, half * 2 - 1, 2), 0xFF);
+        assert_eq!(pixel(&frame, half * 2, 1), 0);
+        assert_eq!((pixel(&frame, half, 0), pixel(&frame, half, 3)), (0, 0));
+        // 「日」の途中のバイトは字の境目に無い。
+        let broken = Frame::new(PixelSize::new(width, 4), vec![span("日本", 1, 3)]);
+        assert_eq!(pixel(&broken, 0, 1), 0);
     }
 
     #[test]

@@ -583,7 +583,9 @@ mod tests {
             .iter()
             .filter_map(|command| match command {
                 DrawCommand::Text { text, .. } => Some(text.as_str()),
-                DrawCommand::Fill { .. } | DrawCommand::Line { .. } => None,
+                DrawCommand::Fill { .. }
+                | DrawCommand::Line { .. }
+                | DrawCommand::TextSpan { .. } => None,
             })
             .collect()
     }
@@ -593,9 +595,10 @@ mod tests {
             .iter()
             .filter_map(|command| match command {
                 DrawCommand::Fill { rect, color } if *color == wanted => Some(*rect),
-                DrawCommand::Fill { .. } | DrawCommand::Text { .. } | DrawCommand::Line { .. } => {
-                    None
-                }
+                DrawCommand::Fill { .. }
+                | DrawCommand::Text { .. }
+                | DrawCommand::Line { .. }
+                | DrawCommand::TextSpan { .. } => None,
             })
             .collect()
     }
@@ -619,7 +622,8 @@ mod tests {
         // 文字はどれも窓の部品の大きさ。
         assert!(commands.iter().all(|command| match command {
             DrawCommand::Text { role, .. } => *role == TextRole::Chrome,
-            DrawCommand::Fill { .. } | DrawCommand::Line { .. } => true,
+            DrawCommand::Fill { .. } | DrawCommand::Line { .. } | DrawCommand::TextSpan { .. } =>
+                true,
         }));
     }
 
@@ -822,9 +826,10 @@ mod tests {
                 DrawCommand::Text { text, clip, .. } if text.starts_with("カンマ区切り") => {
                     Some(*clip)
                 }
-                DrawCommand::Text { .. } | DrawCommand::Fill { .. } | DrawCommand::Line { .. } => {
-                    None
-                }
+                DrawCommand::Text { .. }
+                | DrawCommand::Fill { .. }
+                | DrawCommand::Line { .. }
+                | DrawCommand::TextSpan { .. } => None,
             })
             .unwrap();
         let aside_width = display_columns("今の読み方 · 87% · 6 列") * 8;

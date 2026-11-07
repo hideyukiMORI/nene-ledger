@@ -107,23 +107,47 @@ impl FindQuery {
         if self.options.whole_cell() {
             return Some(String::from(replacement));
         }
-        let (folded, origins) = fold_with_origins(cell, self.options);
         let mut result = String::with_capacity(cell.len());
         let mut kept = 0_usize;
-        for (at, part) in folded.match_indices(self.folded.as_str()) {
-            let Some(original) = original_range(&origins, at..at.saturating_add(part.len())) else {
-                continue;
-            };
-            // 小文字にして 1 字が数字に増えた字の途中で切れても、元の字を丸ごと置き換える。前と重なれば飛ばす。
-            if original.start < kept {
-                continue;
-            }
+        for original in self.plain_spans(cell) {
             result.push_str(cell.get(kept..original.start)?);
             result.push_str(replacement);
             kept = original.end;
         }
         result.push_str(cell.get(kept..)?);
         Some(result)
+    }
+
+    /// セルの値 `cell` の中で当たった所の、元の文字列のバイトの範囲（左から順・重ならない・長さ 0 は無い）。画面が当たった
+    /// 字に色を付けるのに使う（GitHub Issue #189）。置き換える所と同じ範囲で、当たらなければ空（`matches` と同じ答え）。
+    /// セル全体の一致ならセルの全体。
+    #[must_use]
+    pub fn spans(&self, cell: &str) -> Vec<Range<usize>> {
+        if !self.matches(cell) {
+            return Vec::new();
+        }
+        if let Some(regex) = &self.regex {
+            let (folded, origins) = fold_with_origins(cell, self.options);
+            let found = regex
+                .find_iter(folded.as_str())
+                .filter(|found| !found.is_empty())
+                .filter_map(|found| original_range(&origins, found.range()));
+            return without_overlaps(found);
+        }
+        if self.options.whole_cell() {
+            return alloc::vec![0..cell.len()];
+        }
+        self.plain_spans(cell)
+    }
+
+    /// 正規表現でない部分一致の、当たった所の元の範囲。畳んだ写しで左から重ならずに当たった所を元の文字列の範囲に戻す。
+    /// 小文字にして 1 字が数字に増えた字の途中で切れても元の字を丸ごと含め、前と重なれば飛ばす。
+    fn plain_spans(&self, cell: &str) -> Vec<Range<usize>> {
+        let (folded, origins) = fold_with_origins(cell, self.options);
+        let found = folded
+            .match_indices(self.folded.as_str())
+            .filter_map(|(at, part)| original_range(&origins, at..at.saturating_add(part.len())));
+        without_overlaps(found)
     }
 
     /// 正規表現の条件で、セルの値 `cell` に長さのある当たりがあるか。ASCII だけのセルは写しを作らずに照らす（畳んでも
@@ -215,6 +239,17 @@ fn compiled(text: &str, options: FindOptions) -> Option<Regex> {
 /// `haystack` に長さのある当たりがあるか（長さ 0 の当たりは当たりにしない・空の式がどのセルにも当たらないように）。
 fn has_long_match(regex: &Regex, haystack: &str) -> bool {
     regex.find_iter(haystack).any(|found| !found.is_empty())
+}
+
+/// 左から並んだ元の範囲 `ranges` のうち、前に残した範囲と重なるものを飛ばした並び。
+fn without_overlaps(ranges: impl Iterator<Item = Range<usize>>) -> Vec<Range<usize>> {
+    let mut kept: Vec<Range<usize>> = Vec::new();
+    for range in ranges {
+        if kept.last().is_none_or(|last| last.end <= range.start) {
+            kept.push(range);
+        }
+    }
+    kept
 }
 
 /// 写しのバイトの範囲 `span` を含む字の、元の範囲（写しの字ごとの元の範囲 `origins` から）。
@@ -395,6 +430,75 @@ mod tests {
                 let still = replaced.as_deref().is_some_and(|after| find.matches(after));
                 assert!(!still, "{text:?} {cell:?} → {replaced:?} {options:?}");
             }
+        }
+    }
+
+    /// 当たった所の元の範囲は、元の字の境目にあり、左から並び、重ならない（GitHub Issue #189）。
+    #[test]
+    fn spans_are_the_matched_parts_of_the_original_cell() {
+        assert_eq!(query("tok").spans("Tokyo ＴＯＫ"), [0..3, 6..15]);
+        assert_eq!(query("ガ").spans("ｶﾞｽ ｶﾞ"), [0..6, 10..16]);
+        assert_eq!(query("aa").spans("aaa"), alloc::vec![0..2]);
+        assert!(query("tok").spans("osaka").is_empty());
+        assert!(query("").spans("anything").is_empty());
+        let whole = FindQuery::new("tokyo", FindOptions::standard().toggled_whole_cell());
+        assert_eq!(whole.spans("ＴＯＫＹＯ"), alloc::vec![0..15]);
+        assert_eq!(regex(r"\d+").spans("a12b3"), [1..3, 4..5]);
+        assert!(regex(r"x*").spans("abc").is_empty());
+    }
+
+    /// 範囲を `#` に替えた値。範囲は左から並び、重ならず、長さがある。
+    fn rewritten(cell: &str, spans: &[Range<usize>]) -> String {
+        let mut rebuilt = String::new();
+        let mut kept = 0_usize;
+        for span in spans {
+            assert!(span.start >= kept && span.start < span.end, "{spans:?}");
+            rebuilt.push_str(cell.get(kept..span.start).unwrap_or("?"));
+            rebuilt.push('#');
+            kept = span.end;
+        }
+        rebuilt.push_str(cell.get(kept..).unwrap_or("?"));
+        rebuilt
+    }
+
+    /// 当たった所の範囲は置き換える所と同じ（範囲を `#` に替えると `replaced` と同じ値）で、当たるときだけ空でない。
+    #[test]
+    fn spans_are_the_parts_that_replacing_rewrites() {
+        const CELLS: [&str; 8] = [
+            "Tokyo",
+            "ｶﾞｽ",
+            "ＴＯＫ",
+            "x-tok-y",
+            "",
+            "İstanbul",
+            "ﾄｰｷｮｰ",
+            "a1b22",
+        ];
+        let standard = FindOptions::standard();
+        let all = [
+            standard,
+            standard.toggled_case(),
+            standard.toggled_whole_cell(),
+            standard.toggled_width(),
+            standard.toggled_kana(),
+            standard.toggled_regex(),
+        ];
+        let texts = ["tok", "ｶﾞ", "o", "i", "ｰ", "zz", r"\d", "."];
+        let cases = all.iter().flat_map(|&options| {
+            texts
+                .iter()
+                .flat_map(move |&text| CELLS.iter().map(move |&cell| (options, text, cell)))
+        });
+        for (options, text, cell) in cases {
+            let find = FindQuery::new(text, options);
+            let spans = find.spans(cell);
+            assert_eq!(!spans.is_empty(), find.matches(cell), "{text:?} {cell:?}");
+            assert_eq!(
+                find.replaced(cell, "#")
+                    .unwrap_or_else(|| String::from(cell)),
+                rewritten(cell, &spans),
+                "{text:?} {cell:?} {options:?}"
+            );
         }
     }
 

@@ -4668,9 +4668,10 @@ mod tests {
                     clip,
                     ..
                 } if text == wanted => Some((*baseline, *clip)),
-                DrawCommand::Text { .. } | DrawCommand::Fill { .. } | DrawCommand::Line { .. } => {
-                    None
-                }
+                DrawCommand::Text { .. }
+                | DrawCommand::Fill { .. }
+                | DrawCommand::Line { .. }
+                | DrawCommand::TextSpan { .. } => None,
             })
             .unwrap_or_else(|| panic!("{wanted} を書く命令が無い"))
     }
@@ -4682,9 +4683,10 @@ mod tests {
             .iter()
             .filter_map(|command| match command {
                 DrawCommand::Fill { rect, color } if *color == wanted => Some(*rect),
-                DrawCommand::Fill { .. } | DrawCommand::Text { .. } | DrawCommand::Line { .. } => {
-                    None
-                }
+                DrawCommand::Fill { .. }
+                | DrawCommand::Text { .. }
+                | DrawCommand::Line { .. }
+                | DrawCommand::TextSpan { .. } => None,
             })
             .collect()
     }
@@ -4696,7 +4698,9 @@ mod tests {
             .iter()
             .filter_map(|command| match command {
                 DrawCommand::Line { color, .. } => Some(*color),
-                DrawCommand::Fill { .. } | DrawCommand::Text { .. } => None,
+                DrawCommand::Fill { .. }
+                | DrawCommand::Text { .. }
+                | DrawCommand::TextSpan { .. } => None,
             })
             .collect()
     }
@@ -4978,7 +4982,9 @@ mod tests {
             .iter()
             .filter_map(|command| match command {
                 DrawCommand::Text { text, .. } => Some(text.as_str()),
-                DrawCommand::Fill { .. } | DrawCommand::Line { .. } => None,
+                DrawCommand::Fill { .. }
+                | DrawCommand::Line { .. }
+                | DrawCommand::TextSpan { .. } => None,
             })
             .collect()
     }
@@ -5245,7 +5251,9 @@ mod tests {
             .iter()
             .filter_map(|command| match command {
                 DrawCommand::Text { text, .. } => Some(text.as_str()),
-                DrawCommand::Fill { .. } | DrawCommand::Line { .. } => None,
+                DrawCommand::Fill { .. }
+                | DrawCommand::Line { .. }
+                | DrawCommand::TextSpan { .. } => None,
             })
             .collect()
     }
@@ -5438,9 +5446,10 @@ mod tests {
             .rev()
             .find_map(|command| match command {
                 DrawCommand::Text { text, clip, .. } if text == "PRODUCTID" => Some(*clip),
-                DrawCommand::Text { .. } | DrawCommand::Fill { .. } | DrawCommand::Line { .. } => {
-                    None
-                }
+                DrawCommand::Text { .. }
+                | DrawCommand::Fill { .. }
+                | DrawCommand::Line { .. }
+                | DrawCommand::TextSpan { .. } => None,
             })
             .unwrap();
         assert_eq!(name.size().width(), 199);
@@ -5465,7 +5474,9 @@ mod tests {
                 DrawCommand::Text {
                     text, role, clip, ..
                 } => Some((text.clone(), *role, *clip)),
-                DrawCommand::Fill { .. } | DrawCommand::Line { .. } => None,
+                DrawCommand::Fill { .. }
+                | DrawCommand::Line { .. }
+                | DrawCommand::TextSpan { .. } => None,
             })
             .collect();
         let status = roles
@@ -6274,9 +6285,10 @@ mod tests {
             .iter()
             .filter_map(|command| match command {
                 DrawCommand::Text { text, clip, .. } if text == "名前" => Some(*clip),
-                DrawCommand::Text { .. } | DrawCommand::Fill { .. } | DrawCommand::Line { .. } => {
-                    None
-                }
+                DrawCommand::Text { .. }
+                | DrawCommand::Fill { .. }
+                | DrawCommand::Line { .. }
+                | DrawCommand::TextSpan { .. } => None,
             })
             .collect();
         // 同じ名前の見出しは 2 つとも、改名せずにそのまま描く。
@@ -6432,9 +6444,10 @@ mod tests {
                 DrawCommand::Text {
                     text: shown, clip, ..
                 } if shown == text => Some(clip.size().width()),
-                DrawCommand::Text { .. } | DrawCommand::Fill { .. } | DrawCommand::Line { .. } => {
-                    None
-                }
+                DrawCommand::Text { .. }
+                | DrawCommand::Fill { .. }
+                | DrawCommand::Line { .. }
+                | DrawCommand::TextSpan { .. } => None,
             })
             .unwrap()
     }

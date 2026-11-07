@@ -176,7 +176,57 @@ impl Pen {
                 width,
                 color,
             } => self.line((*from, *to), *width, *color),
+            DrawCommand::TextSpan {
+                baseline,
+                text,
+                start,
+                end,
+                band,
+                color,
+                role,
+            } => {
+                let format = match role {
+                    TextRole::Chrome => chrome,
+                    TextRole::Content => content,
+                };
+                self.text_span(format, (*baseline, text, *start..*end), (*color, *band))
+            }
         }
+    }
+
+    /// 基準線の左端 `baseline` から書く `text` の、`span` のバイトの字の背景を、`band` の縦の範囲で塗る（`band` の外は
+    /// 塗らない・GitHub Issue #189）。字の幅は DirectWrite の配置で測る。範囲が字の境目に無ければ塗らない。
+    fn text_span(
+        &self,
+        format: &IDWriteTextFormat,
+        (baseline, text, span): (PixelPoint, &str, core::ops::Range<usize>),
+        (color, band): (Color, PixelRect),
+    ) -> Result<(), Win32Failure> {
+        let (Some(head), Some(through)) = (text.get(..span.start), text.get(..span.end)) else {
+            return Ok(());
+        };
+        let width = |part: &str| -> Result<f32, Win32Failure> {
+            if part.is_empty() {
+                return Ok(0.0);
+            }
+            Ok(self.line_metrics(format, part)?.0)
+        };
+        let origin = to_float(baseline.x());
+        let (left, right) = (
+            (origin + width(head)?).round(),
+            (origin + width(through)?).round(),
+        );
+        let bounds = rect_f(band);
+        let area = D2D_RECT_F {
+            left: left.max(bounds.left),
+            top: bounds.top,
+            right: right.min(bounds.right),
+            bottom: bounds.bottom,
+        };
+        if area.right <= area.left {
+            return Ok(());
+        }
+        self.fill_area(&area, color)
     }
 
     /// 1 色の筆。
@@ -197,16 +247,20 @@ impl Pen {
     }
 
     /// 矩形を塗る。
+    fn fill(&self, rect: PixelRect, color: Color) -> Result<(), Win32Failure> {
+        self.fill_area(&rect_f(rect), color)
+    }
+
+    /// 浮動小数の矩形 `area` を塗る。
     #[expect(
         unsafe_code,
         reason = "RS-010: Direct2D の FillRectangle を呼ぶ（ADR 0002 の 4）"
     )]
-    fn fill(&self, rect: PixelRect, color: Color) -> Result<(), Win32Failure> {
+    fn fill_area(&self, area: &D2D_RECT_F, color: Color) -> Result<(), Win32Failure> {
         let brush = self.brush(color)?;
-        let area = rect_f(rect);
-        // SAFETY: 描画は paint の中で呼ばれる。area はこの関数の局所。
+        // SAFETY: 描画は paint の中で呼ばれる。area は呼び出しの間だけ読まれる。
         unsafe {
-            self.target.FillRectangle(&raw const area, &brush);
+            self.target.FillRectangle(area, &brush);
         }
         Ok(())
     }
