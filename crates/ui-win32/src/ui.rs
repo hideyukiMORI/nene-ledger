@@ -69,11 +69,12 @@ const CLASS: PCWSTR = w!("NeNeLedger");
 const INITIAL_WIDTH: u32 = 1024;
 const INITIAL_HEIGHT: u32 = 640;
 /// `WM_MOUSELEAVE` と `WM_NCMOUSELEAVE`（winuser.h の 0x02A3・0x02A2）。
-/// `WM_SYSKEYDOWN` で受ける Alt のキー：Enter（セルの中の改行）・C・W・R（検索の欄の条件・ADR 0030 の決定 3・ADR 0031）・
-/// A（全部の置換・決定 6）。
-const ALT_KEYS: [u16; 5] = [VK_RETURN.0, 0x43, 0x57, 0x52, 0x41];
+/// `WM_SYSKEYDOWN` で受ける Alt のキー：Enter（セルの中の改行）・C・W・R・Z・K（検索の欄の条件・ADR 0030 の決定 3・
+/// ADR 0031・GitHub Issue #199）・A（全部の置換・決定 6）。🔴 `key_intent` が Alt で意図を返すキーは、ここと `ALT_CHARS`
+/// にも足す（足さないと Windows では OS に渡って効かず、警告の音が鳴る・テスト `every_alt_key_is_received`）。
+const ALT_KEYS: [u16; 7] = [VK_RETURN.0, 0x43, 0x57, 0x52, 0x5A, 0x4B, 0x41];
 /// 受けた Alt のキーに続く `WM_SYSCHAR`（OS に渡すと警告の音が鳴る）。
-const ALT_CHARS: &[u8; 9] = b"\rcCwWrRaA";
+const ALT_CHARS: &[u8; 13] = b"\rcCwWrRzZkKaA";
 
 const WM_MOUSELEAVE: u32 = 0x02A3;
 const WM_NCMOUSELEAVE: u32 = 0x02A2;
@@ -441,7 +442,8 @@ fn keyboard(state: &mut WindowState<'_>, message: u32, wparam: WPARAM) -> Option
             state.intent(intent);
             Some(LRESULT(0))
         }
-        // Alt+Enter（セルの中の改行）と、検索の欄の Alt+C・Alt+W だけを受ける。ほかの Alt のキー（Alt+F4 など）は OS に任せる。
+        // Alt+Enter（セルの中の改行）と、検索と置換の欄の Alt の字（`ALT_KEYS`）だけを受ける。ほかの Alt のキー（Alt+F4 など）は
+        // OS に任せる。
         WM_SYSKEYDOWN if ALT_KEYS.iter().any(|&key| wparam.0 == usize::from(key)) => {
             let key = u16::try_from(wparam.0).ok()?;
             let intent = key_intent(key, modifiers())?;
@@ -811,4 +813,28 @@ fn packed_words(lparam: LPARAM) -> (u16, u16) {
 fn signed_words(lparam: LPARAM) -> (i32, i32) {
     let (low, high) = packed_words(lparam);
     (i32::from(low.cast_signed()), i32::from(high.cast_signed()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::key_intent::Modifiers;
+
+    /// `key_intent` が Alt だけで意図を返す英字と Enter は、すべて `WM_SYSKEYDOWN` で受け（`ALT_KEYS`）、続く `WM_SYSCHAR`
+    /// も受ける（`ALT_CHARS`・大文字と小文字）。受けるキーはどれも意図になる（GitHub Issue #199 の独立のレビューで、
+    /// Alt+Z・Alt+K を `ALT_KEYS` に足し忘れて Windows で効かなかった）。
+    #[test]
+    fn every_alt_key_is_received() {
+        let alt = Modifiers::new(false, false, true);
+        let letters = (u16::from(b'A')..=u16::from(b'Z')).chain([VK_RETURN.0]);
+        for key in letters {
+            let bound = key_intent(key, alt).is_some();
+            assert_eq!(bound, ALT_KEYS.contains(&key), "{key:#x}");
+            if bound && key != VK_RETURN.0 {
+                let upper = u8::try_from(key).unwrap_or(0);
+                assert!(ALT_CHARS.contains(&upper), "{key:#x}");
+                assert!(ALT_CHARS.contains(&upper.to_ascii_lowercase()), "{key:#x}");
+            }
+        }
+    }
 }

@@ -9,4 +9,8 @@ pub enum FindToggle {
     WholeCell,
     /// 文字どおりか正規表現か（Alt+R・ADR 0031）。
     Regex,
+    /// 全角と半角を区別するか（Alt+Z・FIND-06・GitHub Issue #199）。
+    Width,
+    /// ひらがなとカタカナを区別するか（Alt+K・FIND-06・GitHub Issue #199）。
+    Kana,
 }
