@@ -262,8 +262,10 @@ impl<'state> PalettePainter<'state> {
         self.text_at(from_left(row, left), text, self.colors.gutter_text());
     }
 
-    /// 探す段と置換の段の案内。今の条件と切り替えるキー（ADR 0030 の決定 3・全角半角は区別しない）。置換の段は 1 行目に
-    /// 置き換え方のキー、2 行目に条件（決定 6）。正規表現の式が読めなければ、そう出す（ADR 0031）。
+    /// 探す段と置換の段の案内。今の条件と切り替えるキー（ADR 0030 の決定 3）。探す段は 2 行（大文字小文字・一致の仕方・
+    /// 正規表現の行と、全角半角・ひらがなカタカナの行）、置換の段は 1 行目に置き換え方のキー（全部の置換の件数と確かめの
+    /// 間はその 1 行・決定 6・7）を足した 3 行。正規表現の式が読めなければ、そう出す（ADR 0031）。行の数は
+    /// `palette_layout::least_rows` と同じ。
     fn find_line(&mut self) {
         let options = self.palette.find_options();
         let regex = if !options.regex() {
@@ -311,7 +313,8 @@ impl<'state> PalettePainter<'state> {
         } else {
             vec![conditions, folding]
         };
-        for (slot, text) in lines.into_iter().enumerate() {
+        // 低い窓でパレットの行が足りなければ、入る行だけを描く（パレットの面の外に描かない）。
+        for (slot, text) in lines.into_iter().enumerate().take(self.layout.visible()) {
             let row = self.layout.row(slot);
             let left = row.origin().x().saturating_add(self.px(TEXT_INSET));
             // 読めない式と、全部の置換の件数と確かめは強調の色で目に付くように。
