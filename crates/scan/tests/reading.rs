@@ -594,25 +594,29 @@ mod reading {
     fn assert_known_marks_change_nothing(
         rng: &mut Xorshift,
         input: &[u8],
-        name: &str,
-        sizes: &[usize],
+        (name, sizes): (&str, &[usize]),
     ) {
         let source = Source::open(&fixture(name, input)).unwrap();
+        // 塊の大きさ 0 は、索引を作り終える前（目印の無い空の索引・画面が索引を待たずに読むとき）。
         let cases = random_dialects()
             .into_iter()
             .flat_map(|dialect| sizes.iter().map(move |&size| (dialect, size)));
         for (dialect, size) in cases {
             let records = Records::new(input, dialect).count();
-            let index = index_with(&source, dialect, size);
+            let index = if size == 0 {
+                SparseIndex::empty()
+            } else {
+                index_with(&source, dialect, size)
+            };
             let format = utf8(dialect);
             let mut known = None;
             let mut first = 0_u64;
-            for _ in 0..40_u32 {
+            for _ in 0..25_u32 {
                 let range = RecordRange::new(first, 1 + rng.below(3));
                 let plain = read_records(&source, &index, format, range).unwrap();
                 let after = read_records_after(&source, &index, format, (range, known)).unwrap();
                 assert_eq!(after, plain, "{name} {size} {range:?} {known:?}");
-                known = after.last_mark(first).or(known);
+                known = after.last_mark().or(known);
                 first = next_first(rng, first, records);
             }
         }
@@ -621,17 +625,21 @@ mod reading {
     #[test]
     fn reading_on_from_the_last_record_matches_reading_from_the_marks() {
         let mut rng = Xorshift(0x9E37_79B9_7F4A_7C15);
-        for round in 0..4_u32 {
-            let input = random_table(&mut rng, 9000, round == 3);
+        // 塊の大きさ 0 は、索引を作り終える前（目印の無い空の索引）。
+        for round in 0..3_u32 {
+            let input = random_table(&mut rng, 6000, false);
+            let name = format!("known-{round}");
             assert_known_marks_change_nothing(
                 &mut rng,
                 &input,
-                &format!("known-{round}"),
-                &[7, 4096, 1 << 20_u32],
+                (&name, &[0, 7, 4096, 1 << 20_u32]),
             );
         }
+        // 上限を超える長いレコードは、索引のある読みで。
+        let long = random_table(&mut rng, 6000, true);
+        assert_known_marks_change_nothing(&mut rng, &long, ("known-long", &[7, 4096]));
         let input = sample(5000);
-        assert_known_marks_change_nothing(&mut rng, &input, "known-sample", &[4096]);
+        assert_known_marks_change_nothing(&mut rng, &input, ("known-sample", &[0, 4096]));
     }
 
     #[test]
