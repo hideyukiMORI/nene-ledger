@@ -58,6 +58,14 @@ GitHub Issue #115 で、Ctrl+V で OS のクリップボードの文字列を読
 - 行全体・列全体を切り取って貼っても、**値を動かす**（行と列の並びは変えない）。行と列そのものの移動は、見出しのドラッグ（EDIT-03 の残り）と「切り取った行を挿入」（切り取り中の Ctrl++・Excel の「切り取ったセルの挿入」）を後の Issue で扱う
 - 空にするのは空のセル（`""`）。「セルが無い」にはしない（列の数が足りない行は、ADR 0024 の施主の判断 4・5 のとおり間を空のセルで埋める）
 
+### 6. 一括の入力（EDIT-02・2026-11-07 追記・キーは 2026-11-08 に施主が受理・GitHub Issue #203）
+
+- 範囲を選んで打ち始め、**Ctrl+Enter で欄の文字を今の範囲（カーソルのある範囲）のすべてのセルに書く**（Excel と同じキー）。書く道は決定 1 の「束が 1 つのセルなら範囲を埋める」と同じで、決定 3（1 手で戻る）と決定 4（上限）もそのまま。欄の字は引用を解かずにそのまま 1 つの値にする（Alt+Enter の改行やタブを含んでも分けない・貼り付けのタブ区切りの読みは通さない）
+- 範囲が 1 つのセルなら、動かずに確定するだけ（Enter と違って下へ動かない・Excel と同じ）。編集していなければ何もしない
+- 書けないとき（上限を超える・索引を待つ・切り詰めた行・セルが無い・行を読めない）は、欄を戻して打った字を失わない
+- Ctrl+Enter も `Document::apply` を通す（保存の途中は断る・切り取りの枠の扱い・集計の更新が、ほかの意図と同じ）。パレットの欄では Enter と同じ。Ctrl+Shift+Enter は今までどおり確定して上へ
+- 離れた範囲（Ctrl+クリック）は今の範囲だけに書く。Excel は離れた範囲のすべてに書くので、要るかは施主の判断（推しは今のまま・まず使ってみる）
+
 ## 強制
 
 - **active**（GitHub Issue #146 で入れた）:
@@ -69,6 +77,8 @@ GitHub Issue #115 で、Ctrl+V で OS のクリップボードの文字列を読
   - 切り取って同じ窓で貼ると元が空になり（1 手で戻る）、元と貼る先が重なった所は貼った値になる（application のテスト `cutting_and_pasting_in_the_window_moves_the_values_in_one_step`・`a_moved_range_that_overlaps_keeps_the_pasted_values`）
   - Esc・直し始め・表を変える操作で枠が消えた後や、ほかで置いた文字列を貼っても元は残る（application のテスト `a_cut_that_was_dropped_pastes_as_a_copy`。枠を残す意図と消す意図の表は `document::keeps_cut`・閉じた enum の網羅）
   - 離れた範囲は切り取らない（application のテスト `many_ranges_are_not_cut`）
+- **active**（GitHub Issue #203 で入れた・決定 6）:
+  - Ctrl+Enter で範囲のすべてのセルに欄の値（改行を含んでも 1 つの値）を書き、1 手で戻る。1 つのセルなら動かずに確定し、編集していなければ何もしない（application のテスト `ctrl_enter_fills_the_selected_range_with_the_typed_value`・`ctrl_enter_on_one_cell_commits_in_place_and_does_nothing_without_editing`・ui-x11 と ui-win32 のキーのテスト。書けなければ欄を戻し、離れた範囲では今の範囲に書く（`ctrl_enter_keeps_the_field_when_nothing_is_written_and_fills_the_active_range`）。パレットでは Enter と同じ（`ctrl_enter_confirms_in_the_palette_like_enter`）
 - **planned**:
   - Excel から貼った値が変わらない（Windows の実機・gate-proofs）
 

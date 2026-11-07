@@ -314,7 +314,8 @@ impl Viewer {
     /// （読めない・行が無ければ縦には動かない）。コピーなら選択の行を読んで文字列にする。
     fn effect(&mut self, effect: DocumentEffect) -> Option<ClipboardText> {
         match effect {
-            DocumentEffect::Stay => None,
+            // 行を読んで書くには窓が要るので `intent` が受ける（ここへは来ない）。
+            DocumentEffect::Stay | DocumentEffect::ReadPasted { .. } => None,
             DocumentEffect::Read { first_body } => {
                 let first = self.document.line_of(first_body);
                 if let Ok((cells, cuts)) = self.read_lines(first, WINDOW_RECORDS) {
@@ -373,7 +374,13 @@ impl Viewer {
 
     /// 表に貼る。貼る行を読んでから書く（書く前の値と原本の値を履歴に残す・ADR 0029）。読めなければ貼らない。
     fn paste_into_table(&mut self, text: &str, view: WindowView) {
-        let PasteRequest::Read { first_line, count } = self.document.paste(text) else {
+        let request = self.document.paste(text);
+        self.finish_paste(request, view);
+    }
+
+    /// 貼り付け（と Ctrl+Enter の一括の入力・EDIT-02）が求めた行を読んで書く。読めなければ書かない。
+    fn finish_paste(&mut self, request: PasteRequest, view: WindowView) {
+        let PasteRequest::Read { first_line, count } = request else {
             return;
         };
         let lines = usize::try_from(count)
@@ -868,7 +875,13 @@ impl Viewer {
         {
             self.document.notify(Notice::SettingsUnsaved);
         }
-        let copied = self.effect(effect);
+        // Ctrl+Enter の一括の入力は、貼り付けと同じく行を読んでから書く（EDIT-02）。
+        let copied = if let DocumentEffect::ReadPasted { first_line, count } = effect {
+            self.finish_paste(PasteRequest::Read { first_line, count }, view);
+            None
+        } else {
+            self.effect(effect)
+        };
         self.refresh_totals();
         self.sync_ticker();
         copied

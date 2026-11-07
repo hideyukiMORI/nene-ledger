@@ -180,6 +180,20 @@ fn find_field_intent(keysym: u32) -> Option<Intent> {
     Some(Intent::FindToggle(toggle))
 }
 
+/// Enter：Alt でセルの中の改行（EDIT-10）、Ctrl で選んだ範囲のすべてのセルに書く（EDIT-02・GitHub Issue #203）、Shift で
+/// 確定して上へ、ほかは確定。
+fn return_intent(state: KeyButMask) -> Intent {
+    if state.contains(KeyButMask::MOD1) {
+        Intent::BreakLine
+    } else if state.contains(KeyButMask::SHIFT) {
+        Intent::Advance(CursorStep::Up)
+    } else if state.contains(KeyButMask::CONTROL) {
+        Intent::FillSelection
+    } else {
+        Intent::Confirm
+    }
+}
+
 /// パレットを開く・決める・やめる・消す・字を打つ・セルを直す（ADR 0026 の決定 1・2）。
 /// Ctrl と組んだ字は字として打たない（Ctrl+C など）。Alt+Enter はセルの中の改行、Shift+Enter・Tab・Shift+Tab は確定して動く。
 fn editing_intent(keysym: u32, typed: Option<char>, state: KeyButMask) -> Option<Intent> {
@@ -195,9 +209,7 @@ fn editing_intent(keysym: u32, typed: Option<char>, state: KeyButMask) -> Option
         XK_F3 if shift => Some(Intent::FindAgain { forward: false }),
         XK_F3 => Some(Intent::FindAgain { forward: true }),
         XK_ESCAPE => Some(Intent::Cancel),
-        XK_RETURN | XK_KP_ENTER if state.contains(KeyButMask::MOD1) => Some(Intent::BreakLine),
-        XK_RETURN | XK_KP_ENTER if shift => Some(Intent::Advance(CursorStep::Up)),
-        XK_RETURN | XK_KP_ENTER => Some(Intent::Confirm),
+        XK_RETURN | XK_KP_ENTER => Some(return_intent(state)),
         XK_TAB if shift => Some(Intent::Advance(CursorStep::Left)),
         XK_ISO_LEFT_TAB => Some(Intent::Advance(CursorStep::Left)),
         XK_TAB => Some(Intent::Advance(CursorStep::Right)),
@@ -412,6 +424,9 @@ mod tests {
             KeyGuide::BreakLine => {
                 key_intent(XK_RETURN, None, KeyButMask::MOD1) == Some(Intent::BreakLine)
             }
+            KeyGuide::FillSelection => {
+                key_intent(XK_RETURN, None, KeyButMask::CONTROL) == Some(Intent::FillSelection)
+            }
             KeyGuide::Advance => {
                 key_intent(XK_TAB, None, plain()) == Some(Intent::Advance(CursorStep::Right))
                     && key_intent(XK_ISO_LEFT_TAB, None, KeyButMask::SHIFT)
@@ -436,6 +451,14 @@ mod tests {
         }
     }
 
+    /// (5, 5) を押した意図（選び方 `mode`）。
+    fn pointed_at_five(mode: SelectionMode) -> Intent {
+        Intent::Point {
+            at: PixelPoint::new(5, 5),
+            mode,
+        }
+    }
+
     /// キーの一覧（Issue #63）の各行が、書いたとおりに割り当てられている。行を足せばここの `match` が落ちる。
     #[test]
     fn every_key_in_the_list_is_bound_as_written() {
@@ -444,12 +467,7 @@ mod tests {
         let control = KeyButMask::CONTROL;
         let control_shift = KeyButMask::from(u16::from(control) | u16::from(shift));
         let with_alt = KeyButMask::from(u16::from(control_shift) | u16::from(KeyButMask::MOD1));
-        let point = |mode| {
-            Some(Intent::Point {
-                at: PixelPoint::new(5, 5),
-                mode,
-            })
-        };
+        let point = |mode| Some(pointed_at_five(mode));
         for guide in KeyGuide::ALL {
             let bound = match guide {
                 KeyGuide::MoveCursor => {
@@ -495,6 +513,7 @@ mod tests {
                 KeyGuide::EditCell
                 | KeyGuide::ClearCell
                 | KeyGuide::BreakLine
+                | KeyGuide::FillSelection
                 | KeyGuide::Advance => editing_bound(guide),
             };
             assert!(bound, "{guide:?}");
@@ -567,6 +586,17 @@ mod tests {
         assert_eq!(key_intent(XK_F1, None, plain()), Some(Intent::OpenPalette));
         assert_eq!(key_intent(XK_ESCAPE, None, plain()), Some(Intent::Cancel));
         assert_eq!(key_intent(XK_RETURN, None, plain()), Some(Intent::Confirm));
+        assert_eq!(
+            key_intent(XK_RETURN, None, KeyButMask::CONTROL),
+            Some(Intent::FillSelection)
+        );
+        // Ctrl+Shift+Enter は今までどおり確定して上へ。
+        let control_and_shift =
+            KeyButMask::from(u16::from(KeyButMask::CONTROL) | u16::from(KeyButMask::SHIFT));
+        assert_eq!(
+            key_intent(XK_RETURN, None, control_and_shift),
+            Some(Intent::Advance(CursorStep::Up))
+        );
         assert_eq!(
             key_intent(XK_KP_ENTER, None, plain()),
             Some(Intent::Confirm)
