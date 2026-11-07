@@ -158,6 +158,8 @@ pub struct Document {
     edits: CellEdits,
     /// 編集中のセル（ADR 0026）。
     editor: Option<CellEditor>,
+    /// Ctrl+Enter で書いている間の欄（書けなければ戻す・EDIT-02・GitHub Issue #203）。
+    filling: Option<CellEditor>,
     /// 裏で保存している間（直すことと保存を受けない）。
     saving: bool,
     /// 閉じる手順（ADR 0026 の決定 7）。
@@ -283,6 +285,7 @@ impl Document {
             header_source,
             edits: CellEdits::empty(),
             editor: None,
+            filling: None,
             saving: false,
             closing: CloseState::Open,
             history: EditHistory::empty(),
@@ -783,6 +786,9 @@ impl Document {
         if let Intent::Undo | Intent::Redo = intent {
             return self.undo_or_redo(intent == Intent::Redo, window);
         }
+        if intent == Intent::FillSelection {
+            return self.fill_selection();
+        }
         match self.edit_intent(intent) {
             Some(intent) => self.apply_to_table(intent, window),
             None => DocumentEffect::Stay,
@@ -1215,34 +1221,35 @@ impl Document {
         self.request_rows(plan)
     }
 
-    /// Ctrl+Enter（EDIT-02・GitHub Issue #203）：編集中の欄の文字を、選んだ最初の範囲のすべてのセルに書く。書く道は貼り付けの
-    /// 「1 つの値は範囲を埋める」（ADR 0029 の決定 1）と同じで、1 手で戻り、上限も同じ。欄の字は引用を解かずにそのまま 1 つの
-    /// 値にする（改行やタブを含んでも分けない）。範囲が 1 つのセルなら、動かずに確定するだけ。編集していなければ何もしない。
-    pub fn fill_selection(&mut self) -> PasteRequest {
-        if self.closing != CloseState::Open {
-            return PasteRequest::Done;
-        }
+    /// Ctrl+Enter（EDIT-02・GitHub Issue #203）：編集中の欄の文字を、今の範囲（カーソルのある範囲）のすべてのセルに書く。
+    /// 書く道は貼り付けの「1 つの値は範囲を埋める」（ADR 0029 の決定 1）と同じで、1 手で戻り、上限も同じ。欄の字は引用を
+    /// 解かずにそのまま 1 つの値にする（改行やタブを含んでも分けない）。範囲が 1 つのセルなら、動かずに確定するだけ。編集して
+    /// いなければ何もしない。欄は書けたときに閉じ、書けなければ（上限・索引を待つ・切り詰めた行・セルが無い・読めない）
+    /// 戻して、打った字を失わない。保存の途中は `apply` が先に断る。
+    fn fill_selection(&mut self) -> DocumentEffect {
         let Some(editor) = self.editor.as_ref() else {
-            return PasteRequest::Done;
+            return DocumentEffect::Stay;
         };
-        if self.saving {
-            self.notice = Some(Notice::StillSaving);
-            return PasteRequest::Done;
-        }
-        let range = self.ranges().all().next().unwrap_or(self.selection);
+        let range = self.ranges().active();
         if range.top_left() == range.bottom_right() {
             self.commit_edit();
-            return PasteRequest::Done;
+            return DocumentEffect::Stay;
         }
         let value = String::from(editor.field().text());
-        self.notice = None;
         self.pasting = None;
-        // 書けないとき（大きすぎる・索引を待つ）は、欄を残して打った字を失わない。
-        let Some(plan) = self.paste_plan(alloc::vec![alloc::vec![value]]) else {
-            return PasteRequest::Done;
+        let Some(plan) = self.paste_plan_in(range, alloc::vec![alloc::vec![value]]) else {
+            return DocumentEffect::Stay;
         };
-        self.editor = None;
-        self.request_rows(plan)
+        self.filling = self.editor.take();
+        match self.request_rows(plan) {
+            PasteRequest::Read { first_line, count } => {
+                DocumentEffect::ReadPasted { first_line, count }
+            }
+            PasteRequest::Done => {
+                self.editor = self.filling.take();
+                DocumentEffect::Stay
+            }
+        }
     }
 
     /// 待たせる貼り付け `plan` の行を読ませる（表の終わりより下は足す行なので読まない）。
@@ -1265,6 +1272,11 @@ impl Document {
     /// 束 `cells` を、選んだ最初の範囲のどこにどの大きさで貼るか。上限を超える・索引を待つなら知らせて `None`。
     fn paste_plan(&mut self, cells: Vec<Vec<String>>) -> Option<PendingPaste> {
         let range = self.ranges().all().next().unwrap_or(self.selection);
+        self.paste_plan_in(range, cells)
+    }
+
+    /// 束 `cells` を、範囲 `range` のどこにどの大きさで貼るか。上限を超える・索引を待つなら知らせて `None`。
+    fn paste_plan_in(&mut self, range: Selection, cells: Vec<Vec<String>>) -> Option<PendingPaste> {
         let (top_left, bottom_right) = (range.top_left(), range.bottom_right());
         let corner = (top_left.body(), top_left.column());
         let single = match cells.as_slice() {
@@ -1334,6 +1346,27 @@ impl Document {
         (rows, cuts): (&[Vec<String>], &[CutRecord]),
         window: WindowView,
     ) -> DocumentEffect {
+        let before = self.history.revision();
+        let effect = self.write_pasted(first_record, (rows, cuts), window);
+        self.end_filling(self.history.revision() != before);
+        effect
+    }
+
+    /// Ctrl+Enter の欄を、書けたなら閉じ、書けなかったなら戻す（打った字を失わない・EDIT-02）。
+    fn end_filling(&mut self, written: bool) {
+        let filling = self.filling.take();
+        if !written {
+            self.editor = self.editor.take().or(filling);
+        }
+    }
+
+    /// `paste_rows` の中身：待っている束を、読ませた行に書く。
+    fn write_pasted(
+        &mut self,
+        first_record: u64,
+        (rows, cuts): (&[Vec<String>], &[CutRecord]),
+        window: WindowView,
+    ) -> DocumentEffect {
         let Some(mut plan) = self.pasting.take() else {
             return DocumentEffect::Stay;
         };
@@ -1395,6 +1428,7 @@ impl Document {
         if self.pasting.take().is_some() {
             self.notice = Some(Notice::Paste(PasteNotice::Unread));
         }
+        self.end_filling(false);
     }
 
     /// 貼り付けで表の右の端（`width` 列目）に `count` 列を足した後。表示だけの列の入れ替えはそのまま残して後ろに並べ
@@ -3296,7 +3330,8 @@ impl Document {
             | DocumentEffect::Find
             | DocumentEffect::StopFinding
             | DocumentEffect::Replace
-            | DocumentEffect::StopReplacing => current,
+            | DocumentEffect::StopReplacing
+            | DocumentEffect::ReadPasted { .. } => current,
         };
         self.extend_to(at, first, window);
         effect
@@ -4548,7 +4583,6 @@ fn find_columns(
     }
 }
 
-/// 意図 `intent` の後も切り取りの枠を残すか（見るだけ・選ぶだけ・動くだけの意図）。表の値・並び・列の見せる順を変える
 /// 表を変える意図か（保存の途中は受けない・SAVE-02）。
 fn changes_the_table(intent: Intent) -> bool {
     matches!(
@@ -4573,6 +4607,7 @@ fn changes_the_table(intent: Intent) -> bool {
     )
 }
 
+/// 意図 `intent` の後も切り取りの枠を残すか（見るだけ・選ぶだけ・動くだけの意図）。表の値・並び・列の見せる順を変える
 /// 意図・Esc・別のコピーと切り取り・直し始めは消す（ADR 0029 の決定 5）。
 const fn keeps_cut(intent: Intent) -> bool {
     match intent {
@@ -7818,17 +7853,16 @@ mod tests {
 
     /// Ctrl+Enter の一括の入力を、貼り付けと同じく読ませた行に書く。
     fn filled(document: &mut Document) -> DocumentEffect {
-        match document.fill_selection() {
-            PasteRequest::Done => DocumentEffect::Stay,
-            PasteRequest::Read { first_line, count } => {
-                let rows: Vec<Vec<String>> = editable_rows()
-                    .into_iter()
-                    .skip(usize::try_from(first_line).unwrap_or(usize::MAX))
-                    .take(usize::try_from(count).unwrap_or(0))
-                    .collect();
-                document.paste_rows(first_line, (&rows, &[]), normal())
-            }
+        let effect = document.apply(Intent::FillSelection, normal());
+        if let DocumentEffect::ReadPasted { first_line, count } = effect {
+            let rows: Vec<Vec<String>> = editable_rows()
+                .into_iter()
+                .skip(usize::try_from(first_line).unwrap_or(usize::MAX))
+                .take(usize::try_from(count).unwrap_or(0))
+                .collect();
+            return document.paste_rows(first_line, (&rows, &[]), normal());
         }
+        effect
     }
 
     /// 範囲を選んで打ち始め、Ctrl+Enter で範囲のすべてのセルに同じ値を書く。改行を含む欄も 1 つの値のまま（分けない）。
@@ -7869,10 +7903,10 @@ mod tests {
     #[test]
     fn ctrl_enter_on_one_cell_commits_in_place_and_does_nothing_without_editing() {
         let mut document = indexed_editable();
-        assert_eq!(document.fill_selection(), PasteRequest::Done);
+        assert_eq!(filled(&mut document), DocumentEffect::Stay);
         assert!(document.edits().is_empty());
         document.apply(Intent::Type('q'), normal());
-        assert_eq!(document.fill_selection(), PasteRequest::Done);
+        assert_eq!(filled(&mut document), DocumentEffect::Stay);
         assert_eq!(
             text_of(&document, RowId::Source(0), ColumnId::Source(0)),
             Some("q")
@@ -7881,6 +7915,67 @@ mod tests {
             document.selection().cursor(),
             CellPosition::new(0, 0),
             "動かない"
+        );
+    }
+
+    /// 書けなかったら（読めなかった）欄を戻して、打った字を失わない。書く範囲はカーソルのある今の範囲（離れた範囲の
+    /// 古いほうではない）。
+    #[test]
+    fn ctrl_enter_keeps_the_field_when_nothing_is_written_and_fills_the_active_range() {
+        let mut document = indexed_editable();
+        document.apply(
+            Intent::Move {
+                step: CursorStep::Down,
+                mode: SelectionMode::Extend,
+            },
+            normal(),
+        );
+        document.apply(Intent::Type('k'), normal());
+        let DocumentEffect::ReadPasted { .. } = document.apply(Intent::FillSelection, normal())
+        else {
+            panic!("行を読ませる");
+        };
+        assert!(
+            document.editing_cell().is_none(),
+            "読んでいる間は欄を閉じる"
+        );
+        document.paste_unread();
+        assert!(document.editing_cell().is_some(), "読めなければ欄を戻す");
+        assert!(document.edits().is_empty());
+
+        // 離れた範囲：先に (0,0)〜(1,0)、次に Ctrl+クリックで (0,1)〜(1,1) を選んで打つと、書くのは後の範囲。
+        let mut ranges = indexed_editable();
+        ranges.apply(
+            Intent::Move {
+                step: CursorStep::Down,
+                mode: SelectionMode::Extend,
+            },
+            normal(),
+        );
+        ranges.apply(pointing(100, 58, SelectionMode::Add), normal());
+        ranges.apply(Intent::Release, normal());
+        ranges.apply(
+            Intent::Move {
+                step: CursorStep::Down,
+                mode: SelectionMode::Extend,
+            },
+            normal(),
+        );
+        assert!(ranges.ranges().is_multiple());
+        assert_eq!(ranges.selection().cursor(), CellPosition::new(1, 1));
+        ranges.apply(Intent::Type('z'), normal());
+        filled(&mut ranges);
+        assert_eq!(
+            text_of(&ranges, RowId::Source(0), ColumnId::Source(1)),
+            Some("z")
+        );
+        assert_eq!(
+            text_of(&ranges, RowId::Source(1), ColumnId::Source(1)),
+            Some("z")
+        );
+        assert_eq!(
+            text_of(&ranges, RowId::Source(1), ColumnId::Source(0)),
+            None
         );
     }
 

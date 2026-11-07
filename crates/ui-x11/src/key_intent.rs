@@ -169,10 +169,10 @@ pub(crate) fn button_intent(button: u8, state: KeyButMask, x: i16, y: i16) -> Op
 fn return_intent(state: KeyButMask) -> Intent {
     if state.contains(KeyButMask::MOD1) {
         Intent::BreakLine
-    } else if state.contains(KeyButMask::CONTROL) {
-        Intent::FillSelection
     } else if state.contains(KeyButMask::SHIFT) {
         Intent::Advance(CursorStep::Up)
+    } else if state.contains(KeyButMask::CONTROL) {
+        Intent::FillSelection
     } else {
         Intent::Confirm
     }
@@ -436,7 +436,6 @@ mod tests {
         }
     }
 
-    /// キーの一覧（Issue #63）の各行が、書いたとおりに割り当てられている。行を足せばここの `match` が落ちる。
     /// (5, 5) を押した意図（選び方 `mode`）。
     fn pointed_at_five(mode: SelectionMode) -> Intent {
         Intent::Point {
@@ -445,6 +444,7 @@ mod tests {
         }
     }
 
+    /// キーの一覧（Issue #63）の各行が、書いたとおりに割り当てられている。行を足せばここの `match` が落ちる。
     #[test]
     fn every_key_in_the_list_is_bound_as_written() {
         use nene_ledger_application::key_guide::KeyGuide;
@@ -574,6 +574,13 @@ mod tests {
         assert_eq!(
             key_intent(XK_RETURN, None, KeyButMask::CONTROL),
             Some(Intent::FillSelection)
+        );
+        // Ctrl+Shift+Enter は今までどおり確定して上へ。
+        let control_and_shift =
+            KeyButMask::from(u16::from(KeyButMask::CONTROL) | u16::from(KeyButMask::SHIFT));
+        assert_eq!(
+            key_intent(XK_RETURN, None, control_and_shift),
+            Some(Intent::Advance(CursorStep::Up))
         );
         assert_eq!(
             key_intent(XK_KP_ENTER, None, plain()),

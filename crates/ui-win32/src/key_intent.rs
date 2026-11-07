@@ -96,8 +96,8 @@ pub(crate) fn key_intent(key: u16, modifiers: Modifiers) -> Option<Intent> {
         VK_ESCAPE => return Some(Intent::Cancel),
         // Alt+Enter は `WM_SYSKEYDOWN` で届く（ui の側で同じ関数に渡す）。
         VK_RETURN if alt => return Some(Intent::BreakLine),
-        VK_RETURN if control => return Some(Intent::FillSelection),
         VK_RETURN if shift => return Some(Intent::Advance(CursorStep::Up)),
+        VK_RETURN if control => return Some(Intent::FillSelection),
         VK_RETURN => return Some(Intent::Confirm),
         VK_TAB if shift => return Some(Intent::Advance(CursorStep::Left)),
         VK_TAB => return Some(Intent::Advance(CursorStep::Right)),
@@ -428,6 +428,11 @@ mod tests {
         assert_eq!(
             key_intent(VK_RETURN, control()),
             Some(Intent::FillSelection)
+        );
+        // Ctrl+Shift+Enter は今までどおり確定して上へ。
+        assert_eq!(
+            key_intent(VK_RETURN, control_shift()),
+            Some(Intent::Advance(CursorStep::Up))
         );
     }
 

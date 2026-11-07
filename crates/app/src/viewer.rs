@@ -310,7 +310,8 @@ impl Viewer {
     /// （読めない・行が無ければ縦には動かない）。コピーなら選択の行を読んで文字列にする。
     fn effect(&mut self, effect: DocumentEffect) -> Option<ClipboardText> {
         match effect {
-            DocumentEffect::Stay => None,
+            // 行を読んで書くには窓が要るので `intent` が受ける（ここへは来ない）。
+            DocumentEffect::Stay | DocumentEffect::ReadPasted { .. } => None,
             DocumentEffect::Read { first_body } => {
                 let first = self.document.line_of(first_body);
                 if let Ok((cells, cuts)) = self.read_lines(first, WINDOW_RECORDS) {
@@ -905,12 +906,6 @@ impl Session for Viewer {
             self.open_new_window();
             return None;
         }
-        // Ctrl+Enter：編集中の欄の文字を選んだ範囲のすべてのセルに書く（貼り付けと同じ道・EDIT-02）。
-        if intent == Intent::FillSelection {
-            let request = self.document.fill_selection();
-            self.finish_paste(request, view);
-            return None;
-        }
         if let Intent::Zoom(step) = intent {
             // 文字の大きさも配色と同じく、ファイルの画面の状態ではないので設定として持つ（ADR 0020）。
             let zoom = self.zoom().stepped(step);
@@ -935,7 +930,13 @@ impl Session for Viewer {
         {
             self.document.notify(Notice::SettingsUnsaved);
         }
-        let copied = self.effect(effect);
+        // Ctrl+Enter の一括の入力は、貼り付けと同じく行を読んでから書く（EDIT-02）。
+        let copied = if let DocumentEffect::ReadPasted { first_line, count } = effect {
+            self.finish_paste(PasteRequest::Read { first_line, count }, view);
+            None
+        } else {
+            self.effect(effect)
+        };
         self.refresh_totals();
         self.sync_ticker();
         copied
