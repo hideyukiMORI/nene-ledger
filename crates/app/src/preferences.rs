@@ -15,6 +15,7 @@ use nene_ledger_application::settings_port::SettingsPort;
 use nene_ledger_application::theme_state::ThemeState;
 use nene_ledger_application::theme_step::ThemeStep;
 use nene_ledger_application::zoom_level::ZoomLevel;
+use nene_ledger_core::find_options::FindOptions;
 use nene_ledger_core::theme_choice::ThemeChoice;
 
 /// 起動をまたいで残す見た目。設定（application）と、今の配色と、書く先（adapters-x11）を結ぶだけ（ARC-006）。
@@ -103,6 +104,15 @@ impl Preferences {
             return Ok(());
         }
         self.settings = self.settings.with_detail(detail);
+        self.save()
+    }
+
+    /// 検索の条件を替えて書く（変わらなければ書かない・ADR 0030 の決定 3・GitHub Issue #213）。
+    pub(crate) fn set_find(&mut self, find: FindOptions) -> Result<(), SettingsFailure> {
+        if self.settings.find() == find {
+            return Ok(());
+        }
+        self.settings = self.settings.with_find(find);
         self.save()
     }
 
