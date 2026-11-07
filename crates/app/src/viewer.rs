@@ -440,10 +440,12 @@ impl Viewer {
 
     /// 検索の欄を開く。前に探した文字と条件を入れておく（ADR 0030 の決定 1・3）。
     fn open_find(&mut self) {
-        let (text, options) = self.document.find_query().map_or(
-            (String::new(), self.preferences.settings().find()),
-            |query| (String::from(query.text()), query.options()),
-        );
+        let text = self
+            .document
+            .find_query()
+            .map_or_else(String::new, |query| String::from(query.text()));
+        // 条件はいつも設定のもの（切り替えたら書くので、この窓でも次の起動でも同じ・ADR 0030 の決定 3）。
+        let options = self.preferences.settings().find();
         let colors = self.preferences.theme().palette();
         let mut palette = CommandPalette::open_find(&text, options);
         // 検索の欄から Ctrl+H で置換の欄へ切り替えたときのために、前に置き換えた文字を入れておく（GitHub Issue #187）。
@@ -473,10 +475,12 @@ impl Viewer {
 
     /// 置換の欄を開く（Ctrl+H）。前に探した文字と条件、前に置き換えた文字を入れておく。
     fn open_replace(&mut self) {
-        let (text, options) = self.document.find_query().map_or(
-            (String::new(), self.preferences.settings().find()),
-            |query| (String::from(query.text()), query.options()),
-        );
+        let text = self
+            .document
+            .find_query()
+            .map_or_else(String::new, |query| String::from(query.text()));
+        // 条件はいつも設定のもの（切り替えたら書くので、この窓でも次の起動でも同じ・ADR 0030 の決定 3）。
+        let options = self.preferences.settings().find();
         let colors = self.preferences.theme().palette();
         self.palette = Some(OpenPalette::new(
             CommandPalette::open_replace(&text, &self.replacement, options),
@@ -621,44 +625,17 @@ impl Viewer {
 
     /// パレットが開いている間の意図。どのキーもパレットへ渡し、表には届けない（Issue #41）。
     fn palette_intent(&mut self, intent: Intent, view: WindowView) -> Option<ClipboardText> {
-        self.palette.as_ref()?;
         let current = self.preferences.theme().position();
-        let outcome = self.palette_outcome(intent, view, current);
-        // 検索の条件を切り替えたら、次の起動でも同じ条件にする（ADR 0030 の決定 3・GitHub Issue #213）。
-        if let Intent::FindToggle(_) = intent
-            && let Some(open) = &self.palette
-            && self
-                .preferences
-                .set_find(open.state().find_options())
-                .is_err()
-        {
+        let open = self.palette.as_mut()?;
+        let before = open.state().find_options();
+        let outcome = palette_outcome(open, intent, view, current);
+        // 検索の条件が変わったら、次の起動でも同じ条件にする（ADR 0030 の決定 3・GitHub Issue #213）。条件を変えられるのは
+        // 検索と置換の段だけなので、ほかの段の Alt+C などで既定に戻ることはない。
+        let after = open.state().find_options();
+        if after != before && self.preferences.set_find(after).is_err() {
             self.document.notify(Notice::SettingsUnsaved);
         }
         self.after_palette(outcome, view)
-    }
-
-    /// パレットが意図を受けた結果（押した位置は候補の行か、パレットの外か）。
-    fn palette_outcome(
-        &mut self,
-        intent: Intent,
-        view: WindowView,
-        current: usize,
-    ) -> PaletteOutcome {
-        let Some(open) = self.palette.as_mut() else {
-            return PaletteOutcome::Stay;
-        };
-        let state = open.state_mut();
-        if let Intent::Point { at, .. } = intent {
-            let layout = PaletteLayout::new(view, state);
-            match layout.item_at(at) {
-                Some(index) => state.click(index, current),
-                None if layout.contains(at) => PaletteOutcome::Stay,
-                // パレットの外のクリックは Esc と同じ（試した配色も戻す）。
-                None => state.handle(Intent::Cancel, current),
-            }
-        } else {
-            state.handle(intent, current)
-        }
     }
 
     /// パレットの結果に応じて、閉じる・実行する・配色を試す・決める・戻す。
@@ -1013,4 +990,25 @@ fn moved_cuts(cuts: Vec<CutRecord>, first: u64, line: u64) -> impl Iterator<Item
         let moved = line.saturating_add(cut.record().saturating_sub(first));
         CutRecord::new(moved, cut.total_bytes())
     })
+}
+
+/// 開いているパレット `open` が意図を受けた結果（押した位置は候補の行か、パレットの外か）。
+fn palette_outcome(
+    open: &mut OpenPalette,
+    intent: Intent,
+    view: WindowView,
+    current: usize,
+) -> PaletteOutcome {
+    let state = open.state_mut();
+    if let Intent::Point { at, .. } = intent {
+        let layout = PaletteLayout::new(view, state);
+        match layout.item_at(at) {
+            Some(index) => state.click(index, current),
+            None if layout.contains(at) => PaletteOutcome::Stay,
+            // パレットの外のクリックは Esc と同じ（試した配色も戻す）。
+            None => state.handle(Intent::Cancel, current),
+        }
+    } else {
+        state.handle(intent, current)
+    }
 }

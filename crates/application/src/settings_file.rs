@@ -39,17 +39,26 @@ pub fn encode(settings: &Settings) -> String {
         DetailPane::Open => "open",
         DetailPane::Closed => "closed",
     };
+    let head = format!(
+        "theme = {}\nzoom = {}\ndetail = {detail}\n",
+        settings.theme().keyword(),
+        settings.zoom().percent()
+    );
+    // 検索の条件が既定なら版 1 のまま書く（版 1 しか読めない古い exe でも、配色と文字の大きさを失わない）。
+    if settings.find() == FindOptions::standard() {
+        return format!("version = {OLD_VERSION}\n{head}");
+    }
     let find: alloc::vec::Vec<&str> = FIND_FLAGS
         .iter()
         .filter(|(_, on, _)| on(settings.find()))
         .map(|(name, _, _)| *name)
         .collect();
-    format!(
-        "version = {VERSION}\ntheme = {}\nzoom = {}\ndetail = {detail}\nfind = {}\n",
-        settings.theme().keyword(),
-        settings.zoom().percent(),
-        find.join(" ")
-    )
+    let find = if find.is_empty() {
+        String::from("find =")
+    } else {
+        format!("find = {}", find.join(" "))
+    };
+    format!("version = {VERSION}\n{head}{find}\n")
 }
 
 /// 検索の条件の鍵の言葉・入っているか・入れ替える関数。
@@ -76,31 +85,21 @@ const FIND_FLAGS: [FindFlag; 5] = [
     ("regex", FindOptions::regex, FindOptions::toggled_regex),
 ];
 
-/// `find` の値（条件の名前の並び）を読む。知らない名前・同じ名前の重なりは `None`。
+/// `find` の値（条件の名前の並び）を読む。どれも区別しない条件から、名前の条件を 1 つずつ入れる。知らない名前・同じ名前の
+/// 重なりは `None`。
 fn parse_find(value: &str) -> Option<FindOptions> {
-    let names: alloc::vec::Vec<&str> = value.split_whitespace().collect();
-    for (index, name) in names.iter().enumerate() {
-        let known = FIND_FLAGS.iter().any(|(flag, _, _)| flag == name);
-        if !known || names.get(..index)?.contains(name) {
-            return None;
-        }
-    }
-    Some(
-        FIND_FLAGS
-            .iter()
-            .fold(FindOptions::standard(), |options, (name, on, toggle)| {
-                if on(options) == names.contains(name) {
-                    options
-                } else {
-                    toggle(options)
-                }
-            }),
-    )
+    // 既定はひらがなカタカナだけを区別するので、それを外すとどれも区別しない。
+    let nothing = FindOptions::standard().toggled_kana();
+    value.split_whitespace().try_fold(nothing, |options, name| {
+        let (_, on, toggle) = FIND_FLAGS.iter().find(|(flag, _, _)| *flag == name)?;
+        (!on(options)).then(|| toggle(options))
+    })
 }
 
 /// 読み取り中の値。鍵ごとに、まだ読んでいなければ `None`。
 struct Reading {
-    version: Option<()>,
+    /// 読んだ版（版 1 なら `false`）。
+    version: Option<bool>,
     theme: Option<ThemeChoice>,
     zoom: Option<ZoomLevel>,
     detail: Option<DetailPane>,
@@ -122,7 +121,7 @@ impl Reading {
     fn take(&mut self, key: &str, value: &str) -> Option<()> {
         match key {
             "version" if self.version.is_none() && (value == VERSION || value == OLD_VERSION) => {
-                self.version = Some(());
+                self.version = Some(value == VERSION);
             }
             "find" if self.find.is_none() => self.find = Some(parse_find(value)?),
             "theme" if self.theme.is_none() => self.theme = Some(ThemeChoice::from_keyword(value)?),
@@ -143,7 +142,10 @@ impl Reading {
 
     /// 版が書いてあれば設定にする。無い鍵は初期値で補う。
     fn into_settings(self) -> Option<Settings> {
-        self.version?;
+        // 版 1 には `find` の鍵が無い（あれば読めない版 1 として断る）。
+        if !self.version? && self.find.is_some() {
+            return None;
+        }
         let initial = Settings::initial();
         Some(
             initial
@@ -170,7 +172,7 @@ mod tests {
         let text = encode(&settings);
         assert_eq!(
             text,
-            "version = 2\ntheme = solarized-dark\nzoom = 110\ndetail = closed\nfind = kana\n"
+            "version = 1\ntheme = solarized-dark\nzoom = 110\ndetail = closed\n"
         );
         assert_eq!(parse(&text), Some(settings));
         assert_eq!(
@@ -196,6 +198,11 @@ mod tests {
         }
         let none = parse("version = 2\nfind =").map(Settings::find);
         assert_eq!(none, Some(standard.toggled_kana()));
+        // 既定の条件なら版 1 のまま書く（古い exe でも読める）。そうでなければ版 2。どれも区別しないなら値は空（後ろに空白を
+        // 残さない）。
+        assert!(encode(&Settings::initial()).starts_with("version = 1\n"));
+        let nothing = encode(&Settings::initial().with_find(standard.toggled_kana()));
+        assert!(nothing.starts_with("version = 2\n") && nothing.ends_with("\nfind =\n"));
         let old = parse("version = 1\ntheme = system\nzoom = 100\ndetail = open\n");
         assert_eq!(old, Some(Settings::initial()));
         assert_eq!(
@@ -224,6 +231,7 @@ mod tests {
             "version = 2\nfind = case case\n",
             "version = 2\nfind = loose\n",
             "version = 2\nfind = kana\nfind = case\n",
+            "version = 1\nfind = case\n",
             "version = 1\ncolor = red\n",
             "version = 1\ntheme = no-such-theme\n",
             "version = 1\nzoom = 123\n",
