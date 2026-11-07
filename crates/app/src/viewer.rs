@@ -953,10 +953,12 @@ impl Session for Viewer {
             self.refresh_totals();
             return;
         }
-        // パレットの欄には 1 行の字として打つ（改行とタブは打たない）。
-        for character in text.chars().filter(|character| !character.is_control()) {
-            let _clipboard = self.intent(Intent::Type(character), view);
-        }
+        // パレットの欄には 1 行の字として一度に足す（改行とタブは打たない・候補を探し直すのは 1 回・GitHub Issue #207）。
+        let outcome = self.palette.as_mut().map_or(PaletteOutcome::Stay, |open| {
+            open.state_mut().insert_text(text)
+        });
+        self.palette_took_last = true;
+        let _clipboard = self.after_palette(outcome, view);
     }
 
     fn composition_area(&self, view: WindowView) -> Option<PixelRect> {

@@ -454,6 +454,26 @@ impl CommandPalette {
     }
 
     /// 欄に字 `typed` を足す（`None` は 1 字消す）。上書きを尋ねていればやめ、候補を頭から選び直す。
+    /// 貼った文字列 `text` を、打っている欄（置換の段で置き換える欄を打っていればそちら、ほかは検索の欄）に一度に足す。
+    /// 改行・タブなどの制御文字は打たない。1 字ずつ `Intent::Type` を渡したときと同じ欄・同じ答えになるが、候補を探し
+    /// 直すのは 1 回だけ（1 字ごとに探し直すと、長い文字列で字の数の 2 乗の手間になり窓が止まった・GitHub Issue #207）。
+    pub fn insert_text(&mut self, text: &str) -> PaletteOutcome {
+        let typed: String = text
+            .chars()
+            .filter(|character| !character.is_control())
+            .collect();
+        if typed.is_empty() {
+            return PaletteOutcome::Stay;
+        }
+        if self.mode == (PaletteMode::Replace { with: true }) {
+            self.replacement.push_str(&typed);
+            return PaletteOutcome::Stay;
+        }
+        self.query.push_str(&typed);
+        self.stop_asking();
+        self.retarget(0)
+    }
+
     fn edit_query(&mut self, typed: Option<char>) -> PaletteOutcome {
         match typed {
             Some(character) => self.query.push(character),
@@ -992,5 +1012,32 @@ mod tests {
         let mut commands = CommandPalette::open();
         commands.ask_overwrite();
         assert_eq!(commands.mode(), PaletteMode::Commands);
+    }
+
+    /// 貼った文字列を一度に足すと、1 字ずつ打ったときと同じ欄・同じ答えになる（制御文字は打たない・GitHub Issue #207）。
+    #[test]
+    fn inserting_text_at_once_equals_typing_it() {
+        let options = FindOptions::standard();
+        let starts = [
+            CommandPalette::open(),
+            CommandPalette::open_go_to(),
+            CommandPalette::open_find("a", options),
+            CommandPalette::open_replace("", "", options),
+            CommandPalette::open_replace("a", "b", options),
+            CommandPalette::open_save_as(String::from("/tmp/")),
+        ];
+        for text in ["", "hozon", "12,3", "東京\tx\r\ny", "about"] {
+            for start in &starts {
+                let mut typed = start.clone();
+                let mut last = PaletteOutcome::Stay;
+                for character in text.chars().filter(|character| !character.is_control()) {
+                    last = typed.handle(Intent::Type(character), 0);
+                }
+                let mut inserted = start.clone();
+                let outcome = inserted.insert_text(text);
+                assert_eq!(inserted, typed, "{text:?} {:?}", start.mode());
+                assert_eq!(outcome, last, "{text:?} {:?}", start.mode());
+            }
+        }
     }
 }
