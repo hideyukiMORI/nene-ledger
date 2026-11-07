@@ -157,12 +157,20 @@ fn rect(left: u32, top: u32, width: u32, height: u32) -> PixelRect {
     PixelRect::new(PixelPoint::new(left, top), PixelSize::new(width, height))
 }
 
-/// 候補が無くても取る行の数。知らせの 1 行、置換の段は置き換え方のキーと条件の 2 行（ADR 0030 の決定 6）。
+/// 候補が無くても取る行の数。知らせの 1 行、探す段は条件の 2 行、置換の段は置き換え方のキーと条件の 3 行（ADR 0030 の
+/// 決定 3・6・GitHub Issue #199）。
 fn least_rows(mode: PaletteMode) -> u32 {
-    if let PaletteMode::Replace { .. } = mode {
-        2
-    } else {
-        1
+    match mode {
+        PaletteMode::Replace { .. } => 3,
+        PaletteMode::Find => 2,
+        PaletteMode::Commands
+        | PaletteMode::GoTo
+        | PaletteMode::Keys
+        | PaletteMode::About
+        | PaletteMode::Themes { .. }
+        | PaletteMode::Reading { .. }
+        | PaletteMode::Candidates { .. }
+        | PaletteMode::SaveAs { .. } => 1,
     }
 }
 

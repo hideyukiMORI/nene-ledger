@@ -286,6 +286,19 @@ impl<'state> PalettePainter<'state> {
                 "部分一致"
             },
         );
+        let folding = format!(
+            "Alt+Z 全角半角を{} · Alt+K ひらがなカタカナを{}",
+            if options.match_width() {
+                "区別する"
+            } else {
+                "区別しない"
+            },
+            if options.match_kana() {
+                "区別する"
+            } else {
+                "区別しない"
+            },
+        );
         let note = self.note.map(String::from);
         let lines = if let PaletteMode::Replace { .. } = self.palette.mode() {
             vec![
@@ -293,9 +306,10 @@ impl<'state> PalettePainter<'state> {
                     String::from("Enter 置き換えて次へ · Alt+A 全部 · Shift+Enter 前を探す")
                 }),
                 conditions,
+                folding,
             ]
         } else {
-            vec![conditions]
+            vec![conditions, folding]
         };
         for (slot, text) in lines.into_iter().enumerate() {
             let row = self.layout.row(slot);
@@ -727,11 +741,37 @@ mod tests {
             FindOptions::toggled_case,
             FindOptions::toggled_whole_cell,
             FindOptions::toggled_regex,
+            FindOptions::toggled_width,
+            FindOptions::toggled_kana,
         ] {
             let flipped: Vec<FindOptions> = options.iter().map(|&one| toggle(one)).collect();
             options.extend(flipped);
         }
         options
+    }
+
+    /// 探す段と置換の段は、全角半角とひらがなカタカナの今の条件と切り替えるキーを 1 行で出す（GitHub Issue #199）。
+    #[test]
+    fn the_find_steps_show_the_width_and_kana_conditions() {
+        let standard = FindOptions::standard();
+        for (options, wanted) in [
+            (
+                standard,
+                "Alt+Z 全角半角を区別しない · Alt+K ひらがなカタカナを区別する",
+            ),
+            (
+                standard.toggled_width().toggled_kana(),
+                "Alt+Z 全角半角を区別する · Alt+K ひらがなカタカナを区別しない",
+            ),
+        ] {
+            for palette in [
+                CommandPalette::open_find("b", options),
+                CommandPalette::open_replace("b", "", options),
+            ] {
+                let commands = palette.paint(view(), colors(), DetailPane::Closed);
+                assert!(texts(&commands).contains(&wanted), "{:?}", palette.mode());
+            }
+        }
     }
 
     /// 探す段と置換の段の案内は、条件のどの組み合わせでもパレットの幅に収まる長さ（打った文字は除く・Issue #175）。
@@ -749,7 +789,7 @@ mod tests {
                 })
             })
             .collect();
-        assert_eq!(palettes.len(), 8 * 3 * 3);
+        assert_eq!(palettes.len(), 32 * 3 * 3);
         for palette in palettes {
             let commands = palette.paint(view(), colors(), DetailPane::Closed);
             let guides = texts(&commands).into_iter().filter(|&text| {

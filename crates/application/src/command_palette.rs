@@ -391,13 +391,16 @@ impl CommandPalette {
         Some(PaletteOutcome::Stay)
     }
 
-    /// 探す段の Enter（次）・Shift+Enter（前）・F3・Shift+F3 と、Alt+C・Alt+W の条件の切り替え（ADR 0030 の決定 1・3）。
+    /// 探す段の Enter（次）・Shift+Enter（前）・F3・Shift+F3 と、Alt+C・Alt+W・Alt+R・Alt+Z・Alt+K の条件の切り替え
+    /// （ADR 0030 の決定 1・3）。
     fn find_intent(&mut self, intent: Intent) -> PaletteOutcome {
         if let Intent::FindToggle(toggle) = intent {
             self.find_options = match toggle {
                 FindToggle::Case => self.find_options.toggled_case(),
                 FindToggle::WholeCell => self.find_options.toggled_whole_cell(),
                 FindToggle::Regex => self.find_options.toggled_regex(),
+                FindToggle::Width => self.find_options.toggled_width(),
+                FindToggle::Kana => self.find_options.toggled_kana(),
             };
             return PaletteOutcome::Stay;
         }
@@ -614,6 +617,22 @@ mod tests {
         assert!(palette.find_options().match_case() && palette.find_options().whole_cell());
         assert!(palette.items().is_empty());
         assert_eq!(palette.handle(Intent::Cancel, 0), PaletteOutcome::Close);
+    }
+
+    /// 全角半角とひらがなカタカナも 1 つずつ切り替わる。既定は全角半角を区別せず、かなは区別する（ADR 0030 の決定 3・
+    /// GitHub Issue #199）。
+    #[test]
+    fn width_and_kana_toggle_one_each() {
+        let mut palette = CommandPalette::open_find("か", FindOptions::standard());
+        assert!(!palette.find_options().match_width() && palette.find_options().match_kana());
+        assert_eq!(
+            palette.handle(Intent::FindToggle(FindToggle::Width), 0),
+            PaletteOutcome::Stay
+        );
+        assert!(palette.find_options().match_width() && palette.find_options().match_kana());
+        palette.handle(Intent::FindToggle(FindToggle::Kana), 0);
+        assert!(palette.find_options().match_width() && !palette.find_options().match_kana());
+        assert_eq!(palette.query(), "か");
     }
 
     /// 置換の段は 2 つの欄を Tab で替えて打つ（ADR 0030 の決定 6）。
