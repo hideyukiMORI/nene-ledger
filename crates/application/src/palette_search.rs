@@ -5,6 +5,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use nene_ledger_core::dialect_candidate::DialectCandidate;
+use nene_ledger_core::header_rows::HeaderRows;
 use nene_ledger_core::theme_catalog::SEEDS;
 
 use crate::command_id::CommandId;
@@ -129,6 +130,11 @@ pub fn readings(aspect: ReadingAspect, query: &str) -> Vec<PaletteItem> {
     {
         return vec![PaletteItem::Reading(ReadingChoice::Delimiter(byte))];
     }
+    if aspect == ReadingAspect::Header
+        && let Some(choices) = header_range(query)
+    {
+        return choices.into_iter().map(PaletteItem::Reading).collect();
+    }
     let wanted = compact(query);
     aspect
         .options()
@@ -140,6 +146,42 @@ pub fn readings(aspect: ReadingAspect, query: &str) -> Vec<PaletteItem> {
         })
         .map(PaletteItem::Reading)
         .collect()
+}
+
+/// 見出しの行の段で打った行の番号（GitHub Issue #315・専門家ペルソナの 3 巡目）。`2` は 2 行目から始まる見出し（1〜3 行）、
+/// `2-3`（`〜` も）は 2〜3 行目の見出しだけ。数でなければ `None`（今までどおり名前で絞る）。範囲が見出しにできない
+/// （0 行目・逆・4 行以上）なら空。
+fn header_range(query: &str) -> Option<Vec<ReadingChoice>> {
+    let text = query.trim();
+    let (from, to) = match text.split_once(['-', '〜', '~']) {
+        Some((from, to)) => (from.trim(), Some(to.trim())),
+        None => (text, None),
+    };
+    let number = |part: &str| -> Option<u64> {
+        (!part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
+            .then(|| part.parse::<u64>().ok())
+            .flatten()
+    };
+    let first = number(from)?.checked_sub(1);
+    let Some(first) = first else {
+        return Some(Vec::new());
+    };
+    let Some(to) = to else {
+        return Some(
+            (1..=HeaderRows::MAX)
+                .filter_map(|count| HeaderRows::new(first, count))
+                .map(|rows| ReadingChoice::Header(Some(rows)))
+                .collect(),
+        );
+    };
+    let last = number(to)?;
+    Some(
+        last.checked_sub(first)
+            .and_then(|count| HeaderRows::new(first, count))
+            .map(|rows| ReadingChoice::Header(Some(rows)))
+            .into_iter()
+            .collect(),
+    )
 }
 
 /// 判別の候補 `list`（点数の順）。何も打たなければ全部をその順で。打てば区切りの英字の検索語か名前に含むもの（Issue #3）。
@@ -325,5 +367,32 @@ mod tests {
             ids(&commands("kensaku"))
         );
         assert_eq!(ids(&commands_with_recent("", &[])), ids(&commands("")));
+    }
+
+    /// 見出しの行の段は、行の番号を打てばそこから始まる見出しに、`2-3` と打てばその範囲だけに絞る（GitHub Issue #315）。
+    #[test]
+    fn header_rows_are_picked_by_their_line_numbers() {
+        let names = |query: &str| -> Vec<String> {
+            readings(ReadingAspect::Header, query)
+                .into_iter()
+                .filter_map(|item| match item {
+                    PaletteItem::Reading(choice) => Some(choice.name()),
+                    PaletteItem::Command(_)
+                    | PaletteItem::Theme(_)
+                    | PaletteItem::Key(_)
+                    | PaletteItem::About(_)
+                    | PaletteItem::Candidate(_) => None,
+                })
+                .collect()
+        };
+        assert_eq!(
+            names("2"),
+            vec!["2 行目が見出し", "2〜3 行目が見出し", "2〜4 行目が見出し"]
+        );
+        assert_eq!(names("2-3"), vec!["2〜3 行目が見出し"]);
+        assert_eq!(names(" 2〜3 "), vec!["2〜3 行目が見出し"]);
+        assert!(names("3-2").is_empty() && names("1-5").is_empty() && names("0").is_empty());
+        // 数でなければ今までどおり名前で絞る。
+        assert_eq!(names("header").len(), ReadingAspect::Header.options().len());
     }
 }
