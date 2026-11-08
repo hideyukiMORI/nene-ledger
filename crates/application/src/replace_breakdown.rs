@@ -8,38 +8,11 @@ use alloc::vec::Vec;
 use nene_ledger_core::cell_change::CellChange;
 use nene_ledger_core::display_width::display_columns;
 
+use crate::pair_group::PairGroup;
 use crate::status_line::group_digits;
 
 /// 確かめの行で、値を切る桁（全角 = 2）。いちばん長い行（組・100 万セル・残りの組の数）が案内の幅（64 桁）に収まる長さ。
 const VALUE_COLUMNS: u32 = 7;
-
-/// 「前 → 後」の組のまとまり（セル全体が変わる組か、一部だけ変わる組か）：いちばん多い組・組の数・セルの数。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PairGroup {
-    top: (String, String, usize),
-    kinds: usize,
-    cells: usize,
-}
-
-impl PairGroup {
-    /// いちばん多い組（前・後・セルの数）。同じ数なら前の値・後の値の順で先のもの。
-    #[must_use]
-    pub const fn top(&self) -> &(String, String, usize) {
-        &self.top
-    }
-
-    /// 組の数。
-    #[must_use]
-    pub const fn kinds(&self) -> usize {
-        self.kinds
-    }
-
-    /// セルの数。
-    #[must_use]
-    pub const fn cells(&self) -> usize {
-        self.cells
-    }
-}
 
 /// 全部の置換で、セルの値が「前 → 後」にどう変わるか。**セル全体が変わる組**（後の値が置き換える文字そのもの）と、
 /// **一部だけ変わる組**（部分一致で、当たった所がセルの全体でない）に分ける。980 → 990 の部分一致で 1980 → 1990 が
@@ -68,8 +41,8 @@ impl ReplaceBreakdown {
             *count = count.saturating_add(1);
         }
         Self {
-            whole: group_of(&whole),
-            partial: group_of(&partial),
+            whole: PairGroup::of(&whole),
+            partial: PairGroup::of(&partial),
         }
     }
 
@@ -91,21 +64,21 @@ impl ReplaceBreakdown {
     #[must_use]
     pub fn lines(&self, replacement: &str) -> Vec<(String, bool)> {
         let whole = self.whole.as_ref().map(|group| {
-            let rest = group.kinds.saturating_sub(1);
+            let rest = group.kinds().saturating_sub(1);
             let others = if rest > 0 {
                 format!(" · ほか {} 通り", digits(rest))
             } else {
                 String::new()
             };
-            (format!("{}{others}", pair(&group.top)), false)
+            (format!("{}{others}", pair(group.top())), false)
         });
         let partial = self.partial.as_ref().map(|group| {
             (
                 format!(
                     "一部だけ変わる {} セル: “{}”→“{}” など",
-                    digits(group.cells),
-                    clipped(&group.top.0),
-                    clipped(&group.top.1)
+                    digits(group.cells()),
+                    clipped(&group.top().0),
+                    clipped(&group.top().1)
                 ),
                 true,
             )
@@ -120,19 +93,6 @@ impl ReplaceBreakdown {
         }
         lines
     }
-}
-
-/// まとまりの組の数え `counts` から、いちばん多い組・組の数・セルの数。空なら `None`。
-fn group_of(counts: &BTreeMap<(&str, &str), usize>) -> Option<PairGroup> {
-    // 数の多い順。同じ数なら BTreeMap の順（前の値・後の値）で先のもの（`max_by_key` は同じなら後を返すので逆から）。
-    let (&(before, after), &count) = counts.iter().rev().max_by_key(|&(_, &count)| count)?;
-    Some(PairGroup {
-        top: (String::from(before), String::from(after), count),
-        kinds: counts.len(),
-        cells: counts
-            .values()
-            .fold(0_usize, |sum, &cells| sum.saturating_add(cells)),
-    })
 }
 
 /// 組 1 つの短い形（値は切る）。
