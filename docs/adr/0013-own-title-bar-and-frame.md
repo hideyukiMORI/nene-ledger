@@ -23,6 +23,8 @@ nene-ruler は飾りのない窓を X11 と Windows で自前で描いた実績�
 5. **キーボードとスクリーンリーダー**: 最小化・最大化・閉じるはキーボードでもできる（システムメニュー・ショートカット）。ボタンを UI Automation に載せるのは A11Y-04 と一緒にフェーズ 2（WIN-11）
 6. **全画面**（F11）はフェーズ 2（WIN-10）
 
+> 2026-11-08 の追記（GitHub Issue #282）：決定 1 の影の `DwmExtendFrameIntoClientArea` はやめた。上の枠を 1 画素中身へ広げると、最大化ボタンの上で `HTMAXBUTTON` を返しても Windows 11 の Snap Layouts が出なかった（施主の実機で、呼ばない版だけ出た・gate-proofs 第 100 節）。影は、Windows 11 が角丸（`DWMWA_WINDOW_CORNER_PREFERENCE`）の窓に付けるものに任せる。Windows 10 の影は確かめていない。
+
 ## 強制
 
 - **active（実装後）**: 当たり判定の純関数のテスト（core・倍率ごと）

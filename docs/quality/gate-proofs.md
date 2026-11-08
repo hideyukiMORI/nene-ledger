@@ -1093,6 +1093,19 @@ Windows の exe の `--version`（コマンドプロンプトに結んで書く�
 | 3 | 最大化ボタンに指を乗せたままにすると Snap Layouts が出る（WIN-05） | 「でない」→ GitHub Issue #282 |
 | 4 | 窓の周りの影と角の丸み（WIN-06・Issue #55） | 「OK」 |
 
+## 100. Windows 11 の Snap Layouts（GitHub Issue #282・WIN-05）— 施主の Windows の実機（QLT-013）
+
+2026-11-08、第 99 節の 3 で Snap Layouts が出なかった。施主の機械では、ほかのアプリ（エクスプローラー・メモ帳）では出る〔伝聞：施主の報告〕。原因を探すため、main `dd302ea` から試しの exe を作り（リポジトリには入れていない）、施主の機械の試しの置き場で施主が見た。
+
+| 試し | 変えたこと | 施主の報告 |
+| --- | --- | --- |
+| A | 窓の部品の上で `TrackMouseEvent` を呼ばない | 出ない（指を外すとボタンの色は消える） |
+| B | `TrackMouseEvent` に `TME_HOVER` も頼む | 出ない |
+| 記録 | 窓の手続きに届いたメッセージを全部ファイルに書く | 出ない。最大化ボタンの上で 3.6 秒止めた間、`WM_NCHITTEST` は毎回 9（`HTMAXBUTTON`）を返し、`WM_NCMOUSEMOVE`（wparam 9）と `WM_SETCURSOR`（当たり 9）は全部既定の手続きに渡っていた。窓の型は `0x04CF0000`（`WS_OVERLAPPEDWINDOW` ＋ `WS_CLIPSIBLINGS`） |
+| C | `DwmExtendFrameIntoClientArea`（上の枠を 1 画素中身へ広げる）を呼ばない | **出た**。影と角丸は「いいと思う」 |
+
+当たり判定とメッセージの渡し方は Microsoft の説明どおりで、違いは DWM の枠を中身へ広げるかだけだった。GitHub Issue #282 で C と同じ変更を入れた（ui-win32 の `decorate`）。Windows 11 は角丸（`DWMWA_WINDOW_CORNER_PREFERENCE`）の窓に影を付けるので、影は残る。Windows 10 の影は確かめていない。
+
 ## 7. active の規則と、その証明
 
 CNF-009 は active の規則ごとに `| ID |` で始まる行がここにあることを要求する。

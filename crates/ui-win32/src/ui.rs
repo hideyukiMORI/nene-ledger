@@ -22,12 +22,10 @@ use nene_ledger_core::preedit::Preedit;
 use nene_ledger_core::window_placement::WindowPlacement;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Dwm::{
-    DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND, DwmExtendFrameIntoClientArea,
-    DwmSetWindowAttribute,
+    DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND, DwmSetWindowAttribute,
 };
 use windows::Win32::Graphics::Gdi::{BeginPaint, EndPaint, PAINTSTRUCT, ScreenToClient};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::UI::Controls::MARGINS;
 use windows::Win32::UI::HiDpi::{
     DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, GetDpiForWindow, GetSystemMetricsForDpi,
     SetProcessDpiAwarenessContext,
@@ -102,7 +100,7 @@ pub struct Ui {
 
 impl Ui {
     /// 題名 `title` の窓を作る（まだ見せない）。プロセスを per-monitor v2 の倍率の対応にし、窓の出る画面の倍率で
-    /// 大きさを決め、影と角丸を DWM に頼む。
+    /// 大きさを決め、角丸（と影）を DWM に頼む。
     ///
     /// # Errors
     ///
@@ -297,25 +295,21 @@ fn scale_of(window: HWND) -> DisplayScale {
     }
 }
 
-/// 影（枠を 1 画素だけ中身へ広げる）と角丸を DWM に頼む（ADR 0013 の 1・WIN-06）。失敗しても続ける（古い Windows）。
+/// 角丸を DWM に頼む（ADR 0013 の 1・WIN-06）。Windows 11 は角丸の窓に影も付ける。失敗しても続ける（古い Windows）。
+///
+/// 🔴 枠を中身へ広げる `DwmExtendFrameIntoClientArea` は呼ばない。呼ぶと、最大化ボタンの上で `HTMAXBUTTON` を返しても
+/// Windows 11 の Snap Layouts が出ない（施主の実機で、呼ばない版だけ出た・GitHub Issue #282・gate-proofs 第 100 節）。
 #[expect(
     unsafe_code,
-    reason = "RS-010: DWM の DwmExtendFrameIntoClientArea / DwmSetWindowAttribute を呼ぶ（ADR 0002 の 4）"
+    reason = "RS-010: DWM の DwmSetWindowAttribute を呼ぶ（ADR 0002 の 4）"
 )]
 fn decorate(window: HWND) {
-    let margins = MARGINS {
-        cxLeftWidth: 0,
-        cxRightWidth: 0,
-        cyTopHeight: 1,
-        cyBottomHeight: 0,
-    };
     let corner = DWMWCP_ROUND;
     let Ok(size) = u32::try_from(size_of_val(&corner)) else {
         return;
     };
-    // SAFETY: margins と corner はこの関数の局所で、呼び出しの間だけ読まれる。
+    // SAFETY: corner はこの関数の局所で、呼び出しの間だけ読まれる。
     unsafe {
-        let _shadowed: Result<(), _> = DwmExtendFrameIntoClientArea(window, &raw const margins);
         let _rounded: Result<(), _> = DwmSetWindowAttribute(
             window,
             DWMWA_WINDOW_CORNER_PREFERENCE,
