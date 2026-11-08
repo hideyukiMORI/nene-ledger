@@ -35,6 +35,50 @@ impl PaletteLayout {
     /// 窓 `view` での、パレット `palette` の配置。選んでいる候補が見えるように、先頭の候補をずらす。
     #[must_use]
     pub fn new(view: WindowView, palette: &CommandPalette) -> Self {
+        let metrics = view.metrics();
+        let top = view
+            .chrome()
+            .title_bar()
+            .size()
+            .height()
+            .saturating_add(metrics.px(MARGIN));
+        let layout = Self::at(view, palette, top);
+        if !palette.is_low() {
+            return layout;
+        }
+        // 窓の下へ寄せる（下の端との空きは上と同じ・GitHub Issue #286）。窓より高ければ上のまま。
+        let height = layout.panel.size().height();
+        let low = view
+            .size()
+            .height()
+            .saturating_sub(metrics.px(MARGIN))
+            .saturating_sub(height);
+        if low > top {
+            layout.shifted(low.saturating_sub(top))
+        } else {
+            layout
+        }
+    }
+
+    /// 縦に `down` 画素ずらした配置（候補の数は上に置いたときと同じ）。
+    fn shifted(self, down: u32) -> Self {
+        let move_rect = |area: PixelRect| {
+            PixelRect::new(
+                PixelPoint::new(area.origin().x(), area.origin().y().saturating_add(down)),
+                area.size(),
+            )
+        };
+        Self {
+            panel: move_rect(self.panel),
+            field: move_rect(self.field),
+            hint: self.hint.map(move_rect),
+            list_top: self.list_top.saturating_add(down),
+            ..self
+        }
+    }
+
+    /// 上の端を `top` に置いた配置。
+    fn at(view: WindowView, palette: &CommandPalette, top: u32) -> Self {
         let size = view.size();
         let metrics = view.metrics();
         let line = metrics.line_height();
@@ -47,12 +91,6 @@ impl PaletteLayout {
             .clamp(metrics.px(MIN_WIDTH), metrics.px(MAX_WIDTH))
             .min(size.width().saturating_sub(margin.saturating_mul(2)));
         let left = size.width().saturating_sub(width) / 2;
-        let top = view
-            .chrome()
-            .title_bar()
-            .size()
-            .height()
-            .saturating_add(margin);
         let inner_left = left.saturating_add(padding);
         let inner_width = width.saturating_sub(padding.saturating_mul(2));
         let field = rect(
@@ -188,6 +226,7 @@ fn contains(rect: PixelRect, at: PixelPoint) -> bool {
 mod tests {
     use super::*;
     use crate::intent::Intent;
+    use nene_ledger_core::find_options::FindOptions;
     use nene_ledger_core::glyph_metrics::GlyphMetrics;
     use nene_ledger_core::window_placement::WindowPlacement;
 
@@ -255,5 +294,23 @@ mod tests {
         assert_eq!(layout.item_at(layout.row(9).origin()), Some(50));
         // 低い窓では候補の数を減らす（少なくとも 1）。
         assert_eq!(PaletteLayout::new(view(1024, 200), &palette).visible(), 1);
+    }
+
+    #[test]
+    fn a_lowered_panel_sits_at_the_bottom_with_the_same_rows() {
+        let mut palette = CommandPalette::open_find("x", FindOptions::standard());
+        let high = PaletteLayout::new(view(1024, 640), &palette);
+        palette.set_low(true);
+        let low = PaletteLayout::new(view(1024, 640), &palette);
+        // 下の端との空きは上と同じ 8。大きさと候補の数は変えない。
+        assert_eq!(bottom(low.panel()), 640 - 8);
+        assert_eq!(low.panel().size(), high.panel().size());
+        assert_eq!(low.visible(), high.visible());
+        let down = low.panel().origin().y() - high.panel().origin().y();
+        assert_eq!(low.field().origin().y(), high.field().origin().y() + down);
+        assert_eq!(low.row(0).origin().y(), high.row(0).origin().y() + down);
+        // 窓より高い箱は上のまま。
+        let short = PaletteLayout::new(view(1024, 120), &palette);
+        assert_eq!(short.panel().origin().y(), 43);
     }
 }

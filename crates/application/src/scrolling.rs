@@ -27,6 +27,20 @@ pub fn reveal_row(first: u64, row: u64, page_rows: u64) -> u64 {
     }
 }
 
+/// 行 `row` が、上の `covered` 行（表に重なった面の下）を除いた所に見えるようにした縦の表示の先頭（GitHub Issue #286）。
+/// 面の下に入るなら面のすぐ下へ出るまで戻し、下へ外れるなら [`reveal_row`] と同じ。`covered` は 1 画面より 1 行少なくまで。
+/// 表の先頭の行（`row < covered`）は送れないので、面の下に残る。
+#[must_use]
+pub fn reveal_row_below(first: u64, row: u64, page_rows: u64, covered: u64) -> u64 {
+    let page = page_rows.max(1);
+    let covered = covered.min(page.saturating_sub(1));
+    if row < first.saturating_add(covered) {
+        row.saturating_sub(covered)
+    } else {
+        reveal_row(first, row, page)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -60,5 +74,19 @@ mod tests {
         assert_eq!(reveal_row(10, 29, 20), 10);
         assert_eq!(reveal_row(10, 10, 0), 10);
         assert_eq!(reveal_row(10, 11, 0), 11);
+    }
+
+    #[test]
+    fn a_row_under_the_cover_comes_out_just_below_it() {
+        // 面が上の 3 行を覆う。1 画面 20 行。
+        assert_eq!(reveal_row_below(10, 11, 20, 3), 8);
+        assert_eq!(reveal_row_below(10, 13, 20, 3), 10);
+        assert_eq!(reveal_row_below(10, 40, 20, 3), 21);
+        assert_eq!(reveal_row_below(10, 5, 20, 3), 2);
+        // 表の先頭の行は送れない（面の下に残る）。
+        assert_eq!(reveal_row_below(0, 1, 20, 3), 0);
+        // 面が無ければ reveal_row と同じ。面が 1 画面より大きくても 1 行は見せる。
+        assert_eq!(reveal_row_below(10, 11, 20, 0), reveal_row(10, 11, 20));
+        assert_eq!(reveal_row_below(10, 40, 5, 9), 36);
     }
 }

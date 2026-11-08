@@ -79,7 +79,7 @@ use crate::scroll_bar::ScrollBar;
 use crate::scroll_orientation::ScrollOrientation;
 use crate::scrollbar_painter::ScrollbarPainter;
 use crate::scrollbars::Scrollbars;
-use crate::scrolling::{clamp_first, reveal_row};
+use crate::scrolling::{clamp_first, reveal_row, reveal_row_below};
 use crate::selection::Selection;
 use crate::selection_mode::SelectionMode;
 use crate::selection_stats::SelectionStats;
@@ -187,6 +187,8 @@ pub struct Document {
     find_query: Option<FindQuery>,
     /// 進んでいる検索。
     finding: Option<FindRun>,
+    /// 見つけたセルが下に入ったら困る、表に重なった面（窓の座標・開いている検索と置換のパレット・GitHub Issue #286）。
+    cover: Option<PixelRect>,
     /// 進んでいる全部の置換（数えている間と、件数を見せている間・ADR 0030 の決定 6）。
     replacing: Option<ReplaceRun>,
     /// 求めたコピーが切り取りなら、その範囲（`copy_text` で枠を作る）。
@@ -312,6 +314,7 @@ impl Document {
             cut: None,
             find_query: None,
             finding: None,
+            cover: None,
             replacing: None,
             cutting: None,
             access: Access::Writable,
@@ -2374,13 +2377,82 @@ impl Document {
     }
 
     /// 見つけたセル（行の並びの位置 `line`・表示の列 `column`）へカーソルを動かし、見えるように表示を動かす。
+    /// 表に重なった面（`cover`）の下に入るなら、面の下へ出るまで表を送る（GitHub Issue #286）。表の先頭で送れないことは
+    /// [`Self::cover_hides_cursor`] で分かる。
     fn reveal_found(&mut self, line: u64, column: usize, window: WindowView) -> DocumentEffect {
         let body = body_of(line, self.header_line());
         let page = self.page_rows(window);
         let current = self.view.first_body();
         self.select(CellPosition::new(body, column), SelectionMode::Collapse);
         self.first_column = self.reveal_column(column, window);
-        self.go_to(reveal_row(current, body, page), page)
+        let (above, below) = self.covered_rows(column, window);
+        let room = page.saturating_sub(below).max(1);
+        self.go_to(reveal_row_below(current, body, room, above), page)
+    }
+
+    /// 表示の列 `column` の本体の行のうち、`cover` の下に入る行の数（上から・下から）。面が本体の行の上の端に掛かれば
+    /// 上から、そうでなければ面の上の端より下を下から数える。列が面と横に重ならなければ `(0, 0)`。
+    fn covered_rows(&self, column: usize, window: WindowView) -> (u64, u64) {
+        let Some(cover) = self.cover else {
+            return (0, 0);
+        };
+        let body = self.bars(window).body();
+        let layout = self.layout(self.first_column, window.content_metrics());
+        let row = layout.row_height().max(1);
+        let Some(cell) = layout.cell_rect(0, column) else {
+            return (0, 0);
+        };
+        let left = body.origin().x().saturating_add(cell.origin().x());
+        let right = left.saturating_add(cell.size().width());
+        let (cover_left, cover_right) = (
+            cover.origin().x(),
+            cover.origin().x().saturating_add(cover.size().width()),
+        );
+        if right <= cover_left || cover_right <= left {
+            return (0, 0);
+        }
+        let rows_top = body
+            .origin()
+            .y()
+            .saturating_add(row.saturating_mul(self.fixed_rows()));
+        let rows_bottom = body.origin().y().saturating_add(body.size().height());
+        let (cover_top, cover_bottom) = (
+            cover.origin().y(),
+            cover.origin().y().saturating_add(cover.size().height()),
+        );
+        if cover_top <= rows_top {
+            (
+                u64::from(cover_bottom.saturating_sub(rows_top).div_ceil(row)),
+                0,
+            )
+        } else {
+            (
+                0,
+                u64::from(rows_bottom.saturating_sub(cover_top).div_ceil(row)),
+            )
+        }
+    }
+
+    /// 表に重なった面（窓の座標）を知らせる。見つけたセルをその下に隠さない（GitHub Issue #286）。`None` で無し。
+    pub fn set_cover(&mut self, cover: Option<PixelRect>) {
+        self.cover = cover;
+    }
+
+    /// 表をどう送っても、カーソルのセルが面の下に残るか（面が上なら表の先頭の行、面が下なら表の末尾の行）。合成ルートが
+    /// 面を反対の端へ寄せる（GitHub Issue #286）。
+    #[must_use]
+    pub fn cover_hides_cursor(&self, window: WindowView) -> bool {
+        let cursor = self.selection.cursor();
+        let page = self.page_rows(window);
+        let (above, below) = self.covered_rows(cursor.column(), window);
+        if cursor.body() < above.min(page.saturating_sub(1)) {
+            return true;
+        }
+        let Some(total) = self.extent().rows() else {
+            return false;
+        };
+        let room = page.saturating_sub(below).max(1);
+        below > 0 && cursor.body() >= total.saturating_sub(page).saturating_add(room)
     }
 
     /// IME の確定（ADR 0026 の決定 4）。欄に挿し、確定前の文字列は消える。編集していなければ入力の状態で編集に入る。
@@ -9023,6 +9095,85 @@ mod tests {
     fn again(document: &mut Document, forward: bool) {
         let effect = document.apply(Intent::FindAgain { forward }, normal());
         finish_finding(document, effect);
+    }
+
+    /// 見つけたセルが表に重なった面（開いている検索の箱）の下に入るなら、面の下へ出るまで表を送る。面と横に重ならない
+    /// 列は送らない。表の先頭で送れなければ知らせる（GitHub Issue #286）。
+    #[test]
+    fn a_found_cell_is_not_left_under_the_cover() {
+        let mut document = tall();
+        let window = normal();
+        let page = document.page_rows(window);
+        let body = document.bars(window).body();
+        let row = document.layout(0, window.content_metrics()).row_height();
+        let rows_top = body.origin().y() + row * document.fixed_rows();
+        // 面は窓の全幅で、本体の上の 3 行を覆う（3 行目の途中まで）。
+        let cover = PixelRect::new(
+            PixelPoint::new(0, 0),
+            PixelSize::new(window.size().width(), rows_top + row * 2 + 1),
+        );
+        document.set_cover(Some(cover));
+        assert_eq!(document.covered_rows(0, window), (3, 0));
+        let looking = |shown: &mut Document, record: u64| {
+            let query = FindQuery::new("x", FindOptions::standard());
+            assert_eq!(shown.find(query, true), DocumentEffect::Find);
+            shown.found(Some((record, 0)), window)
+        };
+        // 表示の先頭を 40 に。本体の 41 行目（レコード 42）は面の下に入るので、面のすぐ下へ。
+        document.show(41, cell_rows(&vec![vec![String::from("x")]; 20]));
+        assert_eq!(document.view().first_body(), 40);
+        assert_eq!(
+            looking(&mut document, 42),
+            DocumentEffect::Read { first_body: 38 }
+        );
+        assert!(!document.cover_hides_cursor(window));
+        // 面の下でない行は動かさない。
+        assert_eq!(looking(&mut document, 45), DocumentEffect::Stay);
+        assert!(page > 4);
+        // 表の先頭の行は送れないので、面の下に残ると分かる。
+        document.show(1, cell_rows(&vec![vec![String::from("x")]; 20]));
+        assert_eq!(looking(&mut document, 2), DocumentEffect::Stay);
+        assert!(document.cover_hides_cursor(window));
+    }
+
+    /// 面と横に重ならない列は覆われず、面が無ければ覆われない（GitHub Issue #286）。
+    #[test]
+    fn only_columns_beside_the_cover_are_covered() {
+        let mut document = tall();
+        let window = normal();
+        document.set_cover(Some(PixelRect::new(
+            PixelPoint::new(window.size().width() - 1, 0),
+            PixelSize::new(1, window.size().height()),
+        )));
+        assert_eq!(document.covered_rows(0, window), (0, 0));
+        // 下に寄せた面は、本体の下の行を覆う。その行の当たりは面の上へ出す。
+        let body = document.bars(window).body();
+        let row = document.layout(0, window.content_metrics()).row_height();
+        let bottom = body.origin().y() + body.size().height();
+        document.set_cover(Some(PixelRect::new(
+            PixelPoint::new(0, bottom - row * 2),
+            PixelSize::new(window.size().width(), row * 2),
+        )));
+        assert_eq!(document.covered_rows(0, window), (0, 2));
+        let page = document.page_rows(window);
+        let query = FindQuery::new("x", FindOptions::standard());
+        assert_eq!(document.find(query, true), DocumentEffect::Find);
+        // 本体の page - 1 行目（面の下）は、面の上の端の行へ。
+        assert_eq!(
+            document.found(Some((page, 0)), window),
+            DocumentEffect::Read { first_body: 2 }
+        );
+        // 表の末尾の行は上へ送れないので、下の面の下に残ると分かる。
+        assert_eq!(
+            document.find(FindQuery::new("x", FindOptions::standard()), true),
+            DocumentEffect::Find
+        );
+        let _effect = document.found(Some((99, 0)), window);
+        assert_eq!(document.selection().cursor(), CellPosition::new(98, 0));
+        assert!(document.cover_hides_cursor(window));
+        // 面が無ければ今までどおり。
+        document.set_cover(None);
+        assert_eq!(document.covered_rows(0, window), (0, 0));
     }
 
     /// 次を探し、F3 で続け、表の終わりから頭へ回って知らせる。前へも探せる（ADR 0030 の決定 1）。

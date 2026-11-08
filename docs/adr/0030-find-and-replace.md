@@ -98,6 +98,14 @@ M2 は「探して置き換え、壊れた行を直す」束を含む（ROADMAP�
 
 試して捨てた形（2026-11-07）：当たった字の背景を「背景から黄へ寄せ、字が読めるまで背景へ戻す」で作ると、暗い配色（solarized-dark・abyss など）では当たったセルの色とほぼ同じになり（チャンネルの差の和が 1）、見分けられなかった。字の色を濃くして書き直す形に変えると、全配色で差の和 107 以上・字の比 4.5 以上になった。
 
+### 8. 当たったセルを箱の下に隠さない（2026-11-09 追記・GitHub Issue #286）
+
+> 施主の外出中に、専門家ペルソナ 3 人の推しで作った（[見直しの記録](../research/2026-11-09-find-replace-ux-review.md)）。施主の確認を待つ。
+
+- 検索と置換の箱が開いている間、見つけたセルが箱の下に入るなら、**箱の下へ出るまで表を送る**（箱と横に重ならない列は送らない）
+- 表の端で送れない（箱が上で表の先頭の行・箱が下で表の末尾の行）ときは、**箱を反対の端へ寄せる**（上なら窓の下・下なら上）。寄せた位置は閉じるまでそのまま
+- 試して選ばなかった形：VS Code の `editor.find.addExtraSpaceOnTop`（1 行目の上に空きを足す）。表は見出しの行と行の番号を固定して描くので、空きを足すと見出しの固定の作りに手が入る。GNOME Text Editor は同じ問題が未解決（Issue #346）
+
 ## 強制
 
 - **active**（GitHub Issue #151 で入れた）:
@@ -124,6 +132,9 @@ M2 は「探して置き換え、壊れた行を直す」束を含む（ROADMAP�
   - 印を付ける問いは探す段と置換の段だけ（`only_the_find_and_replace_steps_mark_the_table`）。件数と確かめは置換の欄の案内に出し、Enter / Esc / 欄に打つ の扱いが決まっている（`counting_inside_the_open_field_waits_for_the_count`・`replacing_all_is_confirmed_inside_the_open_field`・`replacing_all_inside_the_open_field_can_be_declined`・`the_replace_step_shows_the_count_and_the_confirmation_in_place_of_its_keys`）
 - **active**（GitHub Issue #199 で入れた）:
   - 検索と置換の欄で、全角半角（Alt+Z）とひらがなカタカナ（Alt+K）を 1 つずつ切り替え、案内の行に今の条件を出す（application のテスト `width_and_kana_toggle_one_each`・`the_find_steps_show_the_width_and_kana_conditions`・案内の幅は 32 の条件の組み合わせで `find_and_replace_guides_fit_the_narrowest_palette`・ui-x11 と ui-win32 の `find_keys`）
+- **active**（GitHub Issue #286 で入れた）:
+  - 箱の下に入る行は箱のすぐ下（下の箱なら上）へ送り、箱と横に重ならない列は送らない。表の端で送れないことが分かる（application のテスト `a_found_cell_is_not_left_under_the_cover`・`only_columns_beside_the_cover_are_covered`・`a_row_under_the_cover_comes_out_just_below_it`）
+  - 下へ寄せた箱は、下の端との空きが上と同じで、大きさと行の数は変えない（`a_lowered_panel_sits_at_the_bottom_with_the_same_rows`）
 - **planned（実装の Issue で active にする）**:
   - 正規表現の逆戻りで止まらない（病的な式と入力の時間を測る・gate-proofs）
   - 1 GB の表で、最後の行にだけある値を見つける時間を DuckDB / qsv / EmEditor と同じファイルで記録（QLT-014。`grep` と `rg` との比べは benchmarks 第 8 節）
