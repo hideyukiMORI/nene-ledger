@@ -15,6 +15,7 @@ use nene_ledger_core::palette::Palette;
 use nene_ledger_core::pixel_point::PixelPoint;
 use nene_ledger_core::pixel_rect::PixelRect;
 use nene_ledger_core::pixel_size::PixelSize;
+use nene_ledger_core::text_encoding::TextEncoding;
 use nene_ledger_core::text_role::TextRole;
 use nene_ledger_core::theme_catalog::{COUNT, at};
 
@@ -283,25 +284,23 @@ impl<'state> PalettePainter<'state> {
         let text = match self.palette.items().get(self.palette.selected()) {
             Some(&PaletteItem::Theme(position)) => {
                 format!(
-                    "試し中: {}　Enter で決める・Esc で戻す",
+                    "Enter で決める · Esc で戻す · 試し中: {}",
                     at(position).name()
                 )
             }
             Some(&PaletteItem::Reading(choice)) => {
-                format!("試し中: {}　Enter で開き直す・Esc で戻す", choice.name())
+                format!("Enter で開き直す · Esc で戻す · 試し中: {}", choice.name())
             }
             Some(&PaletteItem::Candidate(candidate)) => format!(
-                "試し中: {}　Enter で開き直す・Esc で戻す",
+                "Enter で開き直す · Esc で戻す · 試し中: {}",
                 ReadingChoice::dialect(candidate.dialect()).name()
             ),
             Some(&PaletteItem::Command(_) | &PaletteItem::Key(_) | &PaletteItem::About(_))
             | None => String::new(),
         };
-        self.text_at(
-            from_left(hint, hint.origin().x()),
-            text,
-            self.colors.gutter_text(),
-        );
+        // 候補の行と同じ左の余白（GitHub Issue #312・前は 12 px 左にずれていた）。
+        let left = hint.origin().x().saturating_add(self.px(TEXT_INSET));
+        self.text_at(from_left(hint, left), text, self.colors.gutter_text());
     }
 
     /// 候補が無いときの知らせ（Backspace で戻れる）。
@@ -488,6 +487,46 @@ impl<'state> PalettePainter<'state> {
         self.text_at(from_left(row, left), text, color);
     }
 
+    /// 読み方の候補の右の字：今の読み方の印と、文字コードの日本語の注（事務の利用者が選べるように・GitHub Issue #312）。
+    fn reading_aside(&self, choice: ReadingChoice) -> String {
+        let current = self.is_current(choice).then_some("今の読み方");
+        let note = match choice {
+            ReadingChoice::Encoding(encoding) => Some(encoding_note(encoding)),
+            ReadingChoice::Delimiter(_)
+            | ReadingChoice::Quoting { .. }
+            | ReadingChoice::Header(_)
+            | ReadingChoice::Dialect { .. } => None,
+        };
+        [current, note]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join(" · ")
+    }
+
+    /// 配色の右の字：明暗と、開いたときの配色の印（GitHub Issue #312）。
+    fn theme_aside(&self, position: usize) -> String {
+        let appearance = match at(position).appearance() {
+            nene_ledger_core::appearance::Appearance::Light => "ライト",
+            nene_ledger_core::appearance::Appearance::Dark => "ダーク",
+        };
+        match self.palette.mode() {
+            PaletteMode::Themes { original } if original == position => {
+                format!("今の配色 · {appearance}")
+            }
+            PaletteMode::Themes { .. }
+            | PaletteMode::Commands
+            | PaletteMode::GoTo
+            | PaletteMode::Find
+            | PaletteMode::Replace { .. }
+            | PaletteMode::Keys
+            | PaletteMode::About
+            | PaletteMode::Reading { .. }
+            | PaletteMode::Candidates { .. }
+            | PaletteMode::SaveAs { .. } => String::from(appearance),
+        }
+    }
+
     /// 操作の行の右の字：キー。何も打っていない一覧の上の最近使った操作には「最近」を添える（GitHub Issue #309）。
     fn command_aside(&self, command: CommandId) -> String {
         let keys = command.keys().unwrap_or("");
@@ -503,7 +542,10 @@ impl<'state> PalettePainter<'state> {
     /// 候補の 1 行。選んでいれば選択の色で塗り、左に強調の色の帯（色だけに頼らない）。
     fn row(&mut self, slot: usize, item: PaletteItem, detail: DetailPane) {
         let row = self.layout.row(slot);
-        if self.layout.first().saturating_add(slot) == self.palette.selected() {
+        // このアプリについては読むだけなので、選んだ色を付けない（GitHub Issue #312）。
+        if self.layout.first().saturating_add(slot) == self.palette.selected()
+            && self.palette.mode() != PaletteMode::About
+        {
             self.fill(row, self.colors.selection());
             self.fill(
                 PixelRect::new(
@@ -519,14 +561,7 @@ impl<'state> PalettePainter<'state> {
                 String::from(command.name(detail)),
                 self.command_aside(command),
             ),
-            PaletteItem::Reading(choice) => (
-                choice.name(),
-                String::from(if self.is_current(choice) {
-                    "今の読み方"
-                } else {
-                    ""
-                }),
-            ),
+            PaletteItem::Reading(choice) => (choice.name(), self.reading_aside(choice)),
             PaletteItem::Candidate(candidate) => {
                 let choice = ReadingChoice::dialect(candidate.dialect());
                 let aside = candidate_aside(candidate, self.is_current(choice));
@@ -536,12 +571,10 @@ impl<'state> PalettePainter<'state> {
             PaletteItem::About(line) => (line.text(), String::new()),
             PaletteItem::Theme(position) => {
                 left = self.swatches(row, left, position);
-                let seed = at(position);
-                let appearance = match seed.appearance() {
-                    nene_ledger_core::appearance::Appearance::Light => "ライト",
-                    nene_ledger_core::appearance::Appearance::Dark => "ダーク",
-                };
-                (String::from(seed.name()), String::from(appearance))
+                (
+                    String::from(at(position).name()),
+                    self.theme_aside(position),
+                )
             }
         };
         // 名前は右の字（キー・印・点数）に重ねない。長ければ手前で切る。
@@ -678,6 +711,21 @@ impl<'state> PalettePainter<'state> {
     }
 }
 
+/// 文字コードの日本語の注（どんなファイルで使われるか・GitHub Issue #312）。
+fn encoding_note(encoding: TextEncoding) -> &'static str {
+    match encoding {
+        TextEncoding::Utf8 => "多くの道具の標準",
+        TextEncoding::Utf8WithBom => "Excel で開ける UTF-8",
+        TextEncoding::ShiftJis => "Windows・Excel の日本語",
+        TextEncoding::EucJp => "古い Unix の日本語",
+        TextEncoding::Windows1252 => "欧文の Windows",
+        TextEncoding::Utf16LeWithBom
+        | TextEncoding::Utf16BeWithBom
+        | TextEncoding::Utf16Le
+        | TextEncoding::Utf16Be => "Excel の Unicode テキスト",
+    }
+}
+
 /// 判別の候補の右に添える字。今の読み方の印・点数（千分率を百分率に）・いちばん多い列の数（OPEN-02）。
 fn candidate_aside(candidate: DialectCandidate, current: bool) -> String {
     let score = format!("{}% · {} 列", candidate.score() / 10, candidate.columns());
@@ -755,7 +803,18 @@ fn placeholder(mode: PaletteMode) -> &'static str {
             aspect: ReadingAspect::Delimiter,
             ..
         } => "英字で絞るか、区切りの字を 1 つ打つ（例: tab, #）",
-        PaletteMode::Reading { .. } => "英字で絞る（例: sjis, tab）",
+        PaletteMode::Reading {
+            aspect: ReadingAspect::Encoding,
+            ..
+        } => "英字で絞る（例: sjis, utf8）",
+        PaletteMode::Reading {
+            aspect: ReadingAspect::Quoting,
+            ..
+        } => "英字で絞る（例: single）",
+        PaletteMode::Reading {
+            aspect: ReadingAspect::Header,
+            ..
+        } => "行の番号で絞る（例: 2）",
         PaletteMode::Candidates { .. } => "英字で絞る（例: tab, comma）。上から判別の点数の順",
     }
 }
@@ -1183,7 +1242,7 @@ mod tests {
         assert!(shown.contains(&"タブ区切り・引用なし"));
         assert!(shown.contains(&"12% · 1 列"));
         assert!(shown.contains(
-            &"試し中: カンマ区切り・\"\" で引用符（RFC 4180）　Enter で開き直す・Esc で戻す"
+            &"Enter で開き直す · Esc で戻す · 試し中: カンマ区切り・\"\" で引用符（RFC 4180）"
         ));
         for character in "zz".chars() {
             palette.handle(Intent::Type(character), 0);
@@ -1227,7 +1286,7 @@ mod tests {
         let frozen = ThemeState::at(40).palette();
         let commands = palette.paint(view(), frozen, DetailPane::Open);
         let shown = texts(&commands);
-        assert!(shown.contains(&"試し中: ubuntu-aubergine　Enter で決める・Esc で戻す"));
+        assert!(shown.contains(&"Enter で決める · Esc で戻す · 試し中: ubuntu-aubergine"));
         assert!(shown.contains(&"ubuntu-aubergine") && shown.contains(&"ダーク"));
         assert!(shown.contains(&"neutral-light") && shown.contains(&"ライト"));
         // 見本は配色ごとに 3 色。面はパレットを開いたときの色（渡した色）で塗る。
@@ -1257,5 +1316,46 @@ mod tests {
         );
         let short = CommandPalette::open_save_as(String::from("/tmp/a.csv"));
         assert!(texts(&short.paint(view(), colors(), DetailPane::Closed)).contains(&"/tmp/a.csv"));
+    }
+
+    /// 2 段目の文言と印：文字コードの日本語の注・今の配色の印・見出しの段の案内・このアプリについては選ぶ色を付けない
+    /// （GitHub Issue #312）。
+    #[test]
+    fn second_steps_say_what_each_choice_is() {
+        let current = ReadingChoice::Encoding(TextEncoding::Utf8);
+        let mut encodings = CommandPalette::open();
+        encodings.enter_reading(ReadingAspect::Encoding, current);
+        let shown_encodings = encodings.paint(view(), colors(), DetailPane::Closed);
+        let texts_now = texts(&shown_encodings);
+        assert!(
+            texts_now.contains(&"今の読み方 · 多くの道具の標準"),
+            "{texts_now:?}"
+        );
+        assert!(texts_now.contains(&"英字で絞る（例: sjis, utf8）"));
+        let mut headers = CommandPalette::open();
+        headers.enter_reading(ReadingAspect::Header, ReadingChoice::Header(None));
+        let shown_headers = headers.paint(view(), colors(), DetailPane::Closed);
+        assert!(texts(&shown_headers).contains(&"行の番号で絞る（例: 2）"));
+        let mut themes = CommandPalette::open();
+        typed_into(&mut themes, "haishoku");
+        let _entered = themes.handle(Intent::Confirm, 1);
+        let shown_themes = themes.paint(view(), colors(), DetailPane::Closed);
+        assert!(
+            texts(&shown_themes)
+                .iter()
+                .any(|text| text.starts_with("今の配色 · "))
+        );
+        let mut about = CommandPalette::open();
+        typed_into(&mut about, "about");
+        let _opened = about.handle(Intent::Confirm, 0);
+        let shown_about = about.paint(view(), colors(), DetailPane::Closed);
+        let first_row = PaletteLayout::new(view(), &about).row(0);
+        assert!(!fills(&shown_about, colors().selection()).contains(&first_row));
+    }
+
+    fn typed_into(palette: &mut CommandPalette, text: &str) {
+        for character in text.chars() {
+            palette.handle(Intent::Type(character), 0);
+        }
     }
 }
