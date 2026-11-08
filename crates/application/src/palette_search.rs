@@ -33,6 +33,28 @@ pub fn commands(query: &str) -> Vec<PaletteItem> {
         .collect()
 }
 
+/// 操作の候補に、最近使った操作 `recent`（新しい順）を足したもの。何も打っていなければ最近使った操作を上に並べ、残りは
+/// 固定の順（同じ操作は 1 度だけ・GitHub Issue #309）。打てば [`commands`] のまま（合う度合いの順）。
+#[must_use]
+pub fn commands_with_recent(query: &str, recent: &[CommandId]) -> Vec<PaletteItem> {
+    let all = commands(query);
+    if !query.trim().is_empty() || recent.is_empty() {
+        return all;
+    }
+    recent
+        .iter()
+        .map(|&command| PaletteItem::Command(command))
+        .chain(all.into_iter().filter(|item| match item {
+            PaletteItem::Command(command) => !recent.contains(command),
+            PaletteItem::Theme(_)
+            | PaletteItem::Reading(_)
+            | PaletteItem::Key(_)
+            | PaletteItem::About(_)
+            | PaletteItem::Candidate(_) => true,
+        }))
+        .collect()
+}
+
 /// 操作 `command` が検索 `raw`（小文字）・`folded`（寄せた形）に合う度合い（小さいほど上）。合わなければ `None`。
 fn command_rank(command: CommandId, raw: &str, folded: &str) -> Option<u8> {
     if raw.is_empty() {
@@ -288,5 +310,20 @@ mod tests {
             vec![PaletteItem::Candidate(comma)]
         );
         assert!(candidates(&list, "xyz").is_empty());
+    }
+
+    /// 何も打っていない一覧は、最近使った操作を上に並べ、残りは固定の順で 1 度ずつ。打てば合う度合いの順のまま
+    /// （GitHub Issue #309）。
+    #[test]
+    fn recent_commands_come_first_only_before_typing() {
+        let recent = [CommandId::Replace, CommandId::ChooseTheme];
+        let listed = ids(&commands_with_recent("", &recent));
+        assert_eq!(&listed[..2], &recent);
+        assert_eq!(listed.len(), CommandId::ALL.len());
+        assert_eq!(
+            ids(&commands_with_recent("kensaku", &recent)),
+            ids(&commands("kensaku"))
+        );
+        assert_eq!(ids(&commands_with_recent("", &[])), ids(&commands("")));
     }
 }
