@@ -238,19 +238,9 @@ fn distinct(color: Color, others: &[Color], toward: Color) -> Color {
         .unwrap_or(toward)
 }
 
-/// `from` から `to` へ `percent` だけ寄せる（0 で `from`、100 で `to`）。
+/// `from` から `to` へ `percent` だけ寄せる（0 で `from`、100 で `to`・正本は `Color::mixed`）。
 fn mix(from: Color, to: Color, percent: u8) -> Color {
-    Color::new(
-        channel(from.red(), to.red(), percent),
-        channel(from.green(), to.green(), percent),
-        channel(from.blue(), to.blue(), percent),
-    )
-}
-
-fn channel(from: u8, to: u8, percent: u8) -> u8 {
-    let percent = u32::from(percent.min(100));
-    let mixed = (u32::from(from) * (100 - percent) + u32::from(to) * percent + 50) / 100;
-    u8::try_from(mixed).unwrap_or(u8::MAX)
+    from.mixed(to, percent)
 }
 
 #[cfg(test)]
