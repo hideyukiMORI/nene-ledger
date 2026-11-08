@@ -32,6 +32,8 @@ fn find_status(notice: FindNotice) -> String {
         FindNotice::BrokenPattern => {
             "正規表現の式が読めないので探しませんでした（Alt+R で文字どおりに）"
         }
+        FindNotice::NoRagged => "列の数が見出しと違う行はありません",
+        FindNotice::NoShape => "見出しの行が無いか列を足し消ししたので、列の数を比べられません",
     })
 }
 
