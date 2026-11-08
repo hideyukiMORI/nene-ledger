@@ -25,7 +25,7 @@ use crate::detail_pane::DetailPane;
 use crate::find_toggle::FindToggle;
 use crate::go_to_target::GoToTarget;
 #[cfg(test)]
-use crate::note_tone::GuideNote;
+use crate::guide_note::GuideNote;
 use crate::note_tone::NoteTone;
 use crate::palette_item::PaletteItem;
 use crate::palette_layout::{CHIP_MARK_COLUMNS, CHIP_PAD, FIND_CHIPS, PaletteLayout};
