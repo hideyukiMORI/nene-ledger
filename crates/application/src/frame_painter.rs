@@ -57,6 +57,8 @@ pub(crate) struct FramePainter<'view> {
 
 /// カーソルの枠の太さ（画素・100% のとき）。
 const CURSOR_LINE: u32 = 2;
+/// 書き換えたセルの右上の印の大きさ（画素・100% のとき・GitHub Issue #323）。
+const EDITED_MARK: u32 = 5;
 /// 列の数が見出しと違う行の番号の左の帯の幅（画素・100% のとき・GitHub Issue #317）。
 const RAGGED_BAR: u32 = 3;
 /// 選んだ範囲の外周の枠の太さ（画素・100% のとき）。
@@ -309,7 +311,12 @@ impl<'view> FramePainter<'view> {
             self.paint_editing_cell(rect, editing);
             return;
         }
-        match self.edited(style, row.row(), source) {
+        let edited = self.edited(style, row.row(), source);
+        // 原本の行の書き換えたセルは、保存するまで右上に小さな印を付ける（足した行は行の番号の色で分かる・GitHub Issue #323）。
+        if edited.is_some() && matches!(row.row(), RowId::Source(_)) {
+            self.edited_mark(rect);
+        }
+        match edited {
             Some(CellValue::Text(value)) => {
                 let shown = single_line(value);
                 let found = self.found_in(style, value);
@@ -358,6 +365,27 @@ impl<'view> FramePainter<'view> {
             }
             RowStyle::Header | RowStyle::Numbers => None,
         }
+    }
+
+    /// 書き換えたセルの右上の小さな四角の印（強調の色・セルを塗った後に重ねる・GitHub Issue #323）。
+    fn edited_mark(&mut self, rect: PixelRect) {
+        let size = self
+            .metrics
+            .px(EDITED_MARK)
+            .min(rect.size().width())
+            .min(rect.size().height());
+        let left = rect
+            .origin()
+            .x()
+            .saturating_add(rect.size().width())
+            .saturating_sub(size);
+        self.overlays.push(DrawCommand::Fill {
+            rect: PixelRect::new(
+                PixelPoint::new(left, rect.origin().y()),
+                PixelSize::new(size, size),
+            ),
+            color: self.palette.cursor(),
+        });
     }
 
     /// 編集中のセル。セルより長い文字列は、右の表の端までセルを広げ、隣のセルの上に重ねて全体を見せる（Excel と同じ・

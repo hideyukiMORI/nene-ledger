@@ -9227,6 +9227,33 @@ mod tests {
         finish_finding(document, effect);
     }
 
+    /// 書き換えたセルは、右上に強調の色の小さな印が付く。書き換えていなければ無い（GitHub Issue #323）。
+    #[test]
+    fn edited_cells_get_a_small_mark() {
+        let mut document = indexed_editable();
+        let marks = |shown: &Document| {
+            let frame = shown.frame(normal(), palette());
+            frame
+                .commands()
+                .iter()
+                .filter(|command| match command {
+                    DrawCommand::Fill { rect, color } => {
+                        *color == palette().cursor()
+                            && rect.size().width() == 5
+                            && rect.size().height() == 5
+                    }
+                    DrawCommand::Text { .. }
+                    | DrawCommand::Line { .. }
+                    | DrawCommand::TextSpan { .. } => false,
+                })
+                .count()
+        };
+        assert_eq!(marks(&document), 0);
+        typed(&mut document, "edited");
+        document.apply(Intent::Confirm, normal());
+        assert_eq!(marks(&document), 1);
+    }
+
     /// 列の数が見出しと違う行にカーソルがあれば、詳細ペインの見出しにそう出す（GitHub Issue #317）。
     #[test]
     fn the_detail_pane_says_when_a_row_has_another_number_of_cells() {
