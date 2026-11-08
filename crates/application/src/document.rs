@@ -186,7 +186,13 @@ pub struct Document {
     replacing: Option<ReplaceRun>,
     /// 求めたコピーが切り取りなら、その範囲（`copy_text` で枠を作る）。
     cutting: Option<Selection>,
+    /// 最後に意図を取り込んだときの窓（窓の行が持つ列を決める・ADR 0033 の決定 1）。まだ無ければ `None`。
+    window: Option<WindowView>,
 }
+
+/// 窓を知る前（開いた直後）に、窓の行が持つ元の列の数（左から・高い解像度の画面に下限の幅の列を並べても足りる数・
+/// ADR 0033 の決定 1）。
+pub const FIRST_HELD_COLUMNS: usize = 1_024;
 
 /// 状態の行の右端に出すパレットの案内。
 const PALETTE_HINT: &str = "Ctrl+Shift+P でコマンド";
@@ -301,6 +307,7 @@ impl Document {
             finding: None,
             replacing: None,
             cutting: None,
+            window: None,
         }
     }
 
@@ -719,7 +726,8 @@ impl Document {
         if view.rows().is_empty() && !emptied {
             return;
         }
-        let fresh: Vec<&ViewRow> = view.rows().iter().collect();
+        // 見出しも渡す（まだ幅を決めていない列の仮の幅と、初めて窓に入った列の幅に見出しの名前を含める・ADR 0033 の決定 3）。
+        let fresh: Vec<&ViewRow> = self.header.iter().chain(view.rows()).collect();
         widen_to(&mut self.widths, &fresh);
         self.view = view;
         self.cuts.clear();
@@ -767,6 +775,87 @@ impl Document {
     /// 縦の表示の先頭（本体の何番目か）が変わるなら、そこから読ませる。末尾は索引を作り終えて行の数が分かってから。
     /// コピーなら選択の行を読ませる（大きすぎれば知らせるだけ）。前の知らせは消す。
     pub fn apply(&mut self, intent: Intent, window: WindowView) -> DocumentEffect {
+        self.window = Some(window);
+        let effect = self.apply_intent(intent, window);
+        // 横に動いて、見えている列を窓の行が持っていなければ、今の位置から読み直させる（ADR 0033 の決定 1）。
+        if effect == DocumentEffect::Stay && !self.holds_shown_columns(window) {
+            return DocumentEffect::Read {
+                first_body: self.view.first_body(),
+            };
+        }
+        effect
+    }
+
+    /// 窓の行を読んだ後でも、見えている列を窓の行が持っていなければ、読み直す本体の位置（今の表示の先頭）。合成ルートは
+    /// `Read` を受けて読んだ後にこれを見る（行の数が分かる前に表の終わりより下を読むと、読んだ行が無く前の窓の行が残る・
+    /// ADR 0033 の決定 1）。足りていれば `None`。
+    #[must_use]
+    pub fn columns_reread(&self) -> Option<u64> {
+        let window = self.window?;
+        (!self.holds_shown_columns(window)).then(|| self.view.first_body())
+    }
+
+    /// 窓の行が読むべき元の列の範囲（見えている列の左右に、見えている列の数だけの余白・左に固定した列・カーソルの列・
+    /// ADR 0033 の決定 1）。合成ルートが窓の行を読むときに使う。列を足し消ししていれば `None`（全部の列）。窓をまだ
+    /// 知らなければ、左から [`FIRST_HELD_COLUMNS`] 列。
+    #[must_use]
+    pub fn columns_to_read(&self) -> Option<Vec<Range<usize>>> {
+        match self.window {
+            Some(window) => self.held_columns(window, true),
+            None => self
+                .columns
+                .is_whole()
+                .then(|| alloc::vec![0..FIRST_HELD_COLUMNS]),
+        }
+    }
+
+    /// 窓の行が持つべき元の列の範囲。`margin` なら左右に余白を足す（読むとき）。偽なら見えている列だけ（足りているかを
+    /// 確かめるとき）。列を足し消ししていれば `None`（全部の列・表の列と元の列の対応を窓の行で引くため）。
+    fn held_columns(&self, window: WindowView, margin: bool) -> Option<Vec<Range<usize>>> {
+        if !self.columns.is_whole() {
+            return None;
+        }
+        let width = self.bars(window).body().size().width();
+        let layout = self.layout(self.first_column, window.content_metrics());
+        let visible = (self.first_column..layout.column_count())
+            .take_while(|&column| layout.column_left(column).is_some_and(|left| left < width))
+            .count()
+            .max(1);
+        let (start, end) = if margin {
+            (
+                self.first_column.saturating_sub(visible),
+                self.first_column.saturating_add(visible.saturating_mul(2)),
+            )
+        } else {
+            (self.first_column, self.first_column.saturating_add(visible))
+        };
+        let cursor = self.selection.cursor().column();
+        let mut sources: Vec<usize> = (0..self.frozen)
+            .chain(start..end)
+            .chain(core::iter::once(cursor))
+            .map(|display| self.source_column(display))
+            .collect();
+        sources.sort_unstable();
+        sources.dedup();
+        Some(spans_of(&sources))
+    }
+
+    /// 見えている列（固定した列・カーソルの列を含む）を、窓の行がどれも持っているか。列を足し消ししていれば、全部の列を
+    /// 持つ行だけが足りる。
+    fn holds_shown_columns(&self, window: WindowView) -> bool {
+        let rows = self.view.rows();
+        match self.held_columns(window, false) {
+            None => rows.iter().all(|row| row.values().is_whole()),
+            Some(spans) => rows.iter().all(|row| {
+                spans
+                    .iter()
+                    .all(|span| span.clone().all(|column| row.values().holds(column)))
+            }),
+        }
+    }
+
+    /// 意図を取り込む（[`Self::apply`] の中身）。
+    fn apply_intent(&mut self, intent: Intent, window: WindowView) -> DocumentEffect {
         if let Some(effect) = self.close_intent(intent, window) {
             return effect;
         }
@@ -1143,13 +1232,18 @@ impl Document {
         self.cut = None;
         let cursor = self.selection.cursor();
         let column = self.source_column(cursor.column());
-        let Some((line, row, source)) = self.view_row(cursor.body()).map(|row| {
-            (
-                row.line(),
-                row.row(),
-                row.values().get(column).map(String::from),
-            )
-        }) else {
+        // 窓の行がカーソルの列を持っていなければ（読み直す前）、始めない（「セルが無い」と取り違えない・ADR 0033 の決定 1）。
+        let Some((line, row, source)) = self
+            .view_row(cursor.body())
+            .filter(|row| row.values().holds(column))
+            .map(|row| {
+                (
+                    row.line(),
+                    row.row(),
+                    row.values().get(column).map(String::from),
+                )
+            })
+        else {
             return false;
         };
         if self.cuts.iter().any(|cut| cut.record() == line) {
@@ -1734,7 +1828,9 @@ impl Document {
     ) -> Option<(CellChange, String)> {
         let cursor = self.selection.cursor();
         let table = self.source_column(cursor.column());
-        let row = self.view_row(cursor.body())?;
+        let row = self
+            .view_row(cursor.body())
+            .filter(|row| row.values().holds(table))?;
         if self.cuts.iter().any(|cut| cut.record() == row.line()) {
             return None;
         }
@@ -3952,7 +4048,11 @@ impl Document {
             return TotalsRequest::Settled;
         }
         let (first, last) = self.row_span();
-        if let Some(rows) = self.visible_rows(first, last) {
+        // 見えている行でも、窓の行が範囲の列を持っていなければ、原本から読んで数える（ADR 0033 の決定 3）。
+        if let Some(rows) = self
+            .visible_rows(first, last)
+            .filter(|rows| self.rows_hold_ranges(rows))
+        {
             let stats = self.stats_of(first, rows.iter(), |row, column| row.values().get(column));
             self.totals = SelectionTotals::Counted(stats);
             return TotalsRequest::Settled;
@@ -4029,6 +4129,22 @@ impl Document {
         let (first, _) = self.ranges().row_span();
         let stats = self.stats_of(first, body.into_iter(), |row, column| row.get(column));
         self.totals = SelectionTotals::Counted(stats);
+    }
+
+    /// 行 `rows` が、選んだ範囲の列（元の列）をどれも持っているか（窓の行が一部の列だけを持つとき・ADR 0033 の決定 3）。
+    fn rows_hold_ranges(&self, rows: &[ViewRow]) -> bool {
+        let columns: Vec<RangeInclusive<usize>> = self
+            .ranges()
+            .bands()
+            .iter()
+            .flat_map(|band| self.source_columns(band.columns()))
+            .collect();
+        rows.iter().all(|row| {
+            row.values().is_whole()
+                || columns
+                    .iter()
+                    .all(|span| span.clone().all(|column| row.values().holds(column)))
+        })
     }
 
     /// 本体の `first` 番目から `last` 番目までが見えていれば、その行。
@@ -4357,6 +4473,10 @@ impl Document {
             Some(CellValue::Absent) => return DetailContent::Missing,
             None => {}
         }
+        // 窓の行がカーソルの列を持っていなければ（読み直す前）、空の値として見せる（「セルが無い」と取り違えない）。
+        if !row.values().holds(column) {
+            return DetailContent::Value("");
+        }
         row.values()
             .get(column)
             .map_or(DetailContent::Missing, |value| match cut {
@@ -4573,11 +4693,38 @@ impl Document {
 }
 
 /// 行 `rows` の表示の文字列から、今より多い列の幅を決めて `widths` に足す（VIEW-02・今ある列の幅は変えない）。
+/// 小さい順の列の番号 `columns`（重ならない）を、続く列をまとめた範囲の並びにする。
+fn spans_of(columns: &[usize]) -> Vec<Range<usize>> {
+    let mut spans: Vec<Range<usize>> = Vec::new();
+    for &column in columns {
+        match spans.last_mut() {
+            Some(last) if last.end == column => last.end = column.saturating_add(1),
+            Some(_) | None => spans.push(column..column.saturating_add(1)),
+        }
+    }
+    spans
+}
+
+/// 窓の行が一部の列だけを持つなら、その列の範囲（窓の行は 1 回の読みで同じ列を持つ・ADR 0033 の決定 1）を見て、まだ
+/// 決めていない列の幅は持っている列だけ決める。持っていない列の仮の幅は、見出しの名前の幅（見出しが無ければ下限）。
 fn widen_to(widths: &mut ColumnWidths, rows: &[&ViewRow]) {
-    widths.widen_with(
+    let all = 0..usize::MAX;
+    let held = rows
+        .iter()
+        .find_map(|row| row.values().held_spans())
+        .unwrap_or(core::slice::from_ref(&all));
+    let header = rows.iter().find(|row| row.values().is_whole());
+    widths.widen_held(
         rows,
-        |row| row.cells().len(),
-        |row, column| row.cells().get(column),
+        (
+            |row: &&ViewRow| row.cells().len(),
+            |row: &&ViewRow, column| row.cells().get(column),
+        ),
+        (held, |column| {
+            header
+                .and_then(|row| row.cells().get(column))
+                .map_or(MIN_COLUMN_COLUMNS, display_columns)
+        }),
     );
 }
 
@@ -4806,6 +4953,7 @@ mod tests {
     use super::*;
     use crate::cursor_step::CursorStep;
     use crate::index_summary::IndexSummary;
+    use crate::scroll::Scroll;
     use crate::selection_mode::SelectionMode;
     use nene_ledger_core::chrome_button::ChromeButton;
     use nene_ledger_core::color::Color;
@@ -9037,5 +9185,202 @@ mod tests {
         assert_eq!(document.selection().cursor(), CellPosition::new(3, 0));
         document.apply(Intent::Undo, normal());
         assert_eq!(document.selection().cursor(), CellPosition::new(2, 0));
+    }
+
+    /// 種を固定した xorshift（テストは乱数の名前に頼らない・ARC-007）。
+    struct Xorshift(u64);
+
+    impl Xorshift {
+        fn below(&mut self, bound: usize) -> usize {
+            self.0 ^= self.0 << 13_u32;
+            self.0 ^= self.0 >> 7_u32;
+            self.0 ^= self.0 << 17_u32;
+            usize::try_from(self.0 % u64::try_from(bound).unwrap()).unwrap()
+        }
+    }
+
+    /// 無作為の 1 行（`row` 行目・列の数はばらばら・空のセルと改行を含むセルも）。
+    fn ragged_row(rng: &mut Xorshift, row: usize) -> Vec<String> {
+        const PIECES: [&str; 6] = ["", "a", "東京", "x\ny", "0012", "long-value"];
+        (0..rng.below(90))
+            .map(|column| format!("{row}-{column}{}", PIECES[rng.below(PIECES.len())]))
+            .collect()
+    }
+
+    /// 列の数のばらばらな無作為の表。
+    fn ragged_table(rng: &mut Xorshift) -> Vec<Vec<String>> {
+        (0..=rng.below(30))
+            .map(|row| ragged_row(rng, row))
+            .collect()
+    }
+
+    /// 原本の 1 行 `cells` の、列の範囲 `spans` だけを持つ窓の行（合成ルートの `read_columns` と同じ形）。
+    fn held_row(cells: &[String], spans: &[Range<usize>]) -> CellRow {
+        let mut row = CellRow::empty();
+        let held = spans
+            .iter()
+            .flat_map(|span| span.start.min(cells.len())..span.end.min(cells.len()));
+        for column in held {
+            row.push_with(|text| text.push_str(&cells[column]));
+        }
+        row.holding(cells.len(), spans)
+    }
+
+    /// 原本の行 `source` の、列の範囲 `columns` だけを持つ窓の行（`None` なら全部）。
+    fn held_rows(source: &[Vec<String>], columns: Option<&[Range<usize>]>) -> Vec<CellRow> {
+        source
+            .iter()
+            .map(|cells| {
+                columns.map_or_else(|| CellRow::new(cells), |spans| held_row(cells, spans))
+            })
+            .collect()
+    }
+
+    /// 合成ルートと同じく、窓の行を `columns_to_read` の列だけで読み直す（行の並びは変えていない表）。読んだ後も列が
+    /// 足りなければ、今の表示の先頭から読み直す（`columns_reread`）。
+    fn reread_held(document: &mut Document, source: &[Vec<String>], first_body: u64) {
+        read_held(document, source, first_body);
+        if let Some(body) = document.columns_reread() {
+            read_held(document, source, body);
+        }
+    }
+
+    /// 本体の `body` 番目からの窓の行を、`columns_to_read` の列だけで読んで差し替える。
+    fn read_held(document: &mut Document, source: &[Vec<String>], body: u64) {
+        let first = usize::try_from(document.line_of(body)).unwrap();
+        let end = first.saturating_add(50).min(source.len());
+        let columns = document.columns_to_read();
+        let part = source.get(first.min(end)..end).unwrap_or_default();
+        document.show(document.line_of(body), held_rows(part, columns.as_deref()));
+    }
+
+    /// 見えている列（画面の配置から数える・実装の `held_columns` に頼らない）：固定した列と、最初の列から本体の幅に入る
+    /// 列と、カーソルの列。
+    fn shown_columns(document: &Document, window: WindowView) -> Vec<usize> {
+        let layout = document.layout(document.first_column, window.content_metrics());
+        let width = document.bars(window).body().size().width();
+        layout
+            .visible_columns()
+            .filter(|&column| layout.column_left(column).is_some_and(|left| left < width))
+            .chain(core::iter::once(document.selection().cursor().column()))
+            .collect()
+    }
+
+    /// 窓の行の見えているセルが、原本 `source` と同じ（持っていない列が無い）。確かめたセルの数。
+    fn assert_shown_cells_match(
+        document: &Document,
+        source: &[Vec<String>],
+        window: WindowView,
+    ) -> usize {
+        let shown = shown_columns(document, window);
+        let cells = document.view().rows().iter().flat_map(|row| {
+            let line = &source[usize::try_from(row.line()).unwrap()];
+            shown.iter().map(move |&column| (row, line, column))
+        });
+        let mut checked = 0_usize;
+        for (row, line, column) in cells {
+            assert!(row.values().holds(column), "{column}");
+            assert_eq!(
+                row.values().get(column),
+                line.get(column).map(String::as_str)
+            );
+            checked += 1;
+        }
+        checked
+    }
+
+    /// 無作為の横と縦の動き。
+    const WINDOW_STEPS: [Intent; 10] = [
+        Intent::Move {
+            step: CursorStep::Right,
+            mode: SelectionMode::Collapse,
+        },
+        Intent::Move {
+            step: CursorStep::Left,
+            mode: SelectionMode::Collapse,
+        },
+        Intent::Move {
+            step: CursorStep::RowEnd,
+            mode: SelectionMode::Collapse,
+        },
+        Intent::Move {
+            step: CursorStep::RowStart,
+            mode: SelectionMode::Collapse,
+        },
+        Intent::Move {
+            step: CursorStep::Down,
+            mode: SelectionMode::Collapse,
+        },
+        Intent::Move {
+            step: CursorStep::Up,
+            mode: SelectionMode::Collapse,
+        },
+        Intent::Scroll(Scroll::Right { columns: 7 }),
+        Intent::Scroll(Scroll::Left { columns: 5 }),
+        Intent::FreezeColumns,
+        Intent::UnfreezeColumns,
+    ];
+
+    /// 左から 3 列だけを持つ窓の行で開いた表（見出しは全部の列）と、全部の列を持つ表。
+    fn held_and_whole(source: &[Vec<String>], header: Option<u64>) -> (Document, Document) {
+        let first = 0..3_usize;
+        let mut opened = held_rows(source, Some(core::slice::from_ref(&first)));
+        if let (Some(_), Some(cells)) = (header, source.first()) {
+            opened[0] = CellRow::new(cells);
+        }
+        (
+            Document::open(String::from("t"), summary(), header, opened),
+            Document::open(String::from("t"), summary(), header, cell_rows(source)),
+        )
+    }
+
+    /// 2 つの表に同じ意図を渡し、読ませた窓の行を読む（一部の列だけを持つ表 `held` は `columns_to_read` の列だけ）。
+    fn step_both(
+        (held, whole): (&mut Document, &mut Document),
+        source: &[Vec<String>],
+        (intent, window): (Intent, WindowView),
+    ) {
+        if let DocumentEffect::Read { first_body } = held.apply(intent, window) {
+            reread_held(held, source, first_body);
+        }
+        if let DocumentEffect::Read { .. } = whole.apply(intent, window) {
+            reread(whole, &cell_rows(source));
+        }
+        assert_eq!(held.selection().cursor(), whole.selection().cursor());
+        assert!(held.holds_shown_columns(window), "{intent:?}");
+    }
+
+    /// カーソルの行が両方に見えていれば、詳細ペインとカーソルのセルの置換の答えが同じ。
+    fn assert_cursor_cells_match(held: &Document, whole: &Document, query: &FindQuery) {
+        let body = held.selection().cursor().body();
+        if held.view_row(body).is_none() || whole.view_row(body).is_none() {
+            return;
+        }
+        assert_eq!(held.detail_content(), whole.detail_content());
+        assert_eq!(
+            held.replaced_at_cursor(query, "#"),
+            whole.replaced_at_cursor(query, "#")
+        );
+    }
+
+    /// 窓の行が見えている列の範囲だけを持っても、無作為の横と縦の動きの後に、見えているセル・詳細ペイン・カーソルの
+    /// セルの置換の答えが、全部の列を持つ表と同じ（ADR 0033 の決定 4・GitHub Issue #22）。
+    #[test]
+    fn holding_only_the_shown_columns_answers_like_holding_them_all() {
+        let mut rng = Xorshift(0x2026_1108_0022);
+        let window = normal();
+        let query = FindQuery::new("a", FindOptions::standard());
+        let mut checked = 0_usize;
+        for _ in 0..40_u32 {
+            let source = ragged_table(&mut rng);
+            let (mut held, mut whole) = held_and_whole(&source, (rng.below(2) == 0).then_some(0));
+            for _ in 0..60_u32 {
+                let intent = WINDOW_STEPS[rng.below(WINDOW_STEPS.len())];
+                step_both((&mut held, &mut whole), &source, (intent, window));
+                checked += assert_shown_cells_match(&held, &source, window);
+                assert_cursor_cells_match(&held, &whole, &query);
+            }
+        }
+        assert!(checked > 10_000, "{checked}");
     }
 }

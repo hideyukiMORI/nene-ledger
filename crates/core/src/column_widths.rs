@@ -14,10 +14,13 @@ pub const MAX_COLUMN_COLUMNS: u32 = 40;
 pub const MAX_RESIZED_COLUMNS: u32 = 200;
 
 /// 列ごとの幅（半角の字数）。開いたときの見出しと先頭の行から決めて、スクロールでは変えない（VIEW-02）。
-/// 後から列の多い行が来たら、その列だけを足す。
+/// 後から列の多い行が来たら、その列だけを足す。窓の行が持たない列（見えている列の範囲の外・ADR 0033 の決定 1）は、
+/// 仮の幅で足して「まだ決めていない」と覚え、初めて窓に入ったときに決める（その後は変えない・決定 3）。
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ColumnWidths {
     columns: Vec<u32>,
+    /// 列ごとに、まだ幅を決めていないか（`columns` と同じ長さ）。
+    unsettled: Vec<bool>,
 }
 
 impl ColumnWidths {
@@ -26,6 +29,7 @@ impl ColumnWidths {
     pub fn fit(rows: &[&[String]]) -> Self {
         let mut widths = Self {
             columns: Vec::new(),
+            unsettled: Vec::new(),
         };
         widths.widen(rows);
         widths
@@ -40,24 +44,70 @@ impl ColumnWidths {
         );
     }
 
-    /// [`Self::widen`] の正本。行 `rows` の列の数を `len`、セルを `cell`（行・列 → 値）で引く（セルを `String` の並びで
-    /// 持たない行からも決められる・GitHub Issue #22）。今より多い列の幅だけを、その列のいちばん広い値から決めて足す。
+    /// 行 `rows` の列の数を `len`、セルを `cell`（行・列 → 値）で引く（セルを `String` の並びで持たない行からも決められる・
+    /// GitHub Issue #22）。今より多い列の幅だけを、その列のいちばん広い値から決めて足す。行は全部の列を持つとみなす。
     pub fn widen_with<R, L, C>(&mut self, rows: &[R], len: L, cell: C)
     where
         L: Fn(&R) -> usize,
         C: for<'row> Fn(&'row R, usize) -> Option<&'row str>,
     {
-        let count = rows.iter().map(&len).max().unwrap_or(0);
-        for column in self.columns.len()..count {
-            let widest = rows
-                .iter()
+        let all = 0..usize::MAX;
+        self.widen_held(
+            rows,
+            (len, cell),
+            (core::slice::from_ref(&all), |_| MIN_COLUMN_COLUMNS),
+        );
+    }
+
+    /// [`Self::widen_with`] の正本。行 `rows` が持つのは列の範囲 `held`（左から・重ならない）だけ（ADR 0033 の決定 1）。
+    /// 今より多い列は、`held` に入るならその列のいちばん広い値から決め、入らないなら仮の幅 `provisional`（列 → 字数・
+    /// 見出しの名前の幅など）で足して「まだ決めていない」と覚える。まだ決めていない列が `held` に入れば、そこで決める。
+    /// 決めた列の幅は変えない（VIEW-02）。
+    pub fn widen_held<R, L, C, P>(
+        &mut self,
+        rows: &[R],
+        (len, cell): (L, C),
+        (held, provisional): (&[core::ops::Range<usize>], P),
+    ) where
+        L: Fn(&R) -> usize,
+        C: for<'row> Fn(&'row R, usize) -> Option<&'row str>,
+        P: Fn(usize) -> u32,
+    {
+        let widest = |column: usize| {
+            rows.iter()
                 .filter_map(|row| cell(row, column))
                 .map(display_columns)
                 .max()
-                .unwrap_or(0);
+                .unwrap_or(0)
+                .clamp(MIN_COLUMN_COLUMNS, MAX_COLUMN_COLUMNS)
+        };
+        let count = rows.iter().map(&len).max().unwrap_or(0);
+        for column in self.columns.len()..count {
             self.columns
-                .push(widest.clamp(MIN_COLUMN_COLUMNS, MAX_COLUMN_COLUMNS));
+                .push(provisional(column).clamp(MIN_COLUMN_COLUMNS, MAX_COLUMN_COLUMNS));
+            self.unsettled.push(true);
         }
+        let settling = held.iter().flat_map(|range| {
+            let end = range.end.min(self.columns.len());
+            range.start.min(end)..end
+        });
+        let columns: Vec<usize> = settling
+            .filter(|&column| self.is_unsettled(column))
+            .collect();
+        for column in columns {
+            if let (Some(unsettled), Some(width)) =
+                (self.unsettled.get_mut(column), self.columns.get_mut(column))
+            {
+                *width = widest(column);
+                *unsettled = false;
+            }
+        }
+    }
+
+    /// まだ幅を決めていない列か（窓に入っていない列・ADR 0033 の決定 3）。無い列は `false`。
+    #[must_use]
+    pub fn is_unsettled(&self, column: usize) -> bool {
+        self.unsettled.get(column).copied().unwrap_or(false)
     }
 
     /// `at` 番目の前に、幅 `widths` の列を差し込む（列を足した・消した列を戻した・ADR 0027）。`at` が列の数より
@@ -67,12 +117,18 @@ impl ColumnWidths {
         let tail = self.columns.split_off(at);
         self.columns.extend_from_slice(widths);
         self.columns.extend(tail);
+        let unsettled_tail = self.unsettled.split_off(at.min(self.unsettled.len()));
+        self.unsettled
+            .extend(core::iter::repeat_n(false, widths.len()));
+        self.unsettled.extend(unsettled_tail);
     }
 
     /// `at` 番目から `count` 列の幅を外して返す（列を消した）。
     pub fn remove(&mut self, at: usize, count: usize) -> Vec<u32> {
         let start = at.min(self.columns.len());
         let end = at.saturating_add(count).min(self.columns.len());
+        self.unsettled
+            .drain(start.min(self.unsettled.len())..end.min(self.unsettled.len()));
         self.columns.drain(start..end).collect()
     }
 
@@ -92,19 +148,28 @@ impl ColumnWidths {
                 *width = chars.clamp(MIN_COLUMN_COLUMNS, MAX_RESIZED_COLUMNS);
             }
         }
-        Self { columns }
+        Self {
+            columns,
+            unsettled: self.unsettled.clone(),
+        }
     }
 
     /// 表示の順 `order`（表示の位置 → 元の列）に並べ替えた幅。`order` に無い列は元の位置のまま。
     #[must_use]
     pub fn reordered(&self, order: &[usize]) -> Self {
-        let columns = (0..self.columns.len())
-            .filter_map(|display| {
-                let source = order.get(display).copied().unwrap_or(display);
-                self.columns.get(source).copied()
-            })
+        let sources: Vec<usize> = (0..self.columns.len())
+            .map(|display| order.get(display).copied().unwrap_or(display))
             .collect();
-        Self { columns }
+        Self {
+            columns: sources
+                .iter()
+                .filter_map(|&source| self.columns.get(source).copied())
+                .collect(),
+            unsettled: sources
+                .iter()
+                .filter_map(|&source| self.unsettled.get(source).copied())
+                .collect(),
+        }
     }
 }
 
@@ -122,6 +187,42 @@ mod tests {
 
     fn slices(rows: &[Vec<String>]) -> Vec<&[String]> {
         rows.iter().map(Vec::as_slice).collect()
+    }
+
+    fn len(row: &&[String]) -> usize {
+        row.len()
+    }
+
+    fn cell<'row>(row: &'row &[String], column: usize) -> Option<&'row str> {
+        row.get(column).map(String::as_str)
+    }
+
+    /// 窓の行が持たない列は仮の幅で足し、初めて持ったときにその列の値から決め、その後は変えない（ADR 0033 の決定 3）。
+    #[test]
+    fn columns_outside_the_held_spans_are_settled_when_first_held() {
+        let table = rows(&[&["a", "東京都千代田区", "bb", "x"]]);
+        let slices = slices(&table);
+        let mut widths = ColumnWidths::fit(&[]);
+        widths.widen_held(
+            &slices,
+            (len, cell),
+            (&[0..1, 0..0], |column| u32::try_from(column).unwrap() + 5),
+        );
+        assert_eq!(widths.columns(), [3, 6, 7, 8]);
+        assert!(!widths.is_unsettled(0) && widths.is_unsettled(1) && widths.is_unsettled(3));
+        widths.widen_held(&slices, (len, cell), (&[1..3, 0..0], |_| 30));
+        assert_eq!(widths.columns(), [3, 14, 3, 8]);
+        assert!(!widths.is_unsettled(2) && widths.is_unsettled(3));
+        // 決めた列は、別の値の行が来ても変えない。
+        let wider = rows(&[&["a-very-long-value", "", "", ""]]);
+        widths.widen_held(&self::slices(&wider), (len, cell), (&[0..4, 0..0], |_| 30));
+        assert_eq!(widths.columns(), [3, 14, 3, 3]);
+        assert!(!widths.is_unsettled(3));
+        // 列を差し込んでも消しても、印は列といっしょに動く。
+        widths.widen_held(&slices, (len, cell), (&[], |_| 9));
+        widths.insert(0, &[8]);
+        assert!(!widths.is_unsettled(0) && !widths.is_unsettled(4));
+        assert_eq!(widths.remove(0, 1), [8]);
     }
 
     #[test]

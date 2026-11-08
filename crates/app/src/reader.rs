@@ -1,5 +1,6 @@
 //! 動いた先の範囲を読む。
 
+use core::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -23,7 +24,7 @@ use nene_ledger_scan::split_job::{SplitJob, usual_parts};
 use nene_ledger_store::stamping::stamp_of;
 
 use crate::opening::detect;
-use crate::rows::{Rows, WINDOW_RECORDS, read_rows};
+use crate::rows::{Rows, read_columns, read_first_window};
 
 /// 動いた先の範囲を読む材料。画面のスレッドが持つ原本と読み方と、作り終えた索引（まだなら作り始める前の索引）と、
 /// 裏の仕事が画面のスレッドを起こす口。
@@ -134,14 +135,14 @@ impl Reader {
         self.format
     }
 
-    /// 読み方 `format` で、先頭からの窓の分の行を読む（開き直す前に試す・Issue #52）。索引は使わない。
-    pub(crate) fn read_trial(&self, format: TextFormat) -> Result<Rows, ScanFailure> {
-        read_rows(
-            &self.source,
-            &SparseIndex::empty(),
-            format,
-            RecordRange::new(0, WINDOW_RECORDS),
-        )
+    /// 読み方 `format`・見出しのレコード `header` で、先頭からの窓の分の行を読む（開き直す前に試す・Issue #52）。索引は
+    /// 使わない。開くときと同じ読み（`read_first_window`）。
+    pub(crate) fn read_trial(
+        &self,
+        format: TextFormat,
+        header: Option<u64>,
+    ) -> Result<Rows, ScanFailure> {
+        read_first_window(&self.source, format, header)
     }
 
     /// 文字コード `encoding` で先頭の標本から方言を推し量った候補（点数の順）。判別の候補を選ぶ段で見せる（Issue #3）。
@@ -170,12 +171,17 @@ impl Reader {
     }
 
     /// `first` からの `count` 個の行を読み、復号した値にする（表示の窓・コピー・集計。行の並びの区間ごとに呼ぶ）。
-    pub(crate) fn read_count(&self, first: u64, count: usize) -> Result<Rows, ScanFailure> {
-        read_rows(
+    /// 復号するのは元の列の範囲 `columns` だけ（`None` なら全部・表示の窓は見えている列の範囲・ADR 0033 の決定 1）。
+    pub(crate) fn read_count(
+        &self,
+        first: u64,
+        count: usize,
+        columns: Option<&[Range<usize>]>,
+    ) -> Result<Rows, ScanFailure> {
+        read_columns(
             &self.source,
-            &self.index,
-            self.format,
-            RecordRange::new(first, count),
+            (&self.index, self.format),
+            (RecordRange::new(first, count), columns),
         )
     }
 
