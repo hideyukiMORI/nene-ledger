@@ -990,7 +990,19 @@ Windows の exe の `--version`（コマンドプロンプトに結んで書く�
 
 `cargo tree -p nene-ledger-core -e normal`：`regex-automata` 0.4.18 → `regex-syntax` 0.8.11 と、直接の `regex-syntax` 0.8.11（同じ版が 1 つ・配るクレートは増えない）。`cargo build -p nene-ledger-core --target thumbv7m-none-eabi --locked` が通る（`no_std` のまま）。
 
-## 7. active の規則と、その証明
+## 90. 窓の行は見えている列の範囲だけを持つ（GitHub Issue #22・ADR 0033 の決定 1・3・4・BIG-04・BIG-08）
+
+`prlimit --as=536870912`（アドレス空間 512 MiB）の下で、カンマだけの約 1 MiB の行 × 200（210 MB・2 億セル）を release の exe で Xvfb に開いた（2026-11-08・手で 1 回ずつ）：
+
+| 版 | 結果 |
+| --- | --- |
+| 1 つ前（#231・窓の行は全部の列を持つ） | `memory allocation of 8388608 bytes failed` で落ちる（終了 -6） |
+| この実装（見えている列の範囲だけを持つ） | 6.7 s で開き、最大の常駐 83,488 kB |
+
+🔴 これは手の実測で、CI と `make test` は回さない（210 MB のファイルと窓が要る）。ADR 0033 の決定 4 の 1 つ目・2 つ目は planned のまま。3 つ目（窓の列を変えても答えが同じ）は application のテスト `holding_only_the_shown_columns_answers_like_holding_them_all` で active：種を固定した無作為の表 40 × 動き 60 回で、見えているセル（画面の配置から数えた列）・詳細ペイン・カーソルのセルの置換を全部の列を持つ表と突き合わせる。`held_columns` から (1) 左に固定した列を外す (2) カーソルの列を外す、(3) `apply` の後の読み直しをやめる、のどれでも落ちることを確かめた（戻した）。
+
+画面（Xvfb）：20,000 列 × 50 行で行の終わり（20,000 列目）へ飛ぶと、窓を読み直して `r2c19999` などの値と、その列の幅が出る。行の終わりから左へ 30 列動いても値が出る。
+
 
 CNF-009 は active の規則ごとに `| ID |` で始まる行がここにあることを要求する。
 

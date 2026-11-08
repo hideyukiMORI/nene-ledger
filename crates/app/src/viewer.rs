@@ -1,5 +1,7 @@
 //! 窓が描く相手。画面の状態と、裏の索引の仕事と、範囲の読み取りを結ぶ。
 
+use core::ops::Range;
+
 use nene_ledger_application::cell_row::CellRow;
 use nene_ledger_application::clipboard_text::ClipboardText;
 use nene_ledger_application::close_state::CloseState;
@@ -318,15 +320,17 @@ impl Viewer {
             DocumentEffect::Stay | DocumentEffect::ReadPasted { .. } => None,
             DocumentEffect::Read { first_body } => {
                 let first = self.document.line_of(first_body);
-                if let Ok((cells, cuts)) = self.read_lines(first, WINDOW_RECORDS) {
-                    self.document.show(first, cells);
-                    self.document.mark_cut(cuts);
+                self.read_window(first);
+                // 読んだ行が無く（行の数が分かる前に表の終わりより下）前の窓の行が残り、見えている列を持っていなければ、
+                // 今の表示の先頭から読み直す（ADR 0033 の決定 1）。
+                if let Some(body) = self.document.columns_reread() {
+                    self.read_window(self.document.line_of(body));
                 }
                 None
             }
             DocumentEffect::Copy { first_line, count } => {
                 let count = usize::try_from(count).ok()?;
-                let (rows, cuts) = self.read_lines(first_line, count).ok()?;
+                let (rows, cuts) = self.read_lines(first_line, count, None).ok()?;
                 self.document.copy_text(first_line, &rows, &cuts)
             }
             DocumentEffect::StopTotals => {
@@ -397,7 +401,7 @@ impl Viewer {
         };
         let lines = usize::try_from(count)
             .ok()
-            .and_then(|count| self.read_lines(first_line, count).ok());
+            .and_then(|count| self.read_lines(first_line, count, None).ok());
         let Some((rows, cuts)) = lines else {
             self.document.paste_unread();
             return;
@@ -406,12 +410,23 @@ impl Viewer {
         let _clipboard = self.effect(effect);
     }
 
+    /// 位置 `first_line` からの窓の行を、見えている列の範囲（＋余白）だけ読んで差し替える（読めなければそのまま・ADR 0033 の
+    /// 決定 1）。
+    fn read_window(&mut self, first_line: u64) {
+        let columns = self.document.columns_to_read();
+        if let Ok((cells, cuts)) = self.read_lines(first_line, WINDOW_RECORDS, columns.as_deref()) {
+            self.document.show(first_line, cells);
+            self.document.mark_cut(cuts);
+        }
+    }
+
     /// 行の並びの位置 `first_line` から `count` 行を、区間ごとに原本から読んで位置の順に並べる（ADR 0027）。足した行は
     /// セルの無い行にする（`Document` が表の幅まで空のセルで埋める）。切り詰めたレコードの番号は位置に直す。
     fn read_lines(
         &self,
         first_line: u64,
         count: usize,
+        columns: Option<&[Range<usize>]>,
     ) -> Result<(Vec<CellRow>, Vec<CutRecord>), ScanFailure> {
         let mut cells: Vec<CellRow> = Vec::with_capacity(count);
         let mut cuts = Vec::new();
@@ -421,7 +436,8 @@ impl Viewer {
             match run {
                 OrderRun::Source { first, count: rows } => {
                     let length = rows.map_or(count_left(wanted, &cells), widen_count);
-                    let (part, part_cuts) = self.reader.read_count(first, length)?.into_parts();
+                    let (part, part_cuts) =
+                        self.reader.read_count(first, length, columns)?.into_parts();
                     cuts.extend(moved_cuts(part_cuts, first, line));
                     cells.extend(part);
                 }
@@ -457,7 +473,7 @@ impl Viewer {
                 Ok(job) => self.totals = Some(job),
                 Err(_failure) => self.document.totals_report(SelectionTotals::Failed),
             }
-        } else if let Ok((rows, _cuts)) = self.read_lines(first_line, count) {
+        } else if let Ok((rows, _cuts)) = self.read_lines(first_line, count, None) {
             self.document.count_totals(first_line, &rows);
         }
     }
@@ -796,7 +812,7 @@ impl Viewer {
         else {
             return false;
         };
-        let Ok(rows) = self.reader.read_trial(format) else {
+        let Ok(rows) = self.reader.read_trial(format, header) else {
             return false;
         };
         let summary = FormatSummary::new(format, base.format_summary().line_endings());
