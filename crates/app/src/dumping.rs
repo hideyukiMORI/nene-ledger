@@ -234,4 +234,65 @@ mod tests {
                 .is_ok()
         );
     }
+
+    /// 種を固定した xorshift（テストは乱数の名前に頼らない・ARC-007）。
+    struct Xorshift(u64);
+
+    impl Xorshift {
+        fn below(&mut self, bound: usize) -> usize {
+            self.0 ^= self.0 << 13_u32;
+            self.0 ^= self.0 >> 7_u32;
+            self.0 ^= self.0 << 17_u32;
+            usize::try_from(self.0 % u64::try_from(bound).unwrap()).unwrap()
+        }
+    }
+
+    /// 病的な入力の字の素：引用符・区切り・改行・逃がし・NUL・BOM の欠片・壊れた UTF-8 と `Shift_JIS` のバイト。
+    const PIECES: [&[u8]; 22] = [
+        b"\"",
+        b"'",
+        b",",
+        b"\t",
+        b";",
+        b"|",
+        b"\\",
+        b"\r",
+        b"\n",
+        b"\r\n",
+        b" ",
+        b"a",
+        b"0",
+        b"\0",
+        b"\xFF\xFE",
+        b"\xEF\xBB\xBF",
+        b"\xFE\xFF",
+        b"\x82",
+        b"\x82\xA0",
+        b"\xE3\x81",
+        "東".as_bytes(),
+        b"\"\"\"",
+    ];
+
+    /// 任意のバイト列を開く道と、全部を書き出す道は、どれも落ちずに終わる（判別・索引・切り出し・復号を通す・SEC-04・
+    /// GitHub Issue #255）。
+    #[test]
+    fn arbitrary_bytes_open_and_dump_without_failing() {
+        let directory =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/tmp/fuzz-open");
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("input.csv");
+        let mut rng = Xorshift(0x2026_1108_0255);
+        for round in 0..400_u32 {
+            let mut bytes = Vec::new();
+            for _ in 0..rng.below(600) {
+                bytes.extend_from_slice(PIECES[rng.below(PIECES.len())]);
+            }
+            std::fs::write(&path, &bytes).unwrap();
+            let opened = crate::opening::open(&path);
+            assert!(opened.is_ok(), "{round}: {bytes:?}");
+            let mut out = Vec::new();
+            assert!(dump_to(&path, &mut out).is_ok(), "{round}: {bytes:?}");
+            assert!(String::from_utf8(out).is_ok(), "{round}: {bytes:?}");
+        }
+    }
 }
