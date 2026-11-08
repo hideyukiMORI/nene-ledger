@@ -13,6 +13,7 @@ use crate::format_summary::FormatSummary;
 use crate::job_state::JobState;
 use crate::notice::Notice;
 use crate::paste_notice::PasteNotice;
+use crate::read_only_notice::ReadOnlyNotice;
 use crate::replace_notice::ReplaceNotice;
 use crate::rows_notice::RowsNotice;
 use crate::save_problem::SaveProblem;
@@ -197,6 +198,17 @@ pub fn cursor_status(record: u64, column: usize) -> String {
     )
 }
 
+/// 読み取り専用の知らせ（EDIT-13・GitHub Issue #238）。
+const fn read_only_status(notice: ReadOnlyNotice) -> &'static str {
+    match notice {
+        ReadOnlyNotice::On => "読み取り専用にしました（表を変える操作はしません）",
+        ReadOnlyNotice::Off => "読み取り専用を外しました",
+        ReadOnlyNotice::Refused => {
+            "読み取り専用です。直すには Ctrl+Shift+P の「読み取り専用を切り替える」で外します"
+        }
+    }
+}
+
 /// 知らせの文言。
 #[must_use]
 pub fn notice_status(notice: Notice) -> String {
@@ -233,6 +245,7 @@ pub fn notice_status(notice: Notice) -> String {
         Notice::StillSaving => String::from("保存しています。終わるまで直せません"),
         Notice::SaveFailed(problem) => save_problem_status(problem),
         Notice::NewWindowFailed => String::from("新しい表の窓を開けませんでした"),
+        Notice::ReadOnly(read_only) => String::from(read_only_status(read_only)),
         Notice::Paste(paste) => paste_status(paste),
         Notice::Find(find) => find_status(find),
         Notice::Replace(replace) => replace_status(replace),

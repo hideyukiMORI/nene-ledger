@@ -87,6 +87,8 @@ pub enum Intent {
     ReplaceAll,
     /// 詳細ペインを開閉する（Ctrl+Shift+U）。
     ToggleDetail,
+    /// 読み取り専用にする / 外す（パレット・EDIT-13・GitHub Issue #238）。
+    ToggleReadOnly,
     /// 配色を表の中で替える（試しに・Ctrl+Shift+T と Ctrl+Shift+Alt+T）。
     Theme(ThemeStep),
     /// 表と詳細ペインの文字の大きさを変える（Ctrl+ホイール・Ctrl+0・パレット。Ctrl++ / Ctrl+- は行と列の足し消し・ADR 0027）。

@@ -6,6 +6,7 @@
 extern crate alloc;
 
 pub mod about_line;
+mod access;
 pub mod added_row_shape;
 pub mod bar_hit;
 pub mod bar_marks;
@@ -79,6 +80,7 @@ pub mod pointer_hold;
 pub mod pointer_shape;
 pub mod press_kind;
 pub mod ranges;
+pub mod read_only_notice;
 pub mod reading_aspect;
 pub mod reading_choice;
 pub mod record_lookup;

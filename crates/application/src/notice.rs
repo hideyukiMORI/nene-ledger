@@ -3,6 +3,7 @@
 use crate::columns_notice::ColumnsNotice;
 use crate::find_notice::FindNotice;
 use crate::paste_notice::PasteNotice;
+use crate::read_only_notice::ReadOnlyNotice;
 use crate::replace_notice::ReplaceNotice;
 use crate::rows_notice::RowsNotice;
 use crate::save_problem::SaveProblem;
@@ -72,6 +73,8 @@ pub enum Notice {
     Replace(ReplaceNotice),
     /// 新しい表の窓を開けなかった（自分の exe を起こせない・ADR 0028 の決定 1）。
     NewWindowFailed,
+    /// 読み取り専用（EDIT-13・GitHub Issue #238）。
+    ReadOnly(ReadOnlyNotice),
     /// 新しい表は、読み方を変えられない（名前を付けて保存してから・ADR 0028 の決定 3）。
     ReadingNeedsFile,
     /// 書き換えがある間は、読み方を変えられない（先に保存する）。

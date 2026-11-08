@@ -258,6 +258,7 @@ impl CommandPalette {
             | Intent::FindToggle(_)
             | Intent::ReplaceAll
             | Intent::ToggleDetail
+            | Intent::ToggleReadOnly
             | Intent::Theme(_)
             | Intent::Zoom(_)
             | Intent::Edit
@@ -372,6 +373,7 @@ impl CommandPalette {
             | Intent::Cut
             | Intent::OpenFind { .. }
             | Intent::ToggleDetail
+            | Intent::ToggleReadOnly
             | Intent::Theme(_)
             | Intent::Zoom(_)
             | Intent::OpenPalette
