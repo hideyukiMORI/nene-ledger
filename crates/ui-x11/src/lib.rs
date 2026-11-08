@@ -5,6 +5,7 @@
 
 mod chrome_action;
 mod cursor_shape;
+mod drop_step;
 mod frame_surface;
 mod incoming_paste;
 mod key_intent;
@@ -18,7 +19,9 @@ mod screen;
 mod step;
 pub mod ui;
 pub mod ui_failure;
+mod uri_list;
 mod viewport;
 mod window_atoms;
 mod x11_wakeup;
 mod x11_window;
+mod xdnd_atoms;

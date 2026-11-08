@@ -154,6 +154,14 @@ impl<'session> WindowState<'session> {
         }
     }
 
+    /// 窓に落とされたファイルを渡す（どれも新しい窓で開く・CLIP-04・GitHub Issue #243）。
+    pub(crate) fn open_files(&mut self, paths: &[String]) {
+        if !paths.is_empty() {
+            self.session.open_files(paths);
+            self.invalidate();
+        }
+    }
+
     /// 意図を渡す。コピーなら文字列をクリップボードに置く。
     pub(crate) fn intent(&mut self, intent: Intent) {
         let view = self.view();

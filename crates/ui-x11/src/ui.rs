@@ -16,6 +16,7 @@ use x11rb::protocol::Event;
 
 use crate::chrome_action::ChromeAction;
 use crate::cursor_shape::CursorShape;
+use crate::drop_step::DropStep;
 use crate::frame_surface::{measure, paint};
 use crate::key_intent::button_intent;
 use crate::paste_receipt::PasteReceipt;
@@ -131,6 +132,14 @@ impl Ui {
         }
         if let Some(step) = self.clipboard_event(event, screen)? {
             return Ok(step);
+        }
+        match self.window.drop_event(event, screen.drop_source())? {
+            Some(DropStep::Dropped(paths)) => {
+                session.open_files(&paths);
+                return Ok(Step::Redraw);
+            }
+            Some(DropStep::Handled) => return Ok(Step::Wait),
+            None => {}
         }
         let property = self.window.paste_property(screen.paste_slot());
         match self
