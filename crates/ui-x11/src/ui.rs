@@ -120,6 +120,7 @@ impl Ui {
             }
             // 縮んだときは Expose が来ないので、ここで描き直す（ボタンの位置が右の端に付いて動く）。
             screen.set_viewport(screen.viewport().resized(size));
+            session.resized(screen.view());
             return Ok(Step::Redraw);
         }
         if self.window.is_state_change(event) {

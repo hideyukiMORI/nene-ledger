@@ -799,6 +799,25 @@ impl Document {
         effect
     }
 
+    /// 窓 `window` の大きさに合わせて、表の右の端が窓に収まるのに左へ隠れた列があれば、最初の列を、最後の列が収まる
+    /// いちばん左まで戻す（狭い窓で右へ動いた後に広げると、間の列が出なくなった・GitHub Issue #265）。
+    pub fn fit_columns(&mut self, window: WindowView) {
+        self.window = Some(window);
+        let Some(last) = self.widths.columns().len().checked_sub(1) else {
+            return;
+        };
+        if self.first_column <= self.frozen {
+            return;
+        }
+        let width = self.bars(window).body().size().width();
+        let fitting = self
+            .layout(self.first_column, window.content_metrics())
+            .first_column_showing(last, self.frozen, width);
+        if fitting < self.first_column {
+            self.first_column = fitting;
+        }
+    }
+
     /// 窓の行を読んだ後でも、見えている列を窓の行が持っていなければ、読み直す本体の位置（今の表示の先頭）。合成ルートは
     /// `Read` を受けて読んだ後にこれを見る（行の数が分かる前に表の終わりより下を読むと、読んだ行が無く前の窓の行が残る・
     /// ADR 0033 の決定 1）。足りていれば `None`。
@@ -9725,5 +9744,42 @@ mod tests {
                 .any(|text| text.contains("見えている範囲の外") || text.contains("2 行目　")),
             "{texts:?}"
         );
+    }
+
+    /// 左の列を固定して狭い窓で右端の列へ動いた後に窓を広げると、表の右の端が収まる所まで、左へ隠れた列を戻す。収まらない
+    /// 幅では戻しすぎない（GitHub Issue #265）。
+    #[test]
+    fn widening_the_window_brings_back_hidden_columns() {
+        let cells = [
+            "value-0000",
+            "value-1111",
+            "value-2222",
+            "value-3333",
+            "value-4444",
+            "value-5555",
+        ];
+        let mut document = opened_with(&table(&[&cells, &cells]));
+        let narrow = view(300, 400, WindowPlacement::Normal);
+        document.apply(moving(CursorStep::Right), narrow);
+        document.apply(Intent::FreezeColumns, narrow);
+        let frozen = document.frozen;
+        assert!(frozen >= 1, "{frozen}");
+        document.apply(moving(CursorStep::RowEnd), narrow);
+        let far = document.first_column;
+        assert!(far > 3, "{far}");
+        // 狭いままなら、最後の列を見せる所から動かさない。
+        document.fit_columns(narrow);
+        assert_eq!(document.first_column, far);
+        // 広げると、全部が収まるので固定した列の次まで戻る。
+        document.fit_columns(view(1600, 400, WindowPlacement::Normal));
+        assert_eq!(document.first_column, frozen);
+        // 少しだけ広げたときは、最後の列が収まるいちばん左まで。
+        document.apply(moving(CursorStep::RowEnd), narrow);
+        let middle = view(600, 400, WindowPlacement::Normal);
+        document.fit_columns(middle);
+        let layout = document.layout(document.first_column, middle.content_metrics());
+        let width = document.bars(middle).body().size().width();
+        assert!(layout.column_right(5).is_some_and(|right| right <= width));
+        assert!(document.first_column > frozen && document.first_column < far);
     }
 }

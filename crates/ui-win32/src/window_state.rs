@@ -123,6 +123,8 @@ impl<'session> WindowState<'session> {
         {
             self.pen = None;
         }
+        let view = self.view();
+        self.session.resized(view);
         self.invalidate();
     }
 

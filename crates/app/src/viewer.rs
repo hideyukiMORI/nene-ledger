@@ -1048,6 +1048,14 @@ impl Session for Viewer {
         self.type_into_palette(text, view);
     }
 
+    fn resized(&mut self, view: WindowView) {
+        // 広げて表の右に空きができれば、左へ隠れた列を戻し、窓の行が持たない列なら読み直す（GitHub Issue #265）。
+        self.document.fit_columns(view);
+        if let Some(body) = self.document.columns_reread() {
+            self.read_window(self.document.line_of(body));
+        }
+    }
+
     fn open_files(&mut self, paths: &[String]) {
         // 落としたファイルは、どれも新しい窓で開く（今の窓は残る・新しい表と同じ作り・GitHub Issue #243）。
         for path in paths {

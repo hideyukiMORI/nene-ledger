@@ -21,6 +21,9 @@ pub trait Session {
     /// 起こされた。作業のスレッドの知らせと時計の刻みを状態に取り込む。`view` は今の窓。
     fn refresh(&mut self, view: WindowView);
 
+    /// 窓の大きさが変わった。`view` は変わった後の窓（広げて表の右に空きができれば、左へ隠れた列を戻す・GitHub Issue #265）。
+    fn resized(&mut self, view: WindowView);
+
     /// 窓の名前（OS の窓の名前に付ける・未保存なら頭に印）。UI は描くたびに問い合わせ、変わっていれば付け直す。
     fn window_name(&self) -> String;
 
