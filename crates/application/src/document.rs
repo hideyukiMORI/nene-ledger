@@ -2442,6 +2442,20 @@ impl Document {
         self.go_to(reveal_row_below(current, body, room, above), page)
     }
 
+    /// カーソルのセルが表に重なった面（`cover`）の下にあれば、面の外へ出るまで表を送る（検索と置換の箱を開いたとき・
+    /// GitHub Issue #300）。面の下でなければ動かさない。表の端で送れないことは [`Self::cover_hides_cursor`] で分かる。
+    pub fn reveal_cursor(&mut self, window: WindowView) -> DocumentEffect {
+        let cursor = self.selection.cursor();
+        let (above, below) = self.covered_rows(cursor.column(), window);
+        if above == 0 && below == 0 {
+            return DocumentEffect::Stay;
+        }
+        let page = self.page_rows(window);
+        let room = page.saturating_sub(below).max(1);
+        let current = self.view.first_body();
+        self.go_to(reveal_row_below(current, cursor.body(), room, above), page)
+    }
+
     /// 表示の列 `column` の本体の行のうち、`cover` の下に入る行の数（上から・下から）。面が本体の行の上の端に掛かれば
     /// 上から、そうでなければ面の上の端より下を下から数える。列が面と横に重ならなければ `(0, 0)`。
     fn covered_rows(&self, column: usize, window: WindowView) -> (u64, u64) {
@@ -9186,6 +9200,30 @@ mod tests {
         document.show(1, cell_rows(&vec![vec![String::from("x")]; 20]));
         assert_eq!(looking(&mut document, 2), DocumentEffect::Stay);
         assert!(document.cover_hides_cursor(window));
+    }
+
+    /// 箱を開いたとき、カーソルのセルが箱の下にあれば箱の外へ送る。箱の下でなければ動かさない（GitHub Issue #300）。
+    #[test]
+    fn opening_the_cover_reveals_the_cursor() {
+        let mut document = tall();
+        let window = normal();
+        let body = document.bars(window).body();
+        let row = document.layout(0, window.content_metrics()).row_height();
+        let rows_top = body.origin().y() + row * document.fixed_rows();
+        document.show(41, cell_rows(&vec![vec![String::from("x")]; 20]));
+        document.select(CellPosition::new(41, 0), SelectionMode::Collapse);
+        assert_eq!(document.reveal_cursor(window), DocumentEffect::Stay);
+        document.set_cover(Some(PixelRect::new(
+            PixelPoint::new(0, 0),
+            PixelSize::new(window.size().width(), rows_top + row * 2 + 1),
+        )));
+        // 本体の 41 行目は先頭 40 から 2 行目で、上の 3 行の下。箱のすぐ下へ。
+        assert_eq!(
+            document.reveal_cursor(window),
+            DocumentEffect::Read { first_body: 38 }
+        );
+        document.select(CellPosition::new(45, 0), SelectionMode::Collapse);
+        assert_eq!(document.reveal_cursor(window), DocumentEffect::Stay);
     }
 
     /// 面と横に重ならない列は覆われず、面が無ければ覆われない（GitHub Issue #286）。
