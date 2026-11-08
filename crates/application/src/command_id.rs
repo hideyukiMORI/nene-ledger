@@ -28,6 +28,8 @@ pub enum CommandId {
     SelectColumns,
     /// 詳細ペインを開く / 閉じる。
     ToggleDetail,
+    /// 読み取り専用にする / 外す（EDIT-13・GitHub Issue #238）。
+    ToggleReadOnly,
     /// 文字を大きくする。
     ZoomIn,
     /// 文字を小さくする。
@@ -102,7 +104,7 @@ pub enum CommandId {
 
 impl CommandId {
     /// すべての操作（何も打たないときの順）。
-    pub const ALL: [Self; 42] = [
+    pub const ALL: [Self; 43] = [
         Self::Top,
         Self::Bottom,
         Self::GoTo,
@@ -143,6 +145,7 @@ impl CommandId {
         Self::InsertColumnsLeft,
         Self::InsertColumnsRight,
         Self::RemoveColumns,
+        Self::ToggleReadOnly,
         Self::ShowKeys,
         Self::ShowAbout,
     ];
@@ -162,6 +165,7 @@ impl CommandId {
                 DetailPane::Open => "詳細ペインを閉じる",
                 DetailPane::Closed => "詳細ペインを開く",
             },
+            Self::ToggleReadOnly => "読み取り専用を切り替える",
             Self::ZoomIn => "文字を大きくする",
             Self::ZoomOut => "文字を小さくする",
             Self::ZoomReset => "文字の大きさを戻す",
@@ -211,6 +215,7 @@ impl CommandId {
             Self::SelectRows => "ぎょうぜんたいをえらぶ",
             Self::SelectColumns => "れつぜんたいをえらぶ",
             Self::ToggleDetail => "しょうさいぺいんをひらくとじる",
+            Self::ToggleReadOnly => "よみとりせんようをきりかえる",
             Self::ZoomIn => "もじをおおきくする",
             Self::ZoomOut => "もじをちいさくする",
             Self::ZoomReset => "もじのおおきさをもどす",
@@ -260,6 +265,7 @@ impl CommandId {
             Self::SelectRows => &["select row", "whole row", "entire row"],
             Self::SelectColumns => &["select column", "whole column", "entire column"],
             Self::ToggleDetail => &["detail", "pane", "inspector", "toggle"],
+            Self::ToggleReadOnly => &["read only", "readonly", "lock", "protect", "view only"],
             Self::ZoomIn => &["zoom in", "bigger", "larger", "font"],
             Self::ZoomOut => &["zoom out", "smaller", "font"],
             Self::ZoomReset => &["zoom reset", "actual size", "font"],
@@ -320,7 +326,8 @@ impl CommandId {
             Self::MoveColumnsLeft => Some("Ctrl+Shift+PageUp"),
             Self::MoveColumnsRight => Some("Ctrl+Shift+PageDown"),
             // 文字の大きさのキーは Ctrl+ホイール（キーの一覧の WheelZoom）と Ctrl+0（ADR 0020 の施主の判断）。
-            Self::ZoomIn
+            Self::ToggleReadOnly
+            | Self::ZoomIn
             | Self::ZoomOut
             | Self::ChooseTheme
             | Self::ChooseDialect
@@ -369,6 +376,7 @@ impl CommandId {
             | Self::SelectRows
             | Self::SelectColumns
             | Self::ToggleDetail
+            | Self::ToggleReadOnly
             | Self::ZoomIn
             | Self::ZoomOut
             | Self::ZoomReset
@@ -418,6 +426,7 @@ impl CommandId {
             Self::SelectRows => Some(Intent::SelectRows),
             Self::SelectColumns => Some(Intent::SelectColumns),
             Self::ToggleDetail => Some(Intent::ToggleDetail),
+            Self::ToggleReadOnly => Some(Intent::ToggleReadOnly),
             Self::ZoomIn => Some(Intent::Zoom(ZoomStep::In)),
             Self::ZoomOut => Some(Intent::Zoom(ZoomStep::Out)),
             Self::ZoomReset => Some(Intent::Zoom(ZoomStep::Reset)),

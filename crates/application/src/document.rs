@@ -8,6 +8,7 @@ use alloc::vec::Vec;
 use core::cmp::Ordering;
 use core::ops::{Range, RangeInclusive};
 
+use crate::access::Access;
 use crate::added_row_shape::AddedRowShape;
 use crate::bar_hit::BarHit;
 use crate::bar_marks::BarMarks;
@@ -64,6 +65,7 @@ use crate::pointer_hold::PointerHold;
 use crate::pointer_shape::PointerShape;
 use crate::press_kind::PressKind;
 use crate::ranges::Ranges;
+use crate::read_only_notice::ReadOnlyNotice;
 use crate::replace_notice::ReplaceNotice;
 use crate::replace_run::ReplaceRun;
 use crate::row_band::RowBand;
@@ -186,6 +188,8 @@ pub struct Document {
     replacing: Option<ReplaceRun>,
     /// 求めたコピーが切り取りなら、その範囲（`copy_text` で枠を作る）。
     cutting: Option<Selection>,
+    /// 読み取り専用か（表の値・行・列を変える操作を止める・EDIT-13・GitHub Issue #238）。
+    access: Access,
     /// 最後に意図を取り込んだときの窓（窓の行が持つ列を決める・ADR 0033 の決定 1）。まだ無ければ `None`。
     window: Option<WindowView>,
 }
@@ -307,6 +311,7 @@ impl Document {
             finding: None,
             replacing: None,
             cutting: None,
+            access: Access::Writable,
             window: None,
         }
     }
@@ -425,6 +430,7 @@ impl Document {
             | Intent::FindToggle(_)
             | Intent::ReplaceAll
             | Intent::ToggleDetail
+            | Intent::ToggleReadOnly
             | Intent::Theme(_)
             | Intent::Zoom(_)
             | Intent::OpenPalette
@@ -593,10 +599,16 @@ impl Document {
     /// 窓の名前（自前のタイトルバーと OS の窓の名前）。未保存の書き換えがあれば頭に印を付ける（WIN-01・ADR 0026 の決定 7）。
     #[must_use]
     pub fn window_name(&self) -> String {
+        // 読み取り専用の印はファイル名の直後に付ける（「名前 — NeNe Ledger」ならアプリ名の前・EDIT-13）。
+        let title = match (self.is_read_only(), self.title.split_once(" — ")) {
+            (false, _) => self.title.clone(),
+            (true, Some((name, app))) => format!("{name}（読み取り専用） — {app}"),
+            (true, None) => format!("{}（読み取り専用）", self.title),
+        };
         if self.has_unsaved() {
-            format!("● {}", self.title)
+            format!("● {title}")
         } else {
-            self.title.clone()
+            title
         }
     }
 
@@ -881,6 +893,9 @@ impl Document {
             self.notice = Some(Notice::StillSaving);
             return DocumentEffect::Stay;
         }
+        if changes_when_writable(intent) && self.refuses_change() {
+            return DocumentEffect::Stay;
+        }
         if intent == Intent::Save {
             return self.save_request();
         }
@@ -956,6 +971,7 @@ impl Document {
             | Intent::UnfreezeColumns => self.arrange(intent, window),
             Intent::GoTo(target) => self.jump(target, page, window),
             Intent::ToggleDetail => self.toggle_detail(current, page),
+            Intent::ToggleReadOnly => self.toggle_read_only(current),
             Intent::Scroll(scroll) => self.wheel(scroll, current, window),
             Intent::Move { step, mode } => self.move_cursor((step, mode), page, window),
             Intent::Point { at, mode } => {
@@ -968,6 +984,33 @@ impl Document {
 
     /// 詳細ペインを開閉する。ペインの分だけ表が狭まるので、カーソルが見えるように縦の表示を動かす（`current` は今の最初の
     /// 本体の行・`page` は 1 画面の行の数）。動いた先の最初の行を返す。
+    /// 読み取り専用にする / 外す。直している途中なら、先に確定する（打った字は失わない）。
+    /// 縦の表示の先頭 `current` は動かさない。
+    fn toggle_read_only(&mut self, current: u64) -> u64 {
+        self.commit_edit();
+        self.access = self.access.toggled();
+        self.notice = Some(Notice::ReadOnly(match self.access {
+            Access::ReadOnly => ReadOnlyNotice::On,
+            Access::Writable => ReadOnlyNotice::Off,
+        }));
+        current
+    }
+
+    /// 読み取り専用か（EDIT-13）。
+    #[must_use]
+    pub const fn is_read_only(&self) -> bool {
+        matches!(self.access, Access::ReadOnly)
+    }
+
+    /// 読み取り専用なら、表を変えようとしたことを知らせて `true`（呼び手は何もしない）。
+    fn refuses_change(&mut self) -> bool {
+        let read_only = self.is_read_only();
+        if read_only {
+            self.notice = Some(Notice::ReadOnly(ReadOnlyNotice::Refused));
+        }
+        read_only
+    }
+
     fn toggle_detail(&mut self, current: u64, page: u64) -> u64 {
         self.detail = self.detail.toggled();
         reveal_row(current, self.selection.cursor().body(), page)
@@ -1024,6 +1067,7 @@ impl Document {
             | Intent::FindToggle(_)
             | Intent::ReplaceAll
             | Intent::ToggleDetail
+            | Intent::ToggleReadOnly
             | Intent::Theme(_)
             | Intent::Zoom(_)
             | Intent::OpenPalette
@@ -1113,6 +1157,7 @@ impl Document {
             | Intent::Drag { .. }
             | Intent::Release
             | Intent::ToggleDetail
+            | Intent::ToggleReadOnly
             | Intent::Theme(_)
             | Intent::Zoom(_) => return Some(intent),
         }
@@ -1197,6 +1242,7 @@ impl Document {
             | Intent::FindToggle(_)
             | Intent::ReplaceAll
             | Intent::ToggleDetail
+            | Intent::ToggleReadOnly
             | Intent::Theme(_)
             | Intent::Zoom(_)
             | Intent::OpenPalette
@@ -1228,6 +1274,10 @@ impl Document {
     /// カーソルのセルの編集を始める。見えていない行・切り詰めたレコード・セルの無い所なら始めない（知らせる）。
     /// 始めたら `true`。
     fn begin_edit(&mut self, mode: EditMode) -> bool {
+        // 読み取り専用なら直し始めない（打つ・F2・ダブルクリックのどれでも・EDIT-13）。
+        if self.refuses_change() {
+            return false;
+        }
         // セルを直し始めたら、切り取りの枠は消える（ADR 0029 の決定 5）。
         self.cut = None;
         let cursor = self.selection.cursor();
@@ -1296,6 +1346,9 @@ impl Document {
         }
         if self.saving {
             self.notice = Some(Notice::StillSaving);
+            return PasteRequest::Done;
+        }
+        if self.editor.is_none() && self.refuses_change() {
             return PasteRequest::Done;
         }
         self.notice = None;
@@ -1811,6 +1864,9 @@ impl Document {
             self.notice = Some(Notice::StillSaving);
             return DocumentEffect::Stay;
         }
+        if self.refuses_change() {
+            return DocumentEffect::Stay;
+        }
         self.commit_edit();
         if let Some((change, source)) = self.replaced_at_cursor(&query, replacement) {
             self.cut = None;
@@ -1861,6 +1917,9 @@ impl Document {
         }
         if self.saving {
             self.notice = Some(Notice::StillSaving);
+            return DocumentEffect::Stay;
+        }
+        if self.refuses_change() {
             return DocumentEffect::Stay;
         }
         self.notice = None;
@@ -2048,6 +2107,9 @@ impl Document {
             return DocumentEffect::Stay;
         };
         self.commit_edit();
+        if self.refuses_change() {
+            return DocumentEffect::Stay;
+        }
         if self.saving {
             self.notice = Some(Notice::StillSaving);
             return DocumentEffect::Stay;
@@ -2272,6 +2334,7 @@ impl Document {
             return;
         }
         self.notice = None;
+        // 読み取り専用なら `begin_edit` が止めて知らせる（EDIT-13）。
         if self.editor.is_none() && !self.begin_edit(EditMode::Entering) {
             return;
         }
@@ -2756,6 +2819,7 @@ impl Document {
             | Intent::FindToggle(_)
             | Intent::ReplaceAll
             | Intent::ToggleDetail
+            | Intent::ToggleReadOnly
             | Intent::Theme(_)
             | Intent::Zoom(_)
             | Intent::OpenPalette
@@ -2964,6 +3028,7 @@ impl Document {
             | Intent::FindToggle(_)
             | Intent::ReplaceAll
             | Intent::ToggleDetail
+            | Intent::ToggleReadOnly
             | Intent::Theme(_)
             | Intent::Zoom(_)
             | Intent::OpenPalette
@@ -4878,6 +4943,31 @@ fn changes_the_table(intent: Intent) -> bool {
     )
 }
 
+/// 読み取り専用の間は止める、表の値・行・列を変える意図（EDIT-13・GitHub Issue #238）。名前を付けて保存と新しい表は
+/// 止めない（今の表を変えない）。見る・選ぶ・動く・コピー・検索・表示だけの列の入れ替えと固定も止めない。
+const fn changes_when_writable(intent: Intent) -> bool {
+    matches!(
+        intent,
+        Intent::Type(_)
+            | Intent::Edit
+            | Intent::Delete
+            | Intent::BreakLine
+            | Intent::FillSelection
+            | Intent::Save
+            | Intent::Paste
+            | Intent::Cut
+            | Intent::ReplaceAll
+            | Intent::Undo
+            | Intent::Redo
+            | Intent::InsertRows(_)
+            | Intent::RemoveRows
+            | Intent::InsertColumns(_)
+            | Intent::RemoveColumns
+            | Intent::InsertHere
+            | Intent::RemoveHere
+    )
+}
+
 /// 意図 `intent` の後も切り取りの枠を残すか（見るだけ・選ぶだけ・動くだけの意図）。表の値・並び・列の見せる順を変える
 /// 意図・Esc・別のコピーと切り取り・直し始めは消す（ADR 0029 の決定 5）。
 const fn keeps_cut(intent: Intent) -> bool {
@@ -4896,6 +4986,7 @@ const fn keeps_cut(intent: Intent) -> bool {
         | Intent::FreezeColumns
         | Intent::UnfreezeColumns
         | Intent::ToggleDetail
+        | Intent::ToggleReadOnly
         | Intent::Theme(_)
         | Intent::Zoom(_)
         | Intent::OpenPalette
@@ -9377,5 +9468,110 @@ mod tests {
             }
         }
         assert!(checked > 10_000, "{checked}");
+    }
+
+    /// 表の中身の写し（差分・行の並び・列の並び・履歴の版）。読み取り専用の間に変わらないことを比べる。
+    fn table_state(document: &Document) -> (CellEdits, Vec<OrderRun>, usize, u64) {
+        (
+            document.edits().clone(),
+            document.runs_from(0, 10),
+            document.widths.columns().len(),
+            document.history.revision(),
+        )
+    }
+
+    /// 読み取り専用の間に止める意図（EDIT-13）。
+    const READ_ONLY_REFUSED: [Intent; 17] = [
+        Intent::Type('x'),
+        Intent::Edit,
+        Intent::Delete,
+        Intent::BreakLine,
+        Intent::FillSelection,
+        Intent::Save,
+        Intent::Paste,
+        Intent::Cut,
+        Intent::ReplaceAll,
+        Intent::Undo,
+        Intent::Redo,
+        Intent::InsertRows(RowPlace::Above),
+        Intent::RemoveRows,
+        Intent::InsertColumns(ColumnPlace::Left),
+        Intent::RemoveColumns,
+        Intent::InsertHere,
+        Intent::RemoveHere,
+    ];
+
+    /// 読み取り専用の間に、意図の一覧と、貼り付け・字の確定・置換・ダブルクリックのどれでも表が変わらず、直し始めず、
+    /// 知らせが出る。
+    fn assert_refuses_every_change(document: &mut Document, window: WindowView) {
+        let before = table_state(document);
+        for intent in READ_ONLY_REFUSED {
+            document.apply(intent, window);
+            assert_eq!(table_state(document), before, "{intent:?}");
+            assert!(document.editor.is_none(), "{intent:?}");
+            assert_eq!(
+                document.notice,
+                Some(Notice::ReadOnly(ReadOnlyNotice::Refused)),
+                "{intent:?}"
+            );
+        }
+        assert_eq!(document.paste("p\tq"), PasteRequest::Done);
+        document.commit_text("あ");
+        let query = FindQuery::new("b", FindOptions::standard());
+        assert_eq!(
+            document.replace_one(query.clone(), "#"),
+            DocumentEffect::Stay
+        );
+        assert_eq!(document.replace_all(query, "#"), DocumentEffect::Stay);
+        let layout = document.layout(0, window.content_metrics());
+        let body = document.bars(window).body();
+        let rect = layout.cell_rect(1, 1).unwrap();
+        let at = PixelPoint::new(
+            body.origin().x() + rect.origin().x() + 3,
+            body.origin().y() + rect.origin().y() + 3,
+        );
+        document.apply(pressing(at, SelectionMode::Collapse), window);
+        document.apply(Intent::Release, window);
+        document.apply(Intent::DoubleClick { at }, window);
+        document.apply(Intent::Release, window);
+        assert!(document.editor.is_none());
+        assert_eq!(table_state(document), before);
+    }
+
+    /// 読み取り専用の間は、表の値・行・列を変える操作のどれでも表が変わらず、知らせが出る。見る・動くはできる。外せば
+    /// また直せる（EDIT-13・GitHub Issue #238）。
+    #[test]
+    fn a_read_only_table_refuses_every_change_until_released() {
+        let window = normal();
+        let mut document = editable();
+        // 戻せる書き換えを 1 つ作っておく（Undo も止まることを見る）。
+        typed(&mut document, "z");
+        document.apply(Intent::Confirm, window);
+        document.apply(moving(CursorStep::Up), window);
+        document.apply(Intent::ToggleReadOnly, window);
+        assert!(document.is_read_only());
+        assert_eq!(document.notice, Some(Notice::ReadOnly(ReadOnlyNotice::On)));
+        assert_eq!(
+            document.window_name(),
+            "● e.csv（読み取り専用） — NeNe Ledger"
+        );
+        assert_refuses_every_change(&mut document, window);
+        // 見る・動く・コピーはできる。
+        document.apply(moving(CursorStep::Down), window);
+        assert_eq!(document.selection().cursor(), CellPosition::new(1, 1));
+        assert!(matches!(
+            document.apply(Intent::Copy, window),
+            DocumentEffect::Copy { .. }
+        ));
+        // 外せば直せる。
+        document.apply(Intent::ToggleReadOnly, window);
+        assert_eq!(document.notice, Some(Notice::ReadOnly(ReadOnlyNotice::Off)));
+        assert_eq!(document.window_name(), "● e.csv — NeNe Ledger");
+        typed(&mut document, "y");
+        document.apply(Intent::Confirm, window);
+        assert_eq!(
+            edited(&document, 1, 1),
+            Some(&CellValue::Text(String::from("y")))
+        );
     }
 }

@@ -1017,6 +1017,10 @@ Windows の exe の `--version`（コマンドプロンプトに結んで書く�
 
 メモリの使用量（タスクマネージャー）は見ていない（案内の「記憶」の言い方が伝わらなかった・施主「記憶の意味がよくわからなかった」）。Linux の測りは benchmarks 第 14 節。時間はどれも施主の手応えで、測っていない。
 
+## 92. 読み取り専用に切り替える（GitHub Issue #238・EDIT-13）— X11（Xvfb）
+
+2026-11-08。release の exe で `crates/app/fixtures/screenshot.csv` を開き、Ctrl+Shift+P → `yomitori` → Enter（「読み取り専用を切り替える」）→ `a`。タイトルバーが `ro.csv（読み取り専用） — NeNe Ledger` になり、`a` では直し始めず、状態の行に `読み取り専用です。直すには Ctrl+Shift+P の「読み取り専用を切り替える」で外します` と出た。止める操作の一覧と外した後に直せることは application のテスト `a_read_only_table_refuses_every_change_until_released`（ダブルクリックの守りと貼り付けの守りを外すと落ちることを確かめた）。Windows の実機はまだ（QLT-013）。
+
 ## 7. active の規則と、その証明
 
 CNF-009 は active の規則ごとに `| ID |` で始まる行がここにあることを要求する。
