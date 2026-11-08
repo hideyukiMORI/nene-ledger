@@ -362,7 +362,7 @@ pub fn totals_status(totals: SelectionTotals) -> Option<String> {
     }
 }
 
-/// 数えた集計の文言（件数 · 合計 · 平均 · 数でない）。数が 1 つも無ければ合計と平均を出さない。
+/// 数えた集計の文言（件数 · 合計 · 平均 · 記号や指数を読んだ数 · 数でない）。数が 1 つも無ければ合計と平均を出さない。
 fn stats_status(stats: SelectionStats) -> String {
     let mut parts = alloc::vec![format!("件数 {}", group_digits(stats.cells()))];
     if stats.numbers() > 0 {
@@ -375,6 +375,13 @@ fn stats_status(stats: SelectionStats) -> String {
                 .average()
                 .map(|average| format!("平均 {}", decimal_status(average))),
         );
+    }
+    // 書き方を読み替えて数にしたセルがあれば、その数を添える（¥・桁区切り・指数・全角など・GitHub Issue #319）。
+    if stats.rewritten() > 0 {
+        parts.push(format!(
+            "記号や指数を読んだ {}",
+            group_digits(stats.rewritten())
+        ));
     }
     parts.push(format!("数でない {}", group_digits(stats.not_numbers())));
     parts.join(" · ")
@@ -510,6 +517,22 @@ mod tests {
         let slices: alloc::vec::Vec<&[String]> =
             rows.iter().map(alloc::vec::Vec::as_slice).collect();
         SelectionStats::of(&slices, &(0..=0))
+    }
+
+    /// 書き方を読み替えて数にしたセル（¥・桁区切り・指数）は、その数を添える。素の数だけなら添えない（GitHub Issue #319）。
+    #[test]
+    fn totals_say_how_many_values_were_read_as_numbers_by_rewriting() {
+        assert_eq!(
+            totals_status(SelectionTotals::Counted(stats_of(&[
+                "0012", "¥3", "1.5e3", "1"
+            ])))
+            .as_deref(),
+            Some("件数 4 · 合計 1,516 · 平均 379 · 記号や指数を読んだ 2 · 数でない 0")
+        );
+        assert_eq!(
+            totals_status(SelectionTotals::Counted(stats_of(&["0012", "-3.5"]))).as_deref(),
+            Some("件数 2 · 合計 8.5 · 平均 4.25 · 数でない 0")
+        );
     }
 
     #[test]

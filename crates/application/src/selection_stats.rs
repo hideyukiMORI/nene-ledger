@@ -5,7 +5,7 @@ use core::ops::RangeInclusive;
 
 use nene_ledger_core::decimal::Decimal;
 use nene_ledger_core::decimal_sum::DecimalSum;
-use nene_ledger_core::number_reading::read_number;
+use nene_ledger_core::number_reading::{is_plain_number, read_number};
 
 /// 選んだ範囲の集計。件数（空でないセル）・数の個数・合計（桁あふれなら `None`）・数として読めないセルの数。
 /// 空のセルとセルが無いは数えない（RS-004）。数は 10 進で正確に、足す順に依らずに足す（GitHub Issue #42）。
@@ -15,6 +15,8 @@ pub struct SelectionStats {
     numbers: u64,
     sum: DecimalSum,
     not_numbers: u64,
+    /// 数と読んだうち、書き方を読み替えたもの（`¥`・桁区切り・指数・全角など・GitHub Issue #319）。
+    rewritten: u64,
 }
 
 impl SelectionStats {
@@ -38,6 +40,7 @@ impl SelectionStats {
             numbers: 0,
             sum: DecimalSum::ZERO,
             not_numbers: 0,
+            rewritten: 0,
         }
     }
 
@@ -68,9 +71,18 @@ impl SelectionStats {
             Some(number) => {
                 self.numbers = self.numbers.saturating_add(1);
                 self.sum.add(number);
+                if !is_plain_number(value) {
+                    self.rewritten = self.rewritten.saturating_add(1);
+                }
             }
             None => self.not_numbers = self.not_numbers.saturating_add(1),
         }
+    }
+
+    /// 数と読んだうち、書き方を読み替えたもの（`¥3`・`1,200`・`1.5e3` など）の数（GitHub Issue #319）。
+    #[must_use]
+    pub fn rewritten(self) -> u64 {
+        self.rewritten
     }
 
     /// 件数（空でないセル）。
