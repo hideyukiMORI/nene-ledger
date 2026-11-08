@@ -1148,6 +1148,10 @@ fn palette_outcome(
         if let Some(with) = layout.field_at(at) {
             return state.click_field(with);
         }
+        // 条件の札を押すと、その条件を切り替える（キーと同じ・GitHub Issue #288）。
+        if let Some(toggle) = layout.toggle_at(at) {
+            return state.handle(Intent::FindToggle(toggle), current);
+        }
         match layout.item_at(at) {
             Some(index) => state.click(index, current),
             None if layout.contains(at) => PaletteOutcome::Stay,

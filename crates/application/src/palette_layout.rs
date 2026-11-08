@@ -1,10 +1,13 @@
 //! コマンドパレットの配置（物理画素）。描画とクリックの当たり判定が同じ配置を使う。
 
+use nene_ledger_core::display_width::display_columns;
+use nene_ledger_core::glyph_metrics::GlyphMetrics;
 use nene_ledger_core::pixel_point::PixelPoint;
 use nene_ledger_core::pixel_rect::PixelRect;
 use nene_ledger_core::pixel_size::PixelSize;
 
 use crate::command_palette::CommandPalette;
+use crate::find_toggle::FindToggle;
 use crate::palette_mode::PaletteMode;
 use crate::window_view::WindowView;
 
@@ -17,6 +20,25 @@ const MARGIN: u32 = 8;
 const PADDING: u32 = 12;
 /// 一度に見せる候補の数の上限。
 const MAX_ROWS: u32 = 10;
+/// 条件の札の内側の左右の余白と、札の間の空き。
+pub const CHIP_PAD: u32 = 6;
+const CHIP_GAP: u32 = 6;
+/// 条件の札の上下の空き（行の高さから引く）。
+const CHIP_INSET: u32 = 3;
+
+/// 検索と置換の段の条件の札（名前・キー・切り替え）。名前は「区別する」側にそろえて固定し、オンとオフは札の塗りと印で
+/// 見せる（GitHub Issue #288）。上の行に 3 つ、下の行に 2 つ。
+pub const FIND_CHIPS: [(&str, &str, FindToggle); 5] = [
+    ("大小を区別", "Alt+C", FindToggle::Case),
+    ("セル全体", "Alt+W", FindToggle::WholeCell),
+    ("正規表現", "Alt+R", FindToggle::Regex),
+    ("全角半角を区別", "Alt+Z", FindToggle::Width),
+    ("かなを区別", "Alt+K", FindToggle::Kana),
+];
+/// 上の行に置く札の数。
+const FIRST_ROW_CHIPS: usize = 3;
+/// 札の名前の前に空ける、オンの印（✓）の桁。
+pub const CHIP_MARK_COLUMNS: u32 = 2;
 
 /// コマンドパレットの配置。窓の上の中央に重ね、上に検索欄、配色の段なら試しの案内、その下に候補の行。
 /// 字は窓の部品の大きさで、表の拡大には従わない（ADR 0020）。
@@ -26,6 +48,7 @@ pub struct PaletteLayout {
     field: PixelRect,
     second: Option<PixelRect>,
     hint: Option<PixelRect>,
+    chips: Option<[PixelRect; 5]>,
     list_top: u32,
     row_height: u32,
     first: usize,
@@ -74,6 +97,7 @@ impl PaletteLayout {
             field: move_rect(self.field),
             second: self.second.map(move_rect),
             hint: self.hint.map(move_rect),
+            chips: self.chips.map(|chips| chips.map(move_rect)),
             list_top: self.list_top.saturating_add(down),
             ..self
         }
@@ -121,16 +145,91 @@ impl PaletteLayout {
             .saturating_add(list_height)
             .saturating_add(padding)
             .saturating_sub(top);
-        Self {
+        let mut layout = Self {
             panel: rect(left, top, width, height),
             field,
             second,
             hint,
+            chips: None,
             list_top,
             row_height,
             first,
             visible,
+        };
+        layout.chips = layout.place_chips(palette.mode(), metrics);
+        layout
+    }
+
+    /// 検索と置換の段の条件の札の矩形（[`FIND_CHIPS`] の順）。置換の段はキーの案内の行の下から。行が足りなければ `None`。
+    fn place_chips(&self, mode: PaletteMode, metrics: GlyphMetrics) -> Option<[PixelRect; 5]> {
+        let first_row = match mode {
+            PaletteMode::Find => 0,
+            PaletteMode::Replace { .. } => 1,
+            PaletteMode::Commands
+            | PaletteMode::GoTo
+            | PaletteMode::Keys
+            | PaletteMode::About
+            | PaletteMode::Themes { .. }
+            | PaletteMode::Reading { .. }
+            | PaletteMode::Candidates { .. }
+            | PaletteMode::SaveAs { .. } => return None,
+        };
+        if self.visible < first_row + 2 {
+            return None;
         }
+        let half = metrics.half_width();
+        let (pad, gap, inset) = (
+            metrics.px(CHIP_PAD),
+            metrics.px(CHIP_GAP),
+            metrics.px(CHIP_INSET),
+        );
+        let mut chips = [PixelRect::new(PixelPoint::new(0, 0), PixelSize::new(0, 0)); 5];
+        let mut left = self.field.origin().x();
+        for (index, &(name, key, _)) in FIND_CHIPS.iter().enumerate() {
+            let slot = if index < FIRST_ROW_CHIPS {
+                first_row
+            } else {
+                first_row + 1
+            };
+            if index == FIRST_ROW_CHIPS {
+                left = self.field.origin().x();
+            }
+            let row = self.row(slot);
+            let columns = CHIP_MARK_COLUMNS
+                .saturating_add(display_columns(name))
+                .saturating_add(1)
+                .saturating_add(display_columns(key));
+            let width = columns
+                .saturating_mul(half)
+                .saturating_add(pad.saturating_mul(2));
+            if let Some(chip) = chips.get_mut(index) {
+                *chip = rect(
+                    left,
+                    row.origin().y().saturating_add(inset),
+                    width,
+                    row.size().height().saturating_sub(inset.saturating_mul(2)),
+                );
+            }
+            left = left.saturating_add(width).saturating_add(gap);
+        }
+        Some(chips)
+    }
+
+    /// 検索と置換の段の条件の札（[`FIND_CHIPS`] の順）。ほかの段と、行が足りない低い窓は `None`。
+    #[must_use]
+    pub fn chips(&self) -> Option<[PixelRect; 5]> {
+        self.chips
+    }
+
+    /// 窓の中の位置 `at` の条件の札の切り替え。札の外なら `None`。
+    #[must_use]
+    pub fn toggle_at(&self, at: PixelPoint) -> Option<FindToggle> {
+        let chips = self.chips?;
+        chips
+            .iter()
+            .zip(FIND_CHIPS)
+            .find(|&(&chip, _)| contains(chip, at))
+            .map(|(_, (_, _, toggle))| toggle)
     }
 
     /// パレットの面。
@@ -354,5 +453,41 @@ mod tests {
         // 窓より高い箱は上のまま。
         let short = PaletteLayout::new(view(1024, 120), &palette);
         assert_eq!(short.panel().origin().y(), 43);
+    }
+
+    /// 条件の札は、いちばん狭いパレットでも欄の幅に収まり、押した札の切り替えが分かる。低い窓とほかの段には無い
+    /// （GitHub Issue #288）。
+    #[test]
+    fn the_condition_chips_fit_and_answer_clicks() {
+        for palette in [
+            CommandPalette::open_find("x", FindOptions::standard()),
+            CommandPalette::open_replace("x", "", FindOptions::standard()),
+        ] {
+            // 窓が狭いとパレットはいちばん狭い 480。
+            let layout = PaletteLayout::new(view(600, 640), &palette);
+            assert_eq!(layout.panel().size().width(), 480);
+            let chips = layout.chips().unwrap();
+            assert_chips_inside(&layout, chips);
+            // 上の行に 3 つ、下の行に 2 つ。
+            assert_eq!(chips[0].origin().y(), chips[2].origin().y());
+            assert!(chips[3].origin().y() > chips[2].origin().y());
+            assert_eq!(PaletteLayout::new(view(1024, 120), &palette).chips(), None);
+        }
+        assert_eq!(
+            PaletteLayout::new(view(1024, 640), &CommandPalette::open()).chips(),
+            None
+        );
+    }
+
+    /// 札が欄の幅とパレットの面に収まり、押した札の切り替えが分かる。欄の上は札ではない。
+    fn assert_chips_inside(layout: &PaletteLayout, chips: [PixelRect; 5]) {
+        let field = layout.field();
+        let right = field.origin().x() + field.size().width();
+        for (chip, (_, _, toggle)) in chips.into_iter().zip(FIND_CHIPS) {
+            assert!(chip.origin().x() + chip.size().width() <= right);
+            assert!(layout.contains(chip.origin()));
+            assert_eq!(layout.toggle_at(chip.origin()), Some(toggle));
+        }
+        assert_eq!(layout.toggle_at(field.origin()), None);
     }
 }
