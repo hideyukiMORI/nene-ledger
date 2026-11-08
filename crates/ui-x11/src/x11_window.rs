@@ -22,14 +22,17 @@ use x11rb::wrapper::ConnectionExt as _;
 
 use crate::chrome_action::{MOVERESIZE_MOVE, cursor_glyph, moveresize_direction};
 use crate::cursor_shape::CursorShape;
+use crate::drop_step::DropStep;
 use crate::incoming_paste::IncomingPaste;
 use crate::key_intent::key_intent;
 use crate::key_map::KeyMap;
 use crate::paste_receipt::PasteReceipt;
 use crate::pointer_at::PointerAt;
 use crate::ui_failure::UiFailure;
+use crate::uri_list::file_paths;
 use crate::window_atoms::WindowAtoms;
 use crate::x11_wakeup::X11Wakeup;
+use crate::xdnd_atoms::{XDND_VERSION, XdndAtoms};
 
 /// 描いた面の色の深さ（cairo の RGB24）。
 const DEPTH: u8 = 24;
@@ -60,6 +63,7 @@ pub(crate) struct X11Window {
     cursors: [Cursor; 10],
     gc: Gcontext,
     atoms: WindowAtoms,
+    xdnd: XdndAtoms,
     pending_wake: Arc<AtomicBool>,
     keys: KeyMap,
 }
@@ -111,8 +115,7 @@ impl X11Window {
         )?;
         let gc = connection.generate_id()?;
         connection.create_gc(gc, window, &CreateGCAux::new())?;
-        let atoms = Self::name_window(&connection, window, title)?;
-        Self::remove_decorations(&connection, window, atoms)?;
+        let (atoms, xdnd) = Self::prepare(&connection, window, title)?;
         let keys = Self::key_map(&connection)?;
         let cursors = Self::cursors(&connection)?;
         connection.map_window(window)?;
@@ -124,6 +127,7 @@ impl X11Window {
             cursors,
             gc,
             atoms,
+            xdnd,
             pending_wake: Arc::new(AtomicBool::new(false)),
             keys,
         })
@@ -168,6 +172,30 @@ impl X11Window {
             title.as_bytes(),
         )?;
         Ok(atoms)
+    }
+
+    /// 見せる前の窓に、名前を付け、飾りを外すよう頼み、ファイルを落とせる印を付ける。
+    fn prepare(
+        connection: &RustConnection,
+        window: Window,
+        title: &str,
+    ) -> Result<(WindowAtoms, XdndAtoms), UiFailure> {
+        let atoms = Self::name_window(connection, window, title)?;
+        Self::remove_decorations(connection, window, atoms)?;
+        Ok((atoms, Self::accept_drops(connection, window)?))
+    }
+
+    /// ファイルを落とせる窓だと知らせる（`XdndAware` に版・CLIP-04・GitHub Issue #243）。
+    fn accept_drops(connection: &RustConnection, window: Window) -> Result<XdndAtoms, UiFailure> {
+        let xdnd = XdndAtoms::intern(connection)?;
+        connection.change_property32(
+            PropMode::REPLACE,
+            window,
+            xdnd.aware(),
+            AtomEnum::ATOM,
+            &[XDND_VERSION],
+        )?;
+        Ok(xdnd)
     }
 
     /// ウィンドウマネージャーに、タイトルバーと枠を付けないよう頼む（`_MOTIF_WM_HINTS`・ADR 0013 の決定 2）。
@@ -494,6 +522,95 @@ impl X11Window {
             self.atoms.wake(),
             Arc::clone(&self.pending_wake),
         )
+    }
+
+    /// ファイルのドラッグ＆ドロップ（XDND の版 5・CLIP-04・GitHub Issue #243）のイベントなら、その応え。どれでもなければ
+    /// `None`。窓の上で動いている間は「写して受け取る」と答え、落とされたら `XdndSelection` を `text/uri-list` で自分の
+    /// 属性に書いてもらうよう求め（送り手は `pending` に覚える）、届いたら道筋を返して送り手に受け取り終えたと知らせる。
+    pub(crate) fn drop_event(
+        &self,
+        event: &Event,
+        pending: &mut Option<Window>,
+    ) -> Result<Option<DropStep>, UiFailure> {
+        if let Event::SelectionNotify(notify) = event
+            && notify.requestor == self.window
+            && notify.selection == self.xdnd.selection()
+        {
+            let text = if notify.property == x11rb::NONE {
+                String::new()
+            } else {
+                let length =
+                    u32::try_from(self.connection.maximum_request_bytes() / 4).unwrap_or(u32::MAX);
+                let reply = self
+                    .connection
+                    .get_property(true, self.window, notify.property, AtomEnum::ANY, 0, length)?
+                    .reply()?;
+                String::from_utf8_lossy(&reply.value).into_owned()
+            };
+            if let Some(source) = pending.take() {
+                self.send_xdnd(
+                    source,
+                    self.xdnd.finished(),
+                    [1, self.xdnd.action_copy(), 0],
+                )?;
+            }
+            return Ok(Some(DropStep::Dropped(file_paths(&text))));
+        }
+        let Event::ClientMessage(message) = event else {
+            return Ok(None);
+        };
+        if message.window != self.window || message.format != 32 {
+            return Ok(None);
+        }
+        let fields = message.data.as_data32();
+        let source = fields.first().copied().unwrap_or(x11rb::NONE);
+        let kind = message.type_;
+        if kind == self.xdnd.position() {
+            self.send_status_action(source)?;
+            return Ok(Some(DropStep::Handled));
+        }
+        if kind == self.xdnd.drop() {
+            let time = fields.get(2).copied().unwrap_or(x11rb::CURRENT_TIME);
+            *pending = Some(source);
+            self.connection.convert_selection(
+                self.window,
+                self.xdnd.selection(),
+                self.xdnd.uri_list(),
+                self.xdnd.property(),
+                time,
+            )?;
+            self.connection.flush()?;
+            return Ok(Some(DropStep::Handled));
+        }
+        if kind == self.xdnd.enter() || kind == self.xdnd.leave() {
+            return Ok(Some(DropStep::Handled));
+        }
+        Ok(None)
+    }
+
+    /// 送り手 `target` へ、XDND の `kind` の合図を送る（1 つ目は自分の窓、続く 3 つは `rest`、5 つ目は 0）。
+    fn send_xdnd(&self, target: Window, kind: Atom, rest: [u32; 3]) -> Result<(), UiFailure> {
+        let [first, second, third] = rest;
+        let message =
+            ClientMessageEvent::new(32, target, kind, [self.window, first, second, third, 0]);
+        self.connection
+            .send_event(false, target, EventMask::NO_EVENT, message)?;
+        self.connection.flush()?;
+        Ok(())
+    }
+
+    /// 送り手 `target` へ `XdndStatus` を送る：受け取る（1）・矩形は空（動くたびに答えてもらう）・受け取る動きは写す。
+    fn send_status_action(&self, target: Window) -> Result<(), UiFailure> {
+        let message = ClientMessageEvent::new(
+            32,
+            target,
+            self.xdnd.status(),
+            [self.window, 1, 0, 0, self.xdnd.action_copy()],
+        );
+        self.connection
+            .send_event(false, target, EventMask::NO_EVENT, message)?;
+        self.connection.flush()?;
+        Ok(())
     }
 
     /// 起こす合図か。そうなら「届く前の合図がある」印を下ろす（次の合図を送れるようにする）。

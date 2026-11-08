@@ -1021,6 +1021,10 @@ Windows の exe の `--version`（コマンドプロンプトに結んで書く�
 
 2026-11-08。release の exe で `crates/app/fixtures/screenshot.csv` を開き、Ctrl+Shift+P → `yomitori` → Enter（「読み取り専用を切り替える」）→ `a`。タイトルバーが `ro.csv（読み取り専用） — NeNe Ledger` になり、`a` では直し始めず、状態の行に `読み取り専用です。直すには Ctrl+Shift+P の「読み取り専用を切り替える」で外します` と出た。止める操作の一覧と外した後に直せることは application のテスト `a_read_only_table_refuses_every_change_until_released`（ダブルクリックの守りと貼り付けの守りを外すと落ちることを確かめた）。Windows の実機はまだ（QLT-013）。
 
+## 93. 窓にファイルを落とすと新しい窓で開く（GitHub Issue #243・CLIP-04）— X11（Xvfb）
+
+2026-11-08。release の exe で `first.csv` を開き、XDND の送り手を真似る使い捨ての道具（x11rb 0.14.0・scratchpad・リポジトリには無い）から、`file://<ホスト名>/…/drop%20dir/%E6%9D%B1%E4%BA%AC%20a.csv` と `file:///…/first.csv` の 2 つを落とした。道具の見たこと：`XdndAware = 5`・`XdndStatus` は受け取る（1）で動きは写す・`SelectionRequest` の形は `text/uri-list`・`XdndFinished` は受け取った（1）で写す。落とした後の窓は `東京 a.csv — NeNe Ledger` と `first.csv — NeNe Ledger` が増えて 3 つ（元の窓は残る）。Windows の `WM_DROPFILES` は型と lint だけで、実機はまだ（QLT-013）。
+
 ## 7. active の規則と、その証明
 
 CNF-009 は active の規則ごとに `| ID |` で始まる行がここにあることを要求する。

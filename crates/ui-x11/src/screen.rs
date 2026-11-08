@@ -26,6 +26,8 @@ pub(crate) struct Screen {
     paste_slot: usize,
     /// OS に付けてある窓の名前（変わったときだけ付け直す・GitHub Issue #167）。
     name: String,
+    /// 落とされて中身を求めている間の、XDND の送り手の窓（CLIP-04・GitHub Issue #243）。
+    drop_source: Option<u32>,
 }
 
 impl Screen {
@@ -42,6 +44,7 @@ impl Screen {
             incoming: None,
             paste_slot: 0,
             name: String::new(),
+            drop_source: None,
         }
     }
 
@@ -79,6 +82,11 @@ impl Screen {
     /// 分けて受け取っている途中の貼り付けの置き場。
     pub(crate) fn incoming_paste(&mut self) -> &mut Option<IncomingPaste> {
         &mut self.incoming
+    }
+
+    /// 落とされて中身を求めている間の、XDND の送り手の窓（CLIP-04）。
+    pub(crate) fn drop_source(&mut self) -> &mut Option<u32> {
+        &mut self.drop_source
     }
 
     /// クリップボードに置いている中身（持ち主のときだけ）。

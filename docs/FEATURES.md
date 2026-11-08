@@ -273,7 +273,7 @@
 | CLIP-01 | Excel とのコピー / 貼り付け（タブ区切り・HTML）。貼り付けでも型を推し量らない | 1 | 未着手 | FR-016 | 一部 | 要望・X11 のタブ区切りのコピーは Issue #30（gate-proofs 第 21 節）。貼り付けは GitHub Issue #115 で 1 つのセルと編集中の欄・パレットの欄まで（両方の OS・Excel の引用を解く `parse_tsv`・gate-proofs 第 70 節）。表への複数のセルの貼り付けは GitHub Issue #146（ADR 0029 の決定 1〜4・左上から束のまま・表の端を越えれば行と列を足す・1 つの値は範囲を埋める・1 手で戻す・100 万セルまで・gate-proofs 第 75 節・benchmarks 第 7 節）。HTML はまだ。施主の Windows の実機で貼り付けを確かめた（gate-proofs 第 86 節）。X11 の大きな中身（`INCR`）は GitHub Issue #140 で受け取る（64 MiB まで・gate-proofs 第 74 節） |
 | CLIP-02 | 見出し付きでコピー・形式を選んでコピー（CSV / Markdown / JSON / SQL） | 2 | 未着手 | FR-016 | 一部 | 競合・SmoothCSV |
 | CLIP-03 | 外から貼った表の大きさが選択と違うときの扱い（はみ出し・行の追加）を確かめる | 1 | 未着手 | FR-016 | 少 | — |
-| CLIP-04 | ドラッグ＆ドロップでファイルを開く | 1 | 未着手 | FR-016 | 多 | ファイルのドラッグ＆ドロップの受け取り（X11 の XDND・Windows）はまだ |
+| CLIP-04 | ドラッグ＆ドロップでファイルを開く | 1 | 実装済み | FR-016 | 多 | 窓に落としたファイルは、どれも新しい窓で開く（施主の判断 2026-11-08・自分の exe をその道筋を付けて起こす・ADR 0028 の決定 1 と同じ作り・GitHub Issue #243）。X11 は XDND の版 5（`XdndAware`・`XdndStatus` で写して受け取る・`XdndSelection` を `text/uri-list` で読む・`XdndFinished`）。`file:` の URI の読み方は ui-x11 のテスト（`file_uris_become_paths`）。Xvfb で XDND の送り手を真似る道具から 2 つ落として 2 つの窓が開いた（gate-proofs 第 93 節）。Windows は `DragAcceptFiles`・`WM_DROPFILES`（`make lint-windows` だけ）。Windows の実機はまだ |
 | CLIP-05 | 「既定のアプリ」としての関連付け・コマンドラインから開く（行や列を指定して） | 2 | 未着手 | FR-016 | 一部 | 競合・SmoothCSV |
 
 ## 18. 自動化・繰り返し（AUTO）

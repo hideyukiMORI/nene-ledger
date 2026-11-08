@@ -1,5 +1,7 @@
-//! 新しい表を新しい窓で開く（ADR 0028 の決定 1）。自分の exe を `--new` で起こし直す。
+//! 新しい表・落としたファイルを新しい窓で開く（ADR 0028 の決定 1・GitHub Issue #243）。自分の exe を起こし直す。
 
+use std::ffi::OsStr;
+use std::path::Path;
 use std::process::Command;
 use std::thread::Builder;
 
@@ -17,8 +19,23 @@ const THREAD_NAME: &str = "nene-ledger-new-window";
 ///
 /// 自分の exe の道筋を取れない・起こせない・待つスレッドを作れないとき。
 pub fn open_new_window() -> Result<(), AdapterFailure> {
+    spawn_self(OsStr::new("--new"))
+}
+
+/// 自分の exe をファイル `path` を付けて起こす（落としたファイルを新しい窓で開く・CLIP-04・GitHub Issue #243）。子の終わりは
+/// [`open_new_window`] と同じく裏のスレッドで待つ。
+///
+/// # Errors
+///
+/// 自分の exe の道筋を取れない・起こせない・待つスレッドを作れないとき。
+pub fn open_file_window(path: &Path) -> Result<(), AdapterFailure> {
+    spawn_self(path.as_os_str())
+}
+
+/// 自分の exe を引数 `argument` で起こし、終わりを裏のスレッドで待つ。
+fn spawn_self(argument: &OsStr) -> Result<(), AdapterFailure> {
     let exe = std::env::current_exe()?;
-    let mut child = Command::new(exe).arg("--new").spawn()?;
+    let mut child = Command::new(exe).arg(argument).spawn()?;
     let _waiter = Builder::new()
         .name(String::from(THREAD_NAME))
         .spawn(move || drop(child.wait()))?;

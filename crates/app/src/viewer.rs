@@ -1035,6 +1035,22 @@ impl Session for Viewer {
         self.type_into_palette(text, view);
     }
 
+    fn open_files(&mut self, paths: &[String]) {
+        // 落としたファイルは、どれも新しい窓で開く（今の窓は残る・新しい表と同じ作り・GitHub Issue #243）。
+        for path in paths {
+            #[cfg(windows)]
+            let opened = nene_ledger_adapters_windows::new_window::open_file_window(path.as_ref());
+            #[cfg(not(windows))]
+            let opened = nene_ledger_adapters_x11::new_window::open_file_window(path.as_ref());
+            if let Err(failure) = opened {
+                warn(&format!(
+                    "落としたファイルの窓を開けなかった: {path}: {failure:?}"
+                ));
+                self.document.notify(Notice::NewWindowFailed);
+            }
+        }
+    }
+
     fn composition_area(&self, view: WindowView) -> Option<PixelRect> {
         self.palette
             .is_none()

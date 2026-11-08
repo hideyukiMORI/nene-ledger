@@ -18,6 +18,8 @@ mod clipboard;
 #[cfg(windows)]
 pub mod desktop;
 #[cfg(windows)]
+mod dropped_files;
+#[cfg(windows)]
 mod ime;
 #[cfg(windows)]
 mod pen;
