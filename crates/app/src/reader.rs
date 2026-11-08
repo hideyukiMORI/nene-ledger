@@ -7,6 +7,7 @@ use std::sync::Arc;
 use nene_ledger_application::file_stamp::FileStamp;
 use nene_ledger_application::wakeup::Wakeup;
 use nene_ledger_core::dialect_candidate::DialectCandidate;
+use nene_ledger_core::header_rows::HeaderRows;
 use nene_ledger_core::line_ending_counts::LineEndingCounts;
 use nene_ledger_core::text_encoding::TextEncoding;
 use nene_ledger_core::text_format::TextFormat;
@@ -140,7 +141,7 @@ impl Reader {
     pub(crate) fn read_trial(
         &self,
         format: TextFormat,
-        header: Option<u64>,
+        header: Option<HeaderRows>,
     ) -> Result<Rows, ScanFailure> {
         read_first_window(&self.source, format, header)
     }

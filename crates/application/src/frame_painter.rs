@@ -142,10 +142,10 @@ impl<'view> FramePainter<'view> {
         }
     }
 
-    /// 背景と、上に固定した見出しの行（無ければ列の番号の行 `numbers`）と、その下に本体の見えている行の命令。
+    /// 背景と、上に固定した見出しの行（上から・無ければ列の番号の行 `numbers`）と、その下に本体の見えている行の命令。
     pub(crate) fn paint(
         mut self,
-        header: Option<&ViewRow>,
+        header: &[ViewRow],
         numbers: Option<&ViewRow>,
         view: &TableView,
     ) -> Vec<DrawCommand> {
@@ -153,12 +153,15 @@ impl<'view> FramePainter<'view> {
             PixelRect::new(PixelPoint::new(0, 0), self.size),
             self.palette.background(),
         );
-        self.header_line = header.map(ViewRow::line);
+        self.header_line = header.first().map(ViewRow::line);
         let visible = self.layout.rows_in(self.size.height());
+        // 見出しの行を全部上に固定する（ADR 0034）。無ければ列の番号の行。
+        let numbers = numbers.filter(|_| header.is_empty());
         let fixed = header
+            .iter()
             .map(|row| (row, RowStyle::Header))
-            .or_else(|| numbers.map(|row| (row, RowStyle::Numbers)));
-        let styled = fixed.into_iter().chain(
+            .chain(numbers.map(|row| (row, RowStyle::Numbers)));
+        let styled = fixed.chain(
             view.rows()
                 .iter()
                 .zip(view.first_body()..)
@@ -811,7 +814,11 @@ mod tests {
             Some(selection) => painter.with_selection(selection),
             None => painter,
         };
-        painter.paint(header, None, &view(rows))
+        painter.paint(
+            Vec::from_iter(header.cloned()).as_slice(),
+            None,
+            &view(rows),
+        )
     }
 
     #[test]
@@ -826,7 +833,7 @@ mod tests {
         // 1 列目を固定し、表示は 3 列目から。2 列目は描かない。
         let layout = TableLayout::new(&ColumnWidths::fit(&cells), 2, 2, metrics()).with_frozen(1);
         let commands = FramePainter::new(&layout, metrics(), palette(), PixelSize::new(800, 600))
-            .paint(Some(&header), None, &view(&body));
+            .paint(core::slice::from_ref(&header), None, &view(&body));
         let shown = texts(&commands);
         assert!(shown.contains(&"aaaaa") && shown.contains(&"c") && shown.contains(&"dd"));
         assert!(shown.contains(&"x1") && shown.contains(&"x3"));
@@ -841,7 +848,7 @@ mod tests {
         // 固定が無ければ線も無い。
         let plain = TableLayout::new(&ColumnWidths::fit(&cells), 0, 2, metrics());
         let unfrozen = FramePainter::new(&plain, metrics(), palette(), PixelSize::new(800, 600))
-            .paint(Some(&header), None, &view(&body));
+            .paint(core::slice::from_ref(&header), None, &view(&body));
         assert!(fills_of(&unfrozen, palette().border()).is_empty());
     }
 
@@ -1064,7 +1071,7 @@ mod tests {
         FramePainter::new(&layout, metrics(), palette(), PixelSize::new(800, 600))
             .with_selection(Selection::at(crate::cell_position::CellPosition::new(1, 0)))
             .with_found(Some(found))
-            .paint(Some(&header), None, &view(rows))
+            .paint(core::slice::from_ref(&header), None, &view(rows))
     }
 
     /// 字の印の命令（書き直す文字列と範囲）。
@@ -1168,7 +1175,7 @@ mod tests {
         let commands = FramePainter::new(&layout, metrics(), palette(), PixelSize::new(800, 600))
             .with_selection(Selection::at(crate::cell_position::CellPosition::new(5, 5)))
             // 元の値（タブ）を持った行のまま（`view` は表示の文字列から作り直すので使わない）。
-            .paint(None, None, &TableView::from_rows(1, rows.to_vec(), None));
+            .paint(&[], None, &TableView::from_rows(1, rows.to_vec(), None));
         let muted: Vec<(&str, usize, usize, Color)> = commands
             .iter()
             .filter_map(|command| match command {

@@ -2,6 +2,7 @@
 
 use nene_ledger_core::detection::Detection;
 use nene_ledger_core::header_guess::HeaderGuess;
+use nene_ledger_core::header_rows::HeaderRows;
 use nene_ledger_core::line_ending_counts::LineEndingCounts;
 use nene_ledger_core::text_format::TextFormat;
 
@@ -13,7 +14,7 @@ use crate::dialect_doubt::DialectDoubt;
 pub(crate) struct Guessed {
     format: TextFormat,
     preamble_rows: u64,
-    header: Option<u64>,
+    header: Option<HeaderRows>,
     line_endings: LineEndingCounts,
     binary: bool,
     doubt: Option<DialectDoubt>,
@@ -24,7 +25,7 @@ impl Guessed {
     pub(crate) fn new(format: TextFormat, detection: &Detection, binary: bool) -> Self {
         let preamble_rows = u64::try_from(detection.preamble_rows()).unwrap_or(0);
         let header = match detection.header() {
-            HeaderGuess::Present | HeaderGuess::Unknown => Some(preamble_rows),
+            HeaderGuess::Present | HeaderGuess::Unknown => Some(HeaderRows::single(preamble_rows)),
             HeaderGuess::Absent => None,
         };
         Self {
@@ -52,8 +53,8 @@ impl Guessed {
         self.line_endings
     }
 
-    /// 見出しのレコードの番号。窓の上に固定する（表示だけ・原本は変えない）。
-    pub(crate) fn header(self) -> Option<u64> {
+    /// 見出しのレコードの範囲（判別は 1 行・ADR 0034 の決定 4）。窓の上に固定する（表示だけ・原本は変えない）。
+    pub(crate) fn header(self) -> Option<HeaderRows> {
         self.header
     }
 

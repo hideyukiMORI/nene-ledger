@@ -5,6 +5,7 @@ use core::ops::{ControlFlow, Range};
 use nene_ledger_application::cell_row::CellRow;
 use nene_ledger_application::cut_record::CutRecord;
 use nene_ledger_application::document::FIRST_HELD_COLUMNS;
+use nene_ledger_core::header_rows::HeaderRows;
 use nene_ledger_core::text_format::TextFormat;
 use nene_ledger_core::value::value;
 use nene_ledger_scan::decoding::decode_into;
@@ -66,7 +67,7 @@ pub(crate) fn read_rows(
 pub(crate) fn read_first_window(
     source: &Source,
     format: TextFormat,
-    header: Option<u64>,
+    header: Option<HeaderRows>,
 ) -> Result<Rows, ScanFailure> {
     let index = SparseIndex::empty();
     let first = 0..FIRST_HELD_COLUMNS;
@@ -78,13 +79,17 @@ pub(crate) fn read_first_window(
             Some(core::slice::from_ref(&first)),
         ),
     )?;
-    let at = header.and_then(|record| usize::try_from(record).ok());
-    if let Some((record, at)) = header.zip(at)
-        && rows.cells.get(at).is_some_and(|row| !row.is_whole())
-    {
-        let whole = read_rows(source, &index, format, RecordRange::new(record, 1))?;
-        if let (Some(slot), Some(row)) = (rows.cells.get_mut(at), whole.cells.into_iter().next()) {
-            *slot = row;
+    for record in header.iter().flat_map(|header| header.lines()) {
+        let Ok(at) = usize::try_from(record) else {
+            break;
+        };
+        if rows.cells.get(at).is_some_and(|row| !row.is_whole()) {
+            let whole = read_rows(source, &index, format, RecordRange::new(record, 1))?;
+            if let (Some(slot), Some(row)) =
+                (rows.cells.get_mut(at), whole.cells.into_iter().next())
+            {
+                *slot = row;
+            }
         }
     }
     Ok(rows)

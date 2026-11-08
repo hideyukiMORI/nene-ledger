@@ -5,6 +5,7 @@ use alloc::string::String;
 
 use nene_ledger_core::delimiter::Delimiter;
 use nene_ledger_core::dialect::Dialect;
+use nene_ledger_core::header_rows::HeaderRows;
 use nene_ledger_core::quoting::Quoting;
 use nene_ledger_core::text_encoding::TextEncoding;
 use nene_ledger_core::text_format::TextFormat;
@@ -26,8 +27,8 @@ pub enum ReadingChoice {
         /// 引用符の字。
         quote: u8,
     },
-    /// 見出しのレコードの番号（`None` は見出しなし）。
-    Header(Option<u64>),
+    /// 見出しのレコードの範囲（`None` は見出しなし・ADR 0034）。
+    Header(Option<HeaderRows>),
     /// 判別の候補の方言（区切り・引用の流儀・引用符の字を一度に当てる・Issue #3）。
     Dialect {
         /// 区切り（1 バイト）。
@@ -61,7 +62,7 @@ impl ReadingChoice {
 
     /// 今の読み方 `format`・見出し `header` の、面 `aspect` の値。
     #[must_use]
-    pub fn current(aspect: ReadingAspect, format: TextFormat, header: Option<u64>) -> Self {
+    pub fn current(aspect: ReadingAspect, format: TextFormat, header: Option<HeaderRows>) -> Self {
         let dialect = format.dialect();
         match aspect {
             ReadingAspect::Encoding => Self::Encoding(format.encoding()),
@@ -79,7 +80,14 @@ impl ReadingChoice {
             Self::Delimiter(byte) => delimiter_name(byte),
             Self::Quoting { quoting, quote } => quoting_name(quoting, quote),
             Self::Header(None) => String::from("見出しなし"),
-            Self::Header(Some(record)) => format!("{} 行目が見出し", record.saturating_add(1)),
+            Self::Header(Some(header)) if header.count() == 1 => {
+                format!("{} 行目が見出し", header.first().saturating_add(1))
+            }
+            Self::Header(Some(header)) => format!(
+                "{}〜{} 行目が見出し",
+                header.first().saturating_add(1),
+                header.end()
+            ),
             // 候補の一覧は短く（状態の行と同じ名前）。点数と列の数が右に並ぶ。
             Self::Dialect {
                 delimiter,
@@ -126,8 +134,8 @@ impl ReadingChoice {
     pub fn apply(
         self,
         format: TextFormat,
-        header: Option<u64>,
-    ) -> Option<(TextFormat, Option<u64>)> {
+        header: Option<HeaderRows>,
+    ) -> Option<(TextFormat, Option<HeaderRows>)> {
         let dialect = format.dialect();
         let rebuilt = |delimiter: u8, quoting: Quoting, quote: u8| {
             Dialect::new(Delimiter::new(delimiter).ok()?, quoting, quote)
@@ -190,30 +198,41 @@ mod tests {
             ReadingAspect::Quoting,
             ReadingAspect::Header,
         ] {
-            let current = ReadingChoice::current(aspect, utf8(), Some(0));
+            let current = ReadingChoice::current(aspect, utf8(), Some(HeaderRows::single(0)));
             assert!(aspect.options().contains(&current), "{aspect:?}");
             assert!(!current.name().is_empty());
         }
         assert_eq!(ReadingAspect::Encoding.options().len(), 9);
-        assert_eq!(ReadingAspect::Header.options().len(), 11);
+        // 「見出しなし」と、1〜10 行目 × 1〜3 行（ADR 0034 の決定 4）。
+        assert_eq!(ReadingAspect::Header.options().len(), 31);
     }
 
     #[test]
     fn a_choice_changes_only_its_aspect() {
         let (format, header) = ReadingChoice::Delimiter(b'\t')
-            .apply(utf8(), Some(0))
+            .apply(utf8(), Some(HeaderRows::single(0)))
             .unwrap();
         assert_eq!(format.dialect().delimiter().byte(), b'\t');
-        assert_eq!((format.encoding(), header), (TextEncoding::Utf8, Some(0)));
+        assert_eq!(
+            (format.encoding(), header),
+            (TextEncoding::Utf8, Some(HeaderRows::single(0)))
+        );
         let (sjis, _) = ReadingChoice::Encoding(TextEncoding::ShiftJis)
             .apply(utf8(), None)
             .unwrap();
         assert_eq!(sjis.dialect().delimiter().byte(), b',');
         assert_eq!(
-            ReadingChoice::Header(None).apply(utf8(), Some(0)),
+            ReadingChoice::Header(None).apply(utf8(), Some(HeaderRows::single(0))),
             Some((utf8(), None))
         );
-        assert_eq!(ReadingChoice::Header(Some(2)).name(), "3 行目が見出し");
+        assert_eq!(
+            ReadingChoice::Header(Some(HeaderRows::single(2))).name(),
+            "3 行目が見出し"
+        );
+        assert_eq!(
+            ReadingChoice::Header(HeaderRows::new(1, 3)).name(),
+            "2〜4 行目が見出し"
+        );
         // 区切りが引用符と同じ組は切れない。
         assert_eq!(ReadingChoice::Delimiter(b'"').apply(utf8(), None), None);
     }
@@ -222,7 +241,7 @@ mod tests {
     fn the_quote_character_can_be_chosen_and_unused_quotes_are_aligned() {
         let single = ReadingChoice::quoting(Quoting::Doubled, b'\'');
         assert!(ReadingAspect::Quoting.options().contains(&single));
-        let (format, _) = single.apply(utf8(), Some(0)).unwrap();
+        let (format, _) = single.apply(utf8(), Some(HeaderRows::single(0))).unwrap();
         assert_eq!(
             (format.dialect().quoting(), format.dialect().quote()),
             (Quoting::Doubled, b'\'')
@@ -256,10 +275,13 @@ mod tests {
         );
         assert_eq!(choice.name(), "タブ区切り・引用なし");
         assert_eq!(choice.keyword(), "tab tsv");
-        let (format, header) = choice.apply(utf8(), Some(0)).unwrap();
+        let (format, header) = choice.apply(utf8(), Some(HeaderRows::single(0))).unwrap();
         assert_eq!(format.dialect().delimiter().byte(), b'\t');
         assert_eq!(format.dialect().quoting(), Quoting::Plain);
-        assert_eq!((format.encoding(), header), (TextEncoding::Utf8, Some(0)));
+        assert_eq!(
+            (format.encoding(), header),
+            (TextEncoding::Utf8, Some(HeaderRows::single(0)))
+        );
         assert_eq!(
             ReadingChoice::dialect(Dialect::rfc4180()).name(),
             "カンマ区切り・\"\" で引用符（RFC 4180）"

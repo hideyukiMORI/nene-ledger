@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use nene_ledger_application::find_scope::FindScope;
 use nene_ledger_core::cell_change::CellChange;
+use nene_ledger_core::header_rows::HeaderRows;
 use nene_ledger_core::row_id::RowId;
 use nene_ledger_core::row_order::RowOrder;
 use nene_ledger_core::text_format::TextFormat;
@@ -24,7 +25,7 @@ pub(crate) struct ReplaceFold {
     scope: FindScope,
     replacement: String,
     format: TextFormat,
-    header: Option<u64>,
+    header: Option<HeaderRows>,
     rows: RowOrder,
     limit: usize,
     found: Arc<AtomicUsize>,
@@ -38,7 +39,7 @@ impl ReplaceFold {
     /// 行の並びは `rows`。`limit` セルを越えたらやめる。
     pub(crate) fn new(
         (scope, replacement): (FindScope, String),
-        (format, header): (TextFormat, Option<u64>),
+        (format, header): (TextFormat, Option<HeaderRows>),
         rows: RowOrder,
         limit: usize,
     ) -> Self {
@@ -69,7 +70,7 @@ impl RecordFold for ReplaceFold {
             self.changes.clear();
             return;
         }
-        if Some(number) == self.header {
+        if self.header.is_some_and(|header| header.contains(number)) {
             return;
         }
         let row = RowId::Source(number);
@@ -177,7 +178,7 @@ mod tests {
         let fold = || {
             ReplaceFold::new(
                 (scope.clone(), String::from("■")),
-                (format, Some(0)),
+                (format, Some(HeaderRows::single(0))),
                 rows.clone(),
                 limit,
             )

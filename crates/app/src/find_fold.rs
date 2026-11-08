@@ -1,6 +1,7 @@
 //! 原本のレコードを裏の仕事で探す畳み込み（ADR 0030 の決定 2・4）。
 
 use nene_ledger_application::find_scope::FindScope;
+use nene_ledger_core::header_rows::HeaderRows;
 use nene_ledger_core::row_id::RowId;
 use nene_ledger_core::row_order::RowOrder;
 use nene_ledger_core::text_format::TextFormat;
@@ -19,7 +20,7 @@ use nene_ledger_application::find_bound::FindBound;
 pub(crate) struct FindFold {
     scope: FindScope,
     format: TextFormat,
-    header: Option<u64>,
+    header: Option<HeaderRows>,
     rows: RowOrder,
     bound: FindBound,
     found: Option<(u64, usize)>,
@@ -29,7 +30,7 @@ impl FindFold {
     /// 問いと列と書き換え `scope` を、読み方 `format` で照らす。見出しのレコードは `header`、行の並びは `rows`。
     pub(crate) fn new(
         scope: FindScope,
-        (format, header): (TextFormat, Option<u64>),
+        (format, header): (TextFormat, Option<HeaderRows>),
         rows: RowOrder,
         bound: FindBound,
     ) -> Self {
@@ -51,7 +52,7 @@ impl FindFold {
 
 impl RecordFold for FindFold {
     fn record(&mut self, number: u64, record: &WindowRecord) {
-        if Some(number) == self.header {
+        if self.header.is_some_and(|header| header.contains(number)) {
             return;
         }
         let row = RowId::Source(number);
@@ -159,7 +160,12 @@ mod tests {
         let answers: Vec<Option<(u64, usize)>> = [1_usize, 2, 100]
             .iter()
             .map(|&size| {
-                let mut fold = FindFold::new(scope.clone(), (format, Some(0)), rows.clone(), bound);
+                let mut fold = FindFold::new(
+                    scope.clone(),
+                    (format, Some(HeaderRows::single(0))),
+                    rows.clone(),
+                    bound,
+                );
                 let flow = fold_range(
                     &from,
                     RecordRange::new(0, 100).chunks(size),
