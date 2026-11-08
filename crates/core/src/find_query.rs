@@ -9,6 +9,7 @@ use regex_automata::meta::Regex;
 use regex_automata::util::interpolate;
 use regex_automata::util::primitives::PatternID;
 use regex_automata::util::syntax;
+use regex_syntax::hir::literal::{ExtractKind, Extractor};
 
 use crate::dialect::Dialect;
 use crate::find_folding::{fold_for_find, fold_with_origins};
@@ -18,13 +19,17 @@ use crate::text_units::TextUnits;
 
 /// 探す文字列と条件。セルの値（見えている値の文字列）が当たるかを決める。値は文字列のまま比べる（数や日付として
 /// 比べない・KEEP-01）。正規表現の条件なら式を組み立てて持つ（ADR 0031）。読めない式はどのセルにも当たらない。
-/// 等しさは打った文字列と条件で決める（式はそこから作るので）。
+/// 等しさは打った文字列と条件で決める（式も先探しの字の並びもそこから作るので）。
 #[derive(Debug, Clone)]
 pub struct FindQuery {
     text: String,
     folded: String,
     options: FindOptions,
     regex: Option<Regex>,
+    /// ASCII のセルに当たるなら、そのセルに必ずどれかがある ASCII の字の並び（空でない）。大文字小文字の条件が偽なら
+    /// ASCII の大文字小文字を区別せずに比べる。正規表現でない問いは畳んだ問いそのもの、正規表現は式から取り出した
+    /// 当たりの頭の字の並び（`prefilter`・GitHub Issue #223）。言えなければ `None`。
+    needles: Option<Vec<Vec<u8>>>,
 }
 
 impl PartialEq for FindQuery {
@@ -39,11 +44,19 @@ impl FindQuery {
     /// `text` を条件 `options` で探す問い。
     #[must_use]
     pub fn new(text: &str, options: FindOptions) -> Self {
+        let folded = fold_for_find(text, options);
+        let needles = if options.regex() {
+            prefilter(text, options)
+        } else {
+            (!folded.is_empty() && folded.is_ascii())
+                .then(|| alloc::vec![folded.as_bytes().to_vec()])
+        };
         Self {
             text: String::from(text),
-            folded: fold_for_find(text, options),
+            folded,
             options,
             regex: compiled(text, options),
+            needles,
         }
     }
 
@@ -163,12 +176,18 @@ impl FindQuery {
     }
 
     /// 正規表現の条件で、セルの値 `cell` に長さのある当たりがあるか。ASCII だけのセルは写しを作らずに照らす（畳んでも
-    /// 小文字になるだけで、式は大文字小文字の設定で同じ答えになる）。
+    /// 小文字になるだけで、式は大文字小文字の設定で同じ答えになる）。先探しの字の並びのどれも無い ASCII のセルには式を
+    /// 当てない（GitHub Issue #223）。
     fn regex_matches(&self, cell: &str) -> bool {
         let Some(regex) = &self.regex else {
             return false;
         };
         if cell.is_ascii() {
+            if let Some(needles) = &self.needles
+                && !contains_any(cell.as_bytes(), needles, self.options.match_case())
+            {
+                return false;
+            }
             return has_long_match(regex, cell);
         }
         has_long_match(regex, &fold_for_find(cell, self.options))
@@ -177,22 +196,21 @@ impl FindQuery {
     /// 方言 `dialect` で書いた、ASCII だけの原本のレコードのバイト列 `raw`（区切りと引用を含む）のどのセルにも当たらないと
     /// 言えるか。復号せずに照らす速い道（ADR 0030 の決定 4）。ASCII のセルを畳んでも ASCII のままなので、問いが ASCII で
     /// なければ当たらない。ASCII の問いは、セルに当たれば、そのセルの値の字の並びがレコードに残っているかを方言で確かめる
-    /// （`record_lacks`・GitHub Issue #226）。
+    /// （`record_lacks`・GitHub Issue #226）。正規表現は、式から取り出した先探しの字の並びで同じことを確かめる（取り出せない
+    /// 式は除かない・GitHub Issue #223）。
     #[must_use]
     pub fn rules_out_ascii(&self, raw: &[u8], dialect: &Dialect) -> bool {
+        // 正規表現：読めない式はどこにも当たらない。正規表現でない問い：空の問いと ASCII でない問いは ASCII のセルに当たらない。
         if self.options.regex() {
-            // 式の字の並びがレコードに無いとは言えない（読めない式はどこにも当たらない）。
-            return self.regex.is_none();
-        }
-        if self.folded.is_empty() || !self.folded.is_ascii() {
+            if self.regex.is_none() {
+                return true;
+            }
+        } else if self.folded.is_empty() || !self.folded.is_ascii() {
             return true;
         }
-        record_lacks(
-            raw,
-            *dialect,
-            self.folded.as_bytes(),
-            self.options.match_case(),
-        )
+        self.needles
+            .as_ref()
+            .is_some_and(|needles| record_lacks(raw, *dialect, needles, self.options.match_case()))
     }
 
     /// ASCII だけのセル `cell` が当たるか（問いも ASCII）。
@@ -215,23 +233,63 @@ impl FindQuery {
 /// 正規表現の条件なら、打った `text` を組み立てた式（読めなければ `None`）。式は大文字小文字を除いてセルと同じ畳みで畳む
 /// （`\D` を `\d` にしないため）。大文字小文字は式の設定で扱う。セル全体の一致は式を頭と終わりに固定する。
 fn compiled(text: &str, options: FindOptions) -> Option<Regex> {
-    if !options.regex() || text.is_empty() {
-        return None;
-    }
-    let folded = fold_for_find(text, options.matching_case());
-    let pattern = if options.whole_cell() {
-        format!("\\A(?:{folded})\\z")
-    } else {
-        folded
-    };
+    let pattern = pattern(text, options)?;
     Regex::builder()
         .syntax(syntax::Config::new().case_insensitive(!options.match_case()))
         .build(&pattern)
         .ok()
 }
 
-/// 方言 `dialect` で書いた ASCII だけのレコードのバイト列 `raw` の、どのセルの値にも ASCII の字の並び `wanted`（空でない）が
-/// 無いと言えるか（`match_case` が偽なら ASCII の大文字小文字を区別しない）。GitHub Issue #226。
+/// 正規表現の条件で、打った `text` から組み立てる式の文字列（空の問いと正規表現でない条件は `None`）。
+fn pattern(text: &str, options: FindOptions) -> Option<String> {
+    if !options.regex() || text.is_empty() {
+        return None;
+    }
+    let folded = fold_for_find(text, options.matching_case());
+    Some(if options.whole_cell() {
+        format!("\\A(?:{folded})\\z")
+    } else {
+        folded
+    })
+}
+
+/// 先探しの字の並びの数の上限。超えると取り出しは字の並びを短くして数を減らす（`Extractor::limit_total`）。
+const PREFILTER_LIMIT: usize = 16;
+
+/// 正規表現の条件で、ASCII のセルの長さのある当たりが必ずどれかで始まる、ASCII の字の並び（空でない・GitHub Issue #223・
+/// benchmarks 第 11 節の案 C）。取り出せなければ `None`（その式は全部のセルに当てる）。
+///
+/// 式は大文字小文字を**区別して**読み、当たりの頭の字の並びの有限の集合を取り出す。大文字小文字を区別しない条件では、
+/// ASCII の大文字小文字を区別せずに比べる。区別しない式の字の組は、区別して読んだ字の組を大文字小文字で畳んで広げたもの
+/// なので、ASCII のセルの字がそれに入るなら、区別して読んだ組に ASCII の大文字小文字を除いて同じ字があるか、組に ASCII で
+/// ない字（ケルビンの記号 K・長い s の ſ は畳むと `k`・`s` に当たる）がある。ASCII でない字の並びが 1 つでもあれば取り出さ
+/// ない。否定の組（`[^k]`）は、区別しないほうが狭い。
+/// - 空の字の並び（長さ 0 で当たりうる・`a*`・`x|`）と、有限でない集合（頭が `\d`・`.` などの大きな組）は取り出さない
+/// - `^`・`$`・`\b` は長さ 0 なので、当たりの字の並びを変えない
+/// - ASCII でないセルには使わない（畳んだ写しにケルビンの記号などが残りうる）
+fn prefilter(text: &str, options: FindOptions) -> Option<Vec<Vec<u8>>> {
+    let pattern = pattern(text, options)?;
+    let hir = syntax::parse_with(&pattern, &syntax::Config::new()).ok()?;
+    let mut extractor = Extractor::new();
+    extractor
+        .kind(ExtractKind::Prefix)
+        .limit_total(PREFILTER_LIMIT);
+    let found = extractor.extract(&hir);
+    let literals = found.literals()?;
+    if literals.is_empty() {
+        return None;
+    }
+    literals
+        .iter()
+        .map(|literal| {
+            let bytes = literal.as_bytes();
+            (!bytes.is_empty() && bytes.is_ascii()).then(|| bytes.to_vec())
+        })
+        .collect()
+}
+
+/// 方言 `dialect` で書いた ASCII だけのレコードのバイト列 `raw` の、どのセルの値にも ASCII の字の並び `wanted`（どれも空で
+/// ない）のどれも無いと言えるか（`match_case` が偽なら ASCII の大文字小文字を区別しない）。GitHub Issue #226。
 ///
 /// 言えるのは、セルの値が「バイト列から引用符をいくつか抜いた字の並び」になるときだけ。
 /// - バックスラッシュで逃がす流儀で `\` があれば、逃がした字（`\,`・`\t`）が値では別の字になるので言えない
@@ -239,7 +297,7 @@ fn compiled(text: &str, options: FindOptions) -> Option<Regex> {
 ///   問いは、バイト列から引用符を**すべて**抜いた並びで探す（閉じた引用符の後ろに字が続くと、値では前の字とつながる）。
 ///   セルの値に問いがあれば、問いに引用符が無いので、引用符を抜いた並びにも同じ字の並びがある
 /// - 文字の単位が 2 バイトの文字コード（UTF-16）は ASCII のバイトが字を表さないので言えない（呼び手も除いている）
-fn record_lacks(raw: &[u8], dialect: Dialect, wanted: &[u8], match_case: bool) -> bool {
+fn record_lacks(raw: &[u8], dialect: Dialect, wanted: &[Vec<u8>], match_case: bool) -> bool {
     match dialect.units() {
         TextUnits::SingleByte | TextUnits::ShiftJis => {}
         TextUnits::Utf16Le | TextUnits::Utf16Be => return false,
@@ -255,13 +313,20 @@ fn record_lacks(raw: &[u8], dialect: Dialect, wanted: &[u8], match_case: bool) -
     }
     let quote = dialect.quote();
     if !quotes || !raw.contains(&quote) {
-        return !contains_ascii(raw, wanted, match_case);
+        return !contains_any(raw, wanted, match_case);
     }
-    if wanted.contains(&quote) {
+    if wanted.iter().any(|part| part.contains(&quote)) {
         return false;
     }
     let unquoted: Vec<u8> = raw.iter().copied().filter(|&byte| byte != quote).collect();
-    !contains_ascii(&unquoted, wanted, match_case)
+    !contains_any(&unquoted, wanted, match_case)
+}
+
+/// バイト列 `haystack` に字の並び `wanted` のどれかがあるか。
+fn contains_any(haystack: &[u8], wanted: &[Vec<u8>], match_case: bool) -> bool {
+    wanted
+        .iter()
+        .any(|part| contains_ascii(haystack, part, match_case))
 }
 
 /// バイト列 `haystack` に字の並び `wanted` があるか（`match_case` が偽なら ASCII の大文字小文字を区別しない）。空の並びは
@@ -462,13 +527,9 @@ mod tests {
         cells
     }
 
-    /// 無作為の ASCII のレコード × 方言 × 問いで、除いたレコードのどのセルにも問いが当たらない（GitHub Issue #226）。
-    /// セルは製品と同じ道（`sample_records` で切り、`value` で値にする）で取り出す。
-    #[test]
-    fn a_ruled_out_record_has_no_matching_cell() {
+    /// どの流儀 × 引用符 2 つ × 閉じない引用符の読み方 2 つの方言。
+    fn every_dialect() -> Vec<Dialect> {
         use crate::unclosed_quote::UnclosedQuote;
-        const RAW: [&str; 10] = ["a", "b", "A", ",", "\"", "'", "\\", "t", "\t", " "];
-        const TEXT: [&str; 8] = ["a", "b", "B", ",", "\"", "'", "\\", "\t"];
         let mut dialects = Vec::new();
         for quoting in [
             Quoting::Doubled,
@@ -482,17 +543,25 @@ mod tests {
                 dialects.push(dialect.with_unclosed_quote(UnclosedQuote::Literal));
             }
         }
-        let standard = FindOptions::standard();
-        let options = [
-            standard,
-            standard.toggled_case(),
-            standard.toggled_whole_cell(),
+        dialects
+    }
+
+    /// 無作為の ASCII のレコード（`RECORD` の字から）× 方言 × 問い（`texts` の字から・条件は `options` から）を `rounds` 回
+    /// 試し、除いたレコードのどのセルにも問いが当たらないことを確かめる。除いた回数を返す。
+    fn ruled_out_records(
+        rng: &mut Xorshift,
+        texts: &[&str],
+        options: &[FindOptions],
+        rounds: u32,
+    ) -> usize {
+        const RECORD: [&str; 12] = [
+            "a", "b", "A", ",", "\"", "'", "\\", "t", "\t", " ", "k", "1",
         ];
-        let mut rng = Xorshift(0x2026_1108_0226);
+        let dialects = every_dialect();
         let mut ruled_out = 0_usize;
-        for _ in 0..20_000_u32 {
-            let raw = random_text(&mut rng, &RAW, 12);
-            let text = random_text(&mut rng, &TEXT, 3);
+        for _ in 0..rounds {
+            let raw = random_text(rng, &RECORD, 12);
+            let text = random_text(rng, texts, 4);
             let dialect = dialects[rng.below(dialects.len())];
             let find = FindQuery::new(&text, options[rng.below(options.len())]);
             if !find.rules_out_ascii(raw.as_bytes(), &dialect) {
@@ -502,12 +571,134 @@ mod tests {
             for cell in cells_of(raw.as_bytes(), dialect) {
                 assert!(
                     !find.matches(&cell),
-                    "{raw:?} {dialect:?} {text:?} → {cell:?}"
+                    "{raw:?} {dialect:?} {text:?} {:?} → {cell:?}",
+                    find.options()
                 );
             }
         }
+        ruled_out
+    }
+
+    /// 無作為の ASCII のレコード × 方言 × 問いで、除いたレコードのどのセルにも問いが当たらない（GitHub Issue #226）。
+    /// セルは製品と同じ道（`sample_records` で切り、`value` で値にする）で取り出す。
+    #[test]
+    fn a_ruled_out_record_has_no_matching_cell() {
+        const TEXT: [&str; 8] = ["a", "b", "B", ",", "\"", "'", "\\", "\t"];
+        let standard = FindOptions::standard();
+        let options = [
+            standard,
+            standard.toggled_case(),
+            standard.toggled_whole_cell(),
+        ];
+        let ruled_out = ruled_out_records(&mut Xorshift(0x2026_1108_0226), &TEXT, &options, 20_000);
         // 除ける場合を十分に試している（どれも除かない実装でも通ってしまわないように）。
         assert!(ruled_out > 5_000, "{ruled_out}");
+    }
+
+    /// 式の字の素（読めない並びも混ぜる）。ケルビンの記号 K（U+212A）と長い s（ſ）は、大文字小文字を区別しない式で
+    /// ASCII の `k`・`s` に当たる。
+    const PATTERN_PIECES: [&str; 30] = [
+        "a", "b", "B", "k", "K", "s", "\u{212A}", "ſ", "\"", "'", ",", "1", "[ab]", "[^a]", r"\d",
+        ".", "x*", "(a|bc)", "a?", "^", "$", r"\b", "(?i)", "(?-i)", "|", "+", "(", ")", "é", "ｂ",
+    ];
+
+    /// 正規表現の条件の組み合わせ。
+    fn regex_options() -> [FindOptions; 4] {
+        let regex = FindOptions::standard().toggled_regex();
+        [
+            regex,
+            regex.toggled_case(),
+            regex.toggled_whole_cell(),
+            regex.toggled_case().toggled_whole_cell(),
+        ]
+    }
+
+    /// 正規表現でも、除いたレコードのどのセルにも式が当たらない（先探し・GitHub Issue #223）。
+    #[test]
+    fn a_ruled_out_record_has_no_cell_matching_the_regex() {
+        let ruled_out = ruled_out_records(
+            &mut Xorshift(0x2026_1108_0223),
+            &PATTERN_PIECES,
+            &regex_options(),
+            30_000,
+        );
+        assert!(ruled_out > 5_000, "{ruled_out}");
+    }
+
+    /// 無作為の式 × セルで、先探しをした照合と、先探しをせずに畳んだ写しに式を当てた答えが同じ（GitHub Issue #223）。
+    #[test]
+    fn the_prefilter_agrees_with_matching_every_cell() {
+        const CELL: [&str; 18] = [
+            "a", "A", "b", "B", "k", "K", "s", "S", "\u{212A}", "ſ", "x", "1", "é", "ｂ", " ",
+            "\"", "bc", "１",
+        ];
+        let mut rng = Xorshift(0x2026_1108_2231);
+        let options = regex_options();
+        let mut skipped = 0_usize;
+        for _ in 0..30_000_u32 {
+            let text = random_text(&mut rng, &PATTERN_PIECES, 4);
+            let cell = random_text(&mut rng, &CELL, 8);
+            let find = FindQuery::new(&text, options[rng.below(options.len())]);
+            let Some(compiled) = &find.regex else {
+                assert!(!find.matches(&cell));
+                continue;
+            };
+            let slow = has_long_match(compiled, &fold_for_find(&cell, find.options()));
+            assert_eq!(
+                find.matches(&cell),
+                slow,
+                "{text:?} {cell:?} {:?} {:?}",
+                find.options(),
+                find.needles
+            );
+            let ascii = cell.is_ascii();
+            if let Some(needles) = find.needles.as_ref().filter(|_| ascii)
+                && !contains_any(cell.as_bytes(), needles, find.options().match_case())
+            {
+                skipped = skipped.saturating_add(1);
+            }
+        }
+        // 先探しで式を当てずに済んだセルが十分にある。
+        assert!(skipped > 3_000, "{skipped}");
+    }
+
+    /// 取り出す字の並び：当たりの頭の字の並び。長さ 0 で当たりうる式・頭が大きな組の式・ASCII でない字の並びは取り出さない。
+    #[test]
+    fn the_prefilter_takes_the_heads_of_matches() {
+        let standard = FindOptions::standard().toggled_regex();
+        let case = standard.toggled_case();
+        let cases: [(&str, FindOptions, Option<&[&str]>); 14] = [
+            (r"Name12(\d)", standard, Some(&["Name12"])),
+            (r"R1222485\d$", standard, Some(&["R1222485"])),
+            ("zz+notthere", standard, Some(&["zz"])),
+            ("ab|cd", standard, Some(&["ab", "cd"])),
+            // 全角の式は畳んでから読む。
+            ("ｔｏｋ", standard, Some(&["tok"])),
+            // 大文字小文字を区別する条件で `(?i)` と書けば、大文字小文字の組み合わせを取り出す。`k` はケルビンの記号を
+            // 含むので取り出さない。
+            ("(?i)ab", case, Some(&["AB", "Ab", "aB", "ab"])),
+            ("(?i)ak", case, None),
+            (r"\d{4}-\d\d", standard, None),
+            ("a*", standard, None),
+            ("x|", standard, None),
+            ("東京", standard, None),
+            ("\u{212A}", standard, None),
+            ("(tok", standard, None),
+            ("", standard, None),
+        ];
+        for (text, options, expected) in cases {
+            let mut found: Option<Vec<String>> = FindQuery::new(text, options).needles.map(|all| {
+                all.into_iter()
+                    .map(|part| String::from_utf8(part).unwrap())
+                    .collect()
+            });
+            if let Some(parts) = found.as_mut() {
+                parts.sort();
+            }
+            let expected: Option<Vec<String>> =
+                expected.map(|parts| parts.iter().map(|&part| String::from(part)).collect());
+            assert_eq!(found, expected, "{text:?} {options:?}");
+        }
     }
 
     /// 当たった所だけを替え、ほかの字（全角・半角カタカナ・大文字）は元のまま残す。

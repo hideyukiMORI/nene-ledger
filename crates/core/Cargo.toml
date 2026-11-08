@@ -1,6 +1,6 @@
 [package]
 name = "nene-ledger-core"
-description = "NeNe Ledger の中核。方言・レコード・セル・切り出しの規則の正本（参照実装）。no_std・外部の依存は正規表現の regex-automata だけ"
+description = "NeNe Ledger の中核。方言・レコード・セル・切り出しの規則の正本（参照実装）。no_std・外部の依存は正規表現の regex-automata と、それが連れてくる regex-syntax だけ"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -10,7 +10,10 @@ publish = false
 [lints]
 workspace = true
 
-# 🔴 外部クレートは `regex-automata` だけ（正規表現の照合・no_std ＋ alloc・ADR 0031・ARC-013・CNF-013）。
+# 🔴 外部クレートは `regex-automata` と、それが連れてくる `regex-syntax` だけ（正規表現の照合・no_std ＋ alloc・ADR 0031・ARC-013・CNF-013）。
 # 速い道（`perf-literal-*` と、それが連れてくる aho-corasick・memchr）は入れない（ADR 0031 の決定 2）。
 [dependencies]
 regex-automata = { version = "0.4.18", default-features = false, features = ["alloc", "syntax", "meta", "unicode"] }
+# 式から先探しの字の並びを取り出す（`hir::literal::Extractor`・GitHub Issue #223）。regex-automata が連れてくるのと同じ版で、
+# 機能は regex-automata の `unicode` が入れる（exe に入るクレートは増えない）。
+regex-syntax = { version = "0.8.11", default-features = false }

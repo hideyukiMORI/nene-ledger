@@ -42,6 +42,8 @@ ADR 0030 の決定 5 は「`regex` クレートを scan に入れる」と決め
 - 機能は `alloc`・`syntax`・`meta`・`unicode`。速い道（`perf-literal-*` と、それが連れてくる `aho-corasick`・`memchr`）は入れない。入れるかは、1 GB で測ってから別に決める
 - ARC-013 の手順：`deny.toml` の許可・CODING_RULES 第 5 節の表・CNF-013 の表を、導入の Issue で `cargo tree` と `cargo deny` の実測で更新する
 
+> 2026-11-08 の追記（GitHub Issue #223・benchmarks 第 11 節）：速い道は `perf-literal-*` を入れず、依存を足さない先探し（案 C）に決めた（施主が選んだ）。式から当たりの頭の字の並びを取り出すのに `regex-syntax` の `hir::literal::Extractor` を使うので、`regex-automata` が連れてくるのと同じ `regex-syntax` 0.8.11 を core の直接の依存にも書いた（`default-features = false`・exe に入るクレートは増えない）。CNF-013 の許可表・CODING_RULES 第 5 節の表・`deny.toml` の注を直した（gate-proofs 第 89 節）。
+
 ### 3. 全角半角・大文字小文字・かなの畳みと正規表現
 
 - 正規表現は**畳んだ写し**に当てる（`fold_with_origins` の写し・GitHub Issue #161）。式も同じ畳みで畳む（字の並びだけ。`\d` や `[...]` の中の字も同じ畳み）。大文字小文字を区別しないなら、式に `(?i)` を足すのではなく、写しと式の両方を小文字にする（今の照合と同じ答えにする）
@@ -50,6 +52,8 @@ ADR 0030 の決定 5 は「`regex` クレートを scan に入れる」と決め
 ### 4. 速さ
 
 - 原本の行の ASCII の速い道（`rules_out_ascii`）は、正規表現では使わない（式の字の並びがレコードに無いとは言えない）。1 GB の時間は導入の Issue で測って benchmarks に残す
+
+> 2026-11-08 の追記（GitHub Issue #223）：式から「ASCII のセルの当たりが必ずどれかで始まる ASCII の字の並び」を取り出せるときは、その字の並びで `rules_out_ascii` とセルごとの照合の先探しをする（`FindQuery` の `prefilter`）。取り出せない式（頭が `\d` などの大きな組・長さ 0 で当たりうる・ASCII でない字の並びを含む）は、今までどおり全部のセルに当てる。先探しの有無で答えが同じことは無作為の式とセルのテストで固定した（`the_prefilter_agrees_with_matching_every_cell`・`a_ruled_out_record_has_no_cell_matching_the_regex`）。
 
 ## 強制
 

@@ -69,7 +69,7 @@ Claude Code / AI エージェントがこのリポジトリで作業するため
 
 閉じた `enum` の `match` に `_` を書かない（RS-002）。`Default` は唯一のファクトリを迂回する門（RS-003）。数値は `400_u32` と書き、変換は `From` / `TryFrom`（RS-007 / RS-018）。
 
-### 依存は許可制。いまは core の `regex-automata`（no_std）と scan と store の `encoding_rs` と ui-x11 の `x11rb`・`cairo-rs` と Windows の 2 クレートの `windows`・`windows-numerics` だけ
+### 依存は許可制。いまは core の `regex-automata`（no_std）と同じ版の `regex-syntax` と scan と store の `encoding_rs` と ui-x11 の `x11rb`・`cairo-rs` と Windows の 2 クレートの `windows`・`windows-numerics` だけ
 
 足すときは ADR ＋ `deny.toml` の `allow` を実測で更新 ＋ 規約 第 5 節の表 ＋ CNF-013 の表（ARC-013）。分析エンジン（DuckDB 等）は組み込まない（ADR 0007）。
 
