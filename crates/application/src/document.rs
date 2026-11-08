@@ -4535,7 +4535,15 @@ impl Document {
             .and_then(|index| usize::try_from(index).ok())
             .and_then(|index| self.view.rows().get(index));
         let Some(row) = row else {
-            return DetailContent::OutOfView;
+            // 索引を作り終えて本体の行が無いと分かっていれば、「見えている範囲の外」でなくそう言う（GitHub Issue #256）。
+            let empty = self
+                .records()
+                .is_some_and(|records| self.body_lines(records) == 0);
+            return if empty {
+                DetailContent::NoRows
+            } else {
+                DetailContent::OutOfView
+            };
         };
         let cut = self
             .cuts
@@ -9694,5 +9702,28 @@ mod tests {
             assert!(copied.as_str().contains(head), "{formula} → {copied:?}");
         }
         assert!(copied.as_str().contains("+cmd|' /C calc'!A0"));
+    }
+
+    /// 見出しの行しかない表では、詳細ペインは「見えている範囲の外」でなく「表に行が無い」と出し、行の番号を言わない。
+    /// 索引を作り終える前は今までどおり（GitHub Issue #256）。
+    #[test]
+    fn a_header_only_table_says_it_has_no_rows() {
+        let mut document = opened_with(&table(&[&["only", "header"]]));
+        let window = view(400, 400, WindowPlacement::Normal);
+        let frame = document.frame(window, palette());
+        assert!(all_texts(&frame).contains(&"〈カーソルの行は見えている範囲の外〉"));
+        document.report(JobReport::Finished(IndexSummary::new(1, None)));
+        let finished = document.frame(window, palette());
+        let texts = all_texts(&finished);
+        assert!(
+            texts.contains(&"〈表に行が無い（見出しの行だけ）〉"),
+            "{texts:?}"
+        );
+        assert!(
+            !texts
+                .iter()
+                .any(|text| text.contains("見えている範囲の外") || text.contains("2 行目　")),
+            "{texts:?}"
+        );
     }
 }
