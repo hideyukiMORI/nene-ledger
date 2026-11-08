@@ -9652,4 +9652,47 @@ mod tests {
         );
         assert!(plain.contains(&"{a:1}"), "{plain:?}");
     }
+
+    /// 数式に見えるセルは評価せず、表とコピーで字のまま（FR-031・SEC-01・GitHub Issue #249）。
+    #[test]
+    fn formula_like_cells_stay_as_text() {
+        const FORMULAS: [&str; 6] = [
+            "=1+1",
+            "=HYPERLINK(\"http://example.com\",\"x\")",
+            "+cmd|' /C calc'!A0",
+            "@SUM(A1:A2)",
+            "-2+3",
+            "=WEBSERVICE(\"http://example.com\")",
+        ];
+        let rows: Vec<CellRow> = FORMULAS.iter().map(|&cell| CellRow::new(&[cell])).collect();
+        let mut document = closed(Document::open(
+            String::from("t"),
+            summary(),
+            None,
+            rows.clone(),
+        ));
+        let shown: Vec<Option<&str>> = document
+            .view()
+            .rows()
+            .iter()
+            .map(|row| row.values().get(0))
+            .collect();
+        assert_eq!(shown, FORMULAS.map(Some));
+        for _ in 1..FORMULAS.len() {
+            document.apply(
+                Intent::Move {
+                    step: CursorStep::Down,
+                    mode: SelectionMode::Extend,
+                },
+                normal(),
+            );
+        }
+        let copied = copy_from(&mut document, &rows).unwrap();
+        // 引用符の無い値は丸ごと、引用符を含む値はタブ区切りの引用の規則で囲まれるので、引用符の前までが字のまま。
+        for formula in FORMULAS {
+            let head = formula.split('"').next().unwrap_or(formula);
+            assert!(copied.as_str().contains(head), "{formula} → {copied:?}");
+        }
+        assert!(copied.as_str().contains("+cmd|' /C calc'!A0"));
+    }
 }

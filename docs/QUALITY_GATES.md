@@ -245,6 +245,13 @@ lint が見ないもの、つまり**このリポジトリ固有の規約**を�
 - 対応する規則: ARC-001 / ARC-005
 - 機械強制: **active**（`xtask`。字句検査なので別名・間接呼び出しは見えない）
 
+### CNF-016 — 外へ送らず、ほかのプログラムを起こさない
+
+`crates/` の `.rs` の production コード（注釈の行とテストのモジュールを除く）で、外へ送る名前（`std::net` / `TcpStream` / `TcpListener` / `UdpSocket` / `ToSocketAddrs` / `WinHttp` / `InternetOpen` / `URLDownloadToFile` / `WSAStartup`）を**どのクレートでも**拒む。ほかのプログラムを起こす名前（`std::process::Command` / `Command::new` / `ShellExecute` / `CreateProcess` / `WinExec`）は、自分の exe を起こし直して新しい窓を開くアダプターの 2 ファイル（`crates/adapters-x11/src/new_window.rs`・`crates/adapters-windows/src/new_window.rs`・ADR 0028 の決定 1）の外で拒む。`crates/*/Cargo.toml` で `windows` の `Win32_Networking` の機能を拒む。CNF-012（アダプター・scan・store を除く）の外側を埋める（GitHub Issue #249）。
+
+- 対応する規則: FR-031（SEC-01・SEC-05）/ ARC-007
+- 機械強制: **active**（`xtask`。字句検査なので別名・間接呼び出し・依存の中は見えない。外部クレートは CNF-013 の許可表と cargo-deny が守る）
+
 ---
 
 ## 3. 強制マトリクス
@@ -320,6 +327,7 @@ CNF-009（予定）が「本文に定義があるのにここに行が無い」�
 | CNF-013 | active | xtask / `cargo test -p xtask`（[gate-proofs](quality/gate-proofs.md)） |
 | CNF-014 | active | xtask / `cargo test -p xtask`（[gate-proofs](quality/gate-proofs.md)） |
 | CNF-015 | active | xtask / `cargo test -p xtask`（[gate-proofs](quality/gate-proofs.md)） |
+| CNF-016 | active | xtask / `cargo test -p xtask`（[gate-proofs](quality/gate-proofs.md) 第 95 節） |
 
 ---
 
