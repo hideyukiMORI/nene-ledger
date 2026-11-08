@@ -21,6 +21,9 @@ const MARGIN: u32 = 8;
 const PADDING: u32 = 12;
 /// 一度に見せる候補の数の上限。
 const MAX_ROWS: u32 = 10;
+/// 選んだ候補をその場で試す段（配色・読み方・判別の候補）で一度に見せる候補の数の上限。箱を低くして、試した表の上を
+/// 見せる（GitHub Issue #311）。
+const TRIAL_ROWS: u32 = 6;
 /// 条件の札の内側の左右の余白と、札の間の空き。
 pub const CHIP_PAD: u32 = 6;
 const CHIP_GAP: u32 = 6;
@@ -68,7 +71,8 @@ impl PaletteLayout {
             .height()
             .saturating_add(metrics.px(MARGIN));
         let layout = Self::at(view, palette, top);
-        if !palette.is_low() {
+        // 選んだ候補をその場で試す段は、試した表の先頭の行が見えるように、いつも窓の下へ寄せる（GitHub Issue #311）。
+        if !palette.is_low() && !palette.mode().tries_the_selection() {
             return layout;
         }
         // 窓の下へ寄せる（GitHub Issue #286）。状態の行（行目・列目・件数）は覆わず、その上に上と同じ空きを空ける
@@ -138,7 +142,12 @@ impl PaletteLayout {
             .height()
             .saturating_sub(list_top)
             .saturating_sub(margin.saturating_mul(6));
-        let fit = (room / row_height.max(1)).clamp(1, MAX_ROWS);
+        let most = if palette.mode().tries_the_selection() {
+            TRIAL_ROWS
+        } else {
+            MAX_ROWS
+        };
+        let fit = (room / row_height.max(1)).clamp(1, most);
         let count = u32::try_from(palette.items().len())
             .unwrap_or(u32::MAX)
             .max(least_rows(palette.mode()));
@@ -433,10 +442,13 @@ mod tests {
         palette.handle(Intent::Confirm, 50);
         let layout = PaletteLayout::new(view(1024, 640), &palette);
         assert!(layout.hint().is_some());
-        assert_eq!(layout.visible(), 10);
+        // 試す段は候補を 6 行に詰め、窓の下（状態の行の上）に置いて、試した表の上を見せる（GitHub Issue #311）。
+        assert_eq!(layout.visible(), 6);
+        let status = TableLayout::row_height_for(view(1024, 640).metrics());
+        assert_eq!(bottom(layout.panel()), 640 - status - 8);
         // 50 番目が最後の行に見える。
-        assert_eq!(layout.first(), 41);
-        assert_eq!(layout.item_at(layout.row(9).origin()), Some(50));
+        assert_eq!(layout.first(), 45);
+        assert_eq!(layout.item_at(layout.row(5).origin()), Some(50));
         // 低い窓では候補の数を減らす（少なくとも 1）。
         assert_eq!(PaletteLayout::new(view(1024, 200), &palette).visible(), 1);
     }
