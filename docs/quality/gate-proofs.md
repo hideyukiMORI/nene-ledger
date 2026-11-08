@@ -979,6 +979,17 @@ Windows の exe の `--version`（コマンドプロンプトに結んで書く�
 
 2026-11-07（施主は外出中）。`ガス`・`がす`・`ｶﾞｽ`・`gas` の 4 行を開き、Ctrl+F → Alt+Z → Alt+K。案内の 2 行目が `Alt+Z 全角半角を区別しない · Alt+K ひらがなカタカナを区別する`（既定）から `Alt+Z 全角半角を区別する · Alt+K ひらがなカタカナを区別しない` に変わった。照合そのものの答えは core のテスト（`options_make_the_match_stricter_or_looser`）。Windows の実機はまだ（QLT-013）。条件を設定に残して次の起動でも同じにすること（決定 3）はまだ。
 
+## 89. core の直接の依存に `regex-syntax` を書く（GitHub Issue #223・ADR 0031 の追記・ARC-013・CNF-013）
+
+許可を書く前と後で回した（実ファイル・本物の依存・2026-11-08）:
+
+| 検査 | 許可を書く前 | 許可を書いた後 |
+| --- | --- | --- |
+| CNF-013 | `crates/core/Cargo.toml` に `regex-syntax` → `` crates/core/Cargo.toml:19 — `regex-syntax` への依存は crates/core/ に許されていない（ARC-002 / ARC-013） ``・終了 1 | xtask の許可表（`ALLOWED_DEPENDENCIES` の `crates/core/`）に足す → `規約違反なし（検査 831 ファイル）` |
+| `make deny` | — | `advisories ok, bans ok, licenses ok, sources ok` |
+
+`cargo tree -p nene-ledger-core -e normal`：`regex-automata` 0.4.18 → `regex-syntax` 0.8.11 と、直接の `regex-syntax` 0.8.11（同じ版が 1 つ・配るクレートは増えない）。`cargo build -p nene-ledger-core --target thumbv7m-none-eabi --locked` が通る（`no_std` のまま）。
+
 ## 7. active の規則と、その証明
 
 CNF-009 は active の規則ごとに `| ID |` で始まる行がここにあることを要求する。
