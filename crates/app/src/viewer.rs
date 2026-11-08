@@ -706,6 +706,9 @@ impl Viewer {
 
     /// パレットが開いている間の意図。どのキーもパレットへ渡し、表には届けない（Issue #41）。
     fn palette_intent(&mut self, intent: Intent, view: WindowView) -> Option<ClipboardText> {
+        // 確かめの間に条件を替えたら、確かめをやめるだけでなく、その場で数え直す（GitHub Issue #299）。
+        let recount =
+            matches!(intent, Intent::FindToggle(_)) && !self.document.replace_detail().is_empty();
         // 全部の置換を数えている間と件数を見せている間は、Enter と Esc を確かめに使う（欄は開いたまま・GitHub Issue #189）。
         if let Some((effect, consumed)) = self.document.replace_prompt_intent(intent) {
             let copied = self.effect(effect);
@@ -722,6 +725,9 @@ impl Viewer {
         let after = open.state().find_options();
         if after != before && self.preferences.set_find(after).is_err() {
             self.document.notify(Notice::SettingsUnsaved);
+        }
+        if recount {
+            return self.replace_entered(true);
         }
         self.after_palette(outcome, view)
     }

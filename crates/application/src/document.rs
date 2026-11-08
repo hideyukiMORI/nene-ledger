@@ -2188,12 +2188,8 @@ impl Document {
         self.replacing
             .as_ref()
             .and_then(|run| {
-                run.breakdown().map(|breakdown| {
-                    breakdown.lines(
-                        run.scope().query().options().whole_cell(),
-                        run.replacement(),
-                    )
-                })
+                run.breakdown()
+                    .map(|breakdown| breakdown.lines(run.replacement()))
             })
             .unwrap_or_default()
     }
@@ -9391,16 +9387,13 @@ mod tests {
         assert!(document.replace_detail().is_empty());
         replacing_all(&mut document, "1", "#");
         let detail = document.replace_detail();
+        // 1 を # に：どのセルも一部だけ変わる（0012・b1・c1）。
         assert_eq!(
-            detail.first().map(|line| line.0.as_str()),
-            Some("“0012”→“00#2” 1 セル · “b1”→“b#” 1 セル")
-        );
-        assert_eq!(
-            detail.get(1),
-            Some(&(
-                String::from("ほか 1 通り · 一部だけ変わるセルあり · Alt+W で全体一致"),
+            detail,
+            vec![(
+                String::from("一部だけ変わる 3 セル: “0012”→“00#2” など"),
                 true
-            ))
+            )]
         );
         document.apply(Intent::Confirm, normal());
         assert!(document.replace_detail().is_empty());

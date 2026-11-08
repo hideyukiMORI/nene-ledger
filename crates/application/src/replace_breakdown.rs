@@ -10,109 +10,143 @@ use nene_ledger_core::display_width::display_columns;
 
 use crate::status_line::group_digits;
 
-/// 確かめの行に並べる組の数。
-const SHOWN: usize = 2;
-/// 確かめの行で、値を切る桁（全角 = 2）。2 組と件数が案内の幅（64 桁）に収まる長さ。
-const VALUE_COLUMNS: u32 = 8;
+/// 確かめの行で、値を切る桁（全角 = 2）。いちばん長い行（組・100 万セル・残りの組の数）が案内の幅（64 桁）に収まる長さ。
+const VALUE_COLUMNS: u32 = 7;
 
-/// 全部の置換で、セルの値が「前 → 後」にどう変わるかの組を、セルの数の多い順に数えたもの。同じ数なら前の値の順
-/// （答えは書き換えの並びに依らない）。
+/// 「前 → 後」の組のまとまり（セル全体が変わる組か、一部だけ変わる組か）：いちばん多い組・組の数・セルの数。
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ReplaceBreakdown {
-    top: Vec<(String, String, usize)>,
+pub struct PairGroup {
+    top: (String, String, usize),
     kinds: usize,
-    partial: bool,
+    cells: usize,
 }
 
-impl ReplaceBreakdown {
-    /// 書き換え `changes` の内訳。`partial` は、値の一部だけが当たって変わるセルがあるか（当たった所がセルの全体でない。
-    /// 置き換えた後の値が置き換える文字 `replacement` と違う）。正規表現（`literal` でない）は `$1` などで後の値が変わるので
-    /// 見ない。
+impl PairGroup {
+    /// いちばん多い組（前・後・セルの数）。同じ数なら前の値・後の値の順で先のもの。
     #[must_use]
-    pub fn of(changes: &[(CellChange, String)], replacement: &str, literal: bool) -> Self {
-        let mut counts: BTreeMap<(&str, &str), usize> = BTreeMap::new();
-        let mut partial = false;
-        for (change, _) in changes {
-            let count = counts.entry((change.before(), change.after())).or_insert(0);
-            *count = count.saturating_add(1);
-            partial |= literal && change.after() != replacement;
-        }
-        let kinds = counts.len();
-        let mut ordered: Vec<((&str, &str), usize)> = counts.into_iter().collect();
-        // 数の多い順。同じ数なら BTreeMap の順（前の値・後の値）のまま（安定な並べ替え）。
-        ordered.sort_by_key(|&(_, count)| core::cmp::Reverse(count));
-        let top = ordered
-            .into_iter()
-            .take(SHOWN)
-            .map(|((before, after), count)| (String::from(before), String::from(after), count))
-            .collect();
-        Self {
-            top,
-            kinds,
-            partial,
-        }
-    }
-
-    /// 数の多い組（前・後・セルの数）。多くて 2 つ。
-    #[must_use]
-    pub fn top(&self) -> &[(String, String, usize)] {
+    pub const fn top(&self) -> &(String, String, usize) {
         &self.top
     }
 
-    /// 組の数（前と後の値の違う組み合わせの数）。
+    /// 組の数。
     #[must_use]
     pub const fn kinds(&self) -> usize {
         self.kinds
     }
 
-    /// 値の一部だけが変わるセルがあるか。
+    /// セルの数。
     #[must_use]
-    pub const fn partial(&self) -> bool {
-        self.partial
+    pub const fn cells(&self) -> usize {
+        self.cells
+    }
+}
+
+/// 全部の置換で、セルの値が「前 → 後」にどう変わるか。**セル全体が変わる組**（後の値が置き換える文字そのもの）と、
+/// **一部だけ変わる組**（部分一致で、当たった所がセルの全体でない）に分ける。980 → 990 の部分一致で 1980 → 1990 が
+/// 混ざる事故は、一部だけの組として必ず見える（多い順に並べると「ほか」に埋もれた・GitHub Issue #289・#299）。
+/// 答えは書き換えの並びに依らない。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReplaceBreakdown {
+    whole: Option<PairGroup>,
+    partial: Option<PairGroup>,
+}
+
+impl ReplaceBreakdown {
+    /// 書き換え `changes` の内訳。後の値が置き換える文字 `replacement` と違うセルを一部だけの組にする。正規表現（`literal`
+    /// でない）は `$1` などで後の値が変わるので、すべてセル全体の組に数える。
+    #[must_use]
+    pub fn of(changes: &[(CellChange, String)], replacement: &str, literal: bool) -> Self {
+        let mut whole: BTreeMap<(&str, &str), usize> = BTreeMap::new();
+        let mut partial: BTreeMap<(&str, &str), usize> = BTreeMap::new();
+        for (change, _) in changes {
+            let group = if literal && change.after() != replacement {
+                &mut partial
+            } else {
+                &mut whole
+            };
+            let count = group.entry((change.before(), change.after())).or_insert(0);
+            *count = count.saturating_add(1);
+        }
+        Self {
+            whole: group_of(&whole),
+            partial: group_of(&partial),
+        }
     }
 
-    /// 確かめの行（1 行目は組・2 行目は残りの組の数と注意）。`whole_cell` はセル全体の一致か、`replacement` は置き換える文字
-    /// （空なら当たった所を消す）。注意は強めの行（`true`）。
+    /// セル全体が変わる組。
     #[must_use]
-    pub fn lines(&self, whole_cell: bool, replacement: &str) -> Vec<(String, bool)> {
-        let pairs: Vec<String> = self
-            .top
-            .iter()
-            .map(|(before, after, count)| {
+    pub const fn whole(&self) -> Option<&PairGroup> {
+        self.whole.as_ref()
+    }
+
+    /// 一部だけ変わる組。
+    #[must_use]
+    pub const fn partial(&self) -> Option<&PairGroup> {
+        self.partial.as_ref()
+    }
+
+    /// 確かめの行（多くて 2 行・注意は `true`）。セル全体の組（いちばん多い組と残りの組の数）、一部だけの組（セルの数と
+    /// いちばん多い組・強調）、置き換える文字 `replacement` が空なら消す注意（強調）。3 つあれば、注意を残してセル全体の組を
+    /// 落とす。
+    #[must_use]
+    pub fn lines(&self, replacement: &str) -> Vec<(String, bool)> {
+        let whole = self.whole.as_ref().map(|group| {
+            let rest = group.kinds.saturating_sub(1);
+            let others = if rest > 0 {
+                format!(" · ほか {} 通り", digits(rest))
+            } else {
+                String::new()
+            };
+            (format!("{}{others}", pair(&group.top)), false)
+        });
+        let partial = self.partial.as_ref().map(|group| {
+            (
                 format!(
-                    "“{}”→“{}” {} セル",
-                    clipped(before),
-                    clipped(after),
-                    group_digits(u64::try_from(*count).unwrap_or(u64::MAX))
-                )
-            })
-            .collect();
-        let mut lines = Vec::new();
-        if !pairs.is_empty() {
-            lines.push((pairs.join(" · "), false));
-        }
-        let rest = self.kinds.saturating_sub(self.top.len());
-        let others = (rest > 0).then(|| {
-            format!(
-                "ほか {} 通り",
-                group_digits(u64::try_from(rest).unwrap_or(u64::MAX))
+                    "一部だけ変わる {} セル: “{}”→“{}” など",
+                    digits(group.cells),
+                    clipped(&group.top.0),
+                    clipped(&group.top.1)
+                ),
+                true,
             )
         });
-        let warning = if replacement.is_empty() {
-            Some(String::from("置換後が空なので、当たった所を消します"))
-        } else if self.partial && !whole_cell {
-            Some(String::from("一部だけ変わるセルあり · Alt+W で全体一致"))
-        } else {
-            None
-        };
-        match (others, warning) {
-            (Some(others), Some(warning)) => lines.push((format!("{others} · {warning}"), true)),
-            (None, Some(warning)) => lines.push((warning, true)),
-            (Some(others), None) => lines.push((others, false)),
-            (None, None) => {}
+        let erase = replacement
+            .is_empty()
+            .then(|| (String::from("置換後が空なので、当たった所を消します"), true));
+        let mut lines: Vec<(String, bool)> =
+            [whole, partial, erase].into_iter().flatten().collect();
+        if lines.len() > 2 {
+            lines.remove(0);
         }
         lines
     }
+}
+
+/// まとまりの組の数え `counts` から、いちばん多い組・組の数・セルの数。空なら `None`。
+fn group_of(counts: &BTreeMap<(&str, &str), usize>) -> Option<PairGroup> {
+    // 数の多い順。同じ数なら BTreeMap の順（前の値・後の値）で先のもの（`max_by_key` は同じなら後を返すので逆から）。
+    let (&(before, after), &count) = counts.iter().rev().max_by_key(|&(_, &count)| count)?;
+    Some(PairGroup {
+        top: (String::from(before), String::from(after), count),
+        kinds: counts.len(),
+        cells: counts
+            .values()
+            .fold(0_usize, |sum, &cells| sum.saturating_add(cells)),
+    })
+}
+
+/// 組 1 つの短い形（値は切る）。
+fn pair((before, after, count): &(String, String, usize)) -> String {
+    format!(
+        "“{}”→“{}” {} セル",
+        clipped(before),
+        clipped(after),
+        digits(*count)
+    )
+}
+
+fn digits(number: usize) -> String {
+    group_digits(u64::try_from(number).unwrap_or(u64::MAX))
 }
 
 /// 値を `VALUE_COLUMNS` 桁で切る（越えれば `…`）。改行とタブは見える印にしない（1 行に収めるため空白に）。
@@ -163,65 +197,73 @@ mod tests {
         )
     }
 
-    /// 980 → 990 を部分一致で置き換えると 1980 も 1990 になる。それが組と注意で見える（#285 の f4-33count）。
+    /// 980 → 990 を部分一致で置き換えると 1980 も 29800 も変わる。一部だけの組は、少なくても必ず強調の行に出る
+    /// （#285 の 2 巡目：多い順の 2 組では 1980→1990 が「ほか」に埋もれた）。
     #[test]
-    fn a_partial_match_shows_the_unintended_pair_and_a_warning() {
+    fn partial_pairs_are_always_shown_apart_from_whole_cell_pairs() {
         let mut changes = vec![change(1, "1980", "1990")];
         changes.extend((2..5).map(|row| change(row, "980", "990")));
+        changes.extend((5..7).map(|row| change(row, "29800", "29900")));
         let breakdown = ReplaceBreakdown::of(&changes, "990", true);
+        let whole = breakdown.whole().unwrap();
+        assert_eq!((whole.kinds(), whole.cells()), (1, 3));
+        let partial = breakdown.partial().unwrap();
+        assert_eq!((partial.kinds(), partial.cells()), (2, 3));
         assert_eq!(
-            breakdown.top(),
-            &[
-                (String::from("980"), String::from("990"), 3),
-                (String::from("1980"), String::from("1990"), 1)
-            ]
+            partial.top(),
+            &(String::from("29800"), String::from("29900"), 2)
         );
-        assert!(breakdown.partial());
         assert_eq!(
-            breakdown.lines(false, "990"),
+            breakdown.lines("990"),
             vec![
+                (String::from("“980”→“990” 3 セル"), false),
                 (
-                    String::from("“980”→“990” 3 セル · “1980”→“1990” 1 セル"),
-                    false
-                ),
-                (
-                    String::from("一部だけ変わるセルあり · Alt+W で全体一致"),
+                    String::from("一部だけ変わる 3 セル: “29800”→“29900” など"),
                     true
                 ),
             ]
         );
-        // セル全体の一致なら注意は出さない（部分の印は数えたときのまま）。正規表現は部分を見ない。
-        assert_eq!(breakdown.lines(true, "990").len(), 1);
-        assert!(!ReplaceBreakdown::of(&changes, "990", false).partial());
+        // 正規表現は一部だけを見ない（後の値が $1 などで変わる）。
+        assert!(
+            ReplaceBreakdown::of(&changes, "990", false)
+                .partial()
+                .is_none()
+        );
     }
 
-    /// 置き換える文字が空なら、消すと言う。残りの組の数も添える。答えは書き換えの並びに依らない。
+    /// 置き換える文字が空なら消すと言い、3 行になるならセル全体の組を落とす。同じ数の組は前の値の順で先のもの。答えは
+    /// 書き換えの並びに依らない。
     #[test]
-    fn an_empty_replacement_warns_and_the_rest_are_counted() {
+    fn an_empty_replacement_warns_and_ties_are_stable() {
         let changes = vec![
-            change(1, "a", ""),
-            change(2, "b", ""),
-            change(3, "c", ""),
-            change(4, "a", ""),
+            change(1, "b", ""),
+            change(2, "a", ""),
+            change(3, "xa", "x"),
+            change(4, "c", ""),
         ];
         let breakdown = ReplaceBreakdown::of(&changes, "", true);
-        assert_eq!(breakdown.kinds(), 3);
-        assert!(!breakdown.partial());
         assert_eq!(
-            breakdown.lines(true, "")[1],
-            (
-                String::from("ほか 1 通り · 置換後が空なので、当たった所を消します"),
-                true
-            )
+            breakdown.whole().unwrap().top(),
+            &(String::from("a"), String::new(), 1)
+        );
+        assert_eq!(breakdown.whole().unwrap().kinds(), 3);
+        let lines = breakdown.lines("");
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].0.starts_with("一部だけ変わる 1 セル"));
+        assert_eq!(
+            lines[1],
+            (String::from("置換後が空なので、当たった所を消します"), true)
         );
         let mut reversed = changes;
         reversed.reverse();
         assert_eq!(ReplaceBreakdown::of(&reversed, "", true), breakdown);
+        // 一部だけの組が無ければ、セル全体の組と消す注意。
+        let simple = ReplaceBreakdown::of(&[change(1, "a", "")], "", true).lines("");
+        assert_eq!(simple[0], (String::from("“a”→“” 1 セル"), false));
     }
 
-    /// 内訳の行の長さの上限（表示の桁）。Xvfb の画面写しで、64 桁の注意（全角の括弧を含む）がいちばん狭いパレットで
-    /// 切れた（2026-11-09）ので、案内の上限（`palette_painter` の 64）より狭くする。
-    const LINE_COLUMNS: u32 = 60;
+    /// 内訳の行の長さの上限（表示の桁）。案内の上限（`palette_painter` の 64・Xvfb の画面写しで測った）と同じ。
+    const LINE_COLUMNS: u32 = 64;
 
     /// 長い値と改行は切って 1 行に収め、どの組でも内訳の行の上限に収まる。
     #[test]
@@ -232,19 +274,31 @@ mod tests {
             change(2, "1,000,000,000", long),
             change(3, "1,000,000,000", long),
         ];
-        let lines = ReplaceBreakdown::of(&changes, "y", true).lines(false, "y");
+        // 3 つとも一部だけ変わる（後の値が y でない）。
+        let lines = ReplaceBreakdown::of(&changes, "y", true).lines("y");
         assert_eq!(
             lines[0].0,
-            "“1,000,0…”→“とても…” 2 セル · “とても…”→“x y” 1 セル"
+            "一部だけ変わる 3 セル: “1,000,…”→“とても…” など"
         );
         for (line, _) in lines {
             assert!(display_columns(&line) <= LINE_COLUMNS, "{line}");
         }
-        // いちばん長い注意（残りの組の数が大きいとき）も収まる。
+        // いちばん長い行（残りの組の数とセルの数が大きいとき・空の置換）も収まる。
         let many: Vec<(CellChange, String)> = (0..2_000)
-            .map(|row| change(row, &format!("1{row}"), "y1"))
+            .flat_map(|row| {
+                [
+                    change(row, &format!("{long}{row}"), ""),
+                    change(row + 10_000, &format!("1{long}"), "1"),
+                ]
+            })
             .collect();
-        for (line, _) in ReplaceBreakdown::of(&many, "y", true).lines(false, "y") {
+        for (line, _) in ReplaceBreakdown::of(&many, "", true).lines("") {
+            assert!(display_columns(&line) <= LINE_COLUMNS, "{line}");
+        }
+        let wide: Vec<(CellChange, String)> = (0..2_000)
+            .map(|row| change(row, &format!("{long}{row}"), "y"))
+            .collect();
+        for (line, _) in ReplaceBreakdown::of(&wide, "y", true).lines("y") {
             assert!(display_columns(&line) <= LINE_COLUMNS, "{line}");
         }
     }
