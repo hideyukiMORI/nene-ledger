@@ -48,6 +48,18 @@ impl FindFold {
     pub(crate) fn found(&self) -> Option<(u64, usize)> {
         self.found
     }
+
+    /// 列の数の問い（GitHub Issue #338）：セルを読まずに、レコード `number` のセルの数 `cells` が `expected` と違い、境より
+    /// 先（前へ探すなら手前）なら、その 1 列目に当たる。
+    fn shape(&mut self, number: u64, cells: usize, expected: usize) {
+        let beyond = match self.bound {
+            FindBound::After(after) => after.is_none_or(|(at, _)| number > at),
+            FindBound::Before(before) => before.is_none_or(|(at, _)| number < at),
+        };
+        if cells != expected && beyond {
+            self.found = Some((number, 0));
+        }
+    }
 }
 
 impl RecordFold for FindFold {
@@ -64,6 +76,10 @@ impl RecordFold for FindFold {
             return;
         }
         if !self.rows.is_whole() && self.rows.position_of(row).is_none() {
+            return;
+        }
+        if let Some(expected) = self.scope.expected_cells() {
+            self.shape(number, record.record().fields().len(), expected);
             return;
         }
         let width = self.scope.width();
@@ -233,5 +249,52 @@ mod tests {
             find("能力", (CellEdits::empty(), rows), FindBound::After(None)),
             None
         );
+    }
+
+    /// 見本 `ragged.csv`（見出し 3 列・2 行目が 2 列・4 行目が 4 列）で、列の数の問いを境 `bound` から探す。塊の大きさに
+    /// 依らず同じ答え。
+    fn find_ragged(bound: FindBound) -> Option<(u64, usize)> {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("fixtures")
+            .join("ragged.csv");
+        let source = Source::open(&path).unwrap();
+        let format = guess_format(&source).unwrap().format();
+        let columns = (0..3).map(ColumnId::Source).collect();
+        let scope = FindScope::shape(3, columns);
+        let from = IndexedSource::new(source, SparseIndex::empty(), format);
+        let answers: Vec<Option<(u64, usize)>> = [1_usize, 2, 100]
+            .iter()
+            .map(|&size| {
+                let mut fold = FindFold::new(
+                    scope.clone(),
+                    (format, Some(HeaderRows::single(0))),
+                    RowOrder::whole(),
+                    bound,
+                );
+                let flow = fold_range(
+                    &from,
+                    RecordRange::new(0, 100).chunks(size),
+                    &mut fold,
+                    |_| ControlFlow::Continue(()),
+                );
+                assert_eq!(flow.unwrap(), ControlFlow::Continue(()));
+                fold.found()
+            })
+            .collect();
+        assert!(
+            answers.windows(2).all(|pair| pair.first() == pair.last()),
+            "{answers:?}"
+        );
+        answers.first().copied().flatten()
+    }
+
+    /// 列の数の問いは、列の数が見出しと違う原本の行の 1 列目に当たる。今の行は飛ばし、前へも探せる（GitHub Issue #338）。
+    #[test]
+    fn rows_with_another_number_of_cells_are_found_in_order() {
+        assert_eq!(find_ragged(FindBound::After(None)), Some((2, 0)));
+        assert_eq!(find_ragged(FindBound::After(Some((2, 0)))), Some((4, 0)));
+        assert_eq!(find_ragged(FindBound::After(Some((4, 0)))), None);
+        assert_eq!(find_ragged(FindBound::Before(Some((4, 1)))), Some((2, 0)));
+        assert_eq!(find_ragged(FindBound::Before(Some((2, 0)))), None);
     }
 }

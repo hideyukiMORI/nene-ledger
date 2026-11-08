@@ -15,4 +15,8 @@ pub enum FindNotice {
     NothingToRepeat,
     /// 正規表現の式が読めないので探さない（ADR 0031）。
     BrokenPattern,
+    /// 列の数が見出しと違う行が無かった（表を一周した・GitHub Issue #338）。
+    NoRagged,
+    /// 見出しが無いか列を足し消ししているので、列の数を比べられない（GitHub Issue #338）。
+    NoShape,
 }
