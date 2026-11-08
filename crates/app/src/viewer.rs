@@ -14,7 +14,7 @@ use nene_ledger_application::index_summary::IndexSummary;
 use nene_ledger_application::intent::Intent;
 use nene_ledger_application::job_progress::JobProgress;
 use nene_ledger_application::job_report::JobReport;
-use nene_ledger_application::note_tone::GuideNote;
+use nene_ledger_application::note_tone::{GuideNote, NoteTone};
 use nene_ledger_application::notice::Notice;
 use nene_ledger_application::palette_layout::PaletteLayout;
 use nene_ledger_application::palette_mode::PaletteMode;
@@ -1024,14 +1024,24 @@ impl Session for Viewer {
             return frame;
         };
         let mut commands = frame.into_commands();
-        let note = self.document.replace_guide();
+        // 行へ飛ぶ段は表の範囲と書き方を、ほかは検索と置換の知らせを（GitHub Issue #307）。
+        let (note, tone) = if open.state().mode() == PaletteMode::GoTo {
+            self.document
+                .go_to_note(open.state().query())
+                .map_or((None, NoteTone::Prompt), |(text, tone)| (Some(text), tone))
+        } else {
+            (
+                self.document.replace_guide(),
+                self.document.replace_guide_tone(),
+            )
+        };
         let lines = self.document.replace_detail();
         commands.extend(open.state().paint_replacing(
             view,
             (open.colors(), self.document.detail()),
             GuideNote {
                 text: note.as_deref(),
-                tone: self.document.replace_guide_tone(),
+                tone,
                 lines: &lines,
             },
         ));

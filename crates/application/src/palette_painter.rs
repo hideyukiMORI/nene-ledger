@@ -338,6 +338,17 @@ impl<'state> PalettePainter<'state> {
 
     /// 飛ぶ先の段の 1 行。打った番号が読めれば飛ぶ先、読めなければ書き方の案内（空なら何も出さない）。
     fn go_to_line(&mut self) {
+        // 表の範囲と書き方（打つ前）・範囲の外の番号（注意）は合成ルートが渡す（GitHub Issue #307）。
+        if let Some(note) = self.note {
+            let color = match self.tone {
+                NoteTone::Problem => self.colors.danger(),
+                NoteTone::Prompt | NoteTone::Done => self.colors.gutter_text(),
+            };
+            let row = self.layout.row(0);
+            let left = row.origin().x().saturating_add(self.px(TEXT_INSET));
+            self.text_at(from_left(row, left), String::from(note), color);
+            return;
+        }
         let query = self.palette.query();
         if query.is_empty() {
             return;
