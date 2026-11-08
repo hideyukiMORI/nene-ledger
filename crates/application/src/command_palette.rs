@@ -491,8 +491,21 @@ impl CommandPalette {
         (colors, detail): (Palette, DetailPane),
         note: Option<&str>,
     ) -> Vec<DrawCommand> {
+        self.paint_replacing(view, (colors, detail), (note, &[]))
+    }
+
+    /// [`Self::paint_noted`] に、全部の置換の内訳の行 `lines`（条件の札の代わり・注意は `true`・GitHub Issue #289）を
+    /// 出した命令。
+    #[must_use]
+    pub fn paint_replacing(
+        &self,
+        view: WindowView,
+        (colors, detail): (Palette, DetailPane),
+        (note, lines): (Option<&str>, &[(String, bool)]),
+    ) -> Vec<DrawCommand> {
         PalettePainter::new(self, PaletteLayout::new(view, self), view.metrics(), colors)
             .with_note(note)
+            .with_lines(lines)
             .paint(detail)
     }
 

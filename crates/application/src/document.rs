@@ -2164,6 +2164,23 @@ impl Document {
         }
     }
 
+    /// 全部の置換の件数を見せている間の、内訳の行（何が何に変わるか・残りの組の数・注意。注意は `true`・GitHub Issue #289）。
+    /// 件数を見せていなければ空。置換の欄の条件の札の代わりに出す。
+    #[must_use]
+    pub fn replace_detail(&self) -> Vec<(String, bool)> {
+        self.replacing
+            .as_ref()
+            .and_then(|run| {
+                run.breakdown().map(|breakdown| {
+                    breakdown.lines(
+                        run.scope().query().options().whole_cell(),
+                        run.replacement(),
+                    )
+                })
+            })
+            .unwrap_or_default()
+    }
+
     /// 数え終えた書き換えを 1 手の束として書く（Ctrl+Z 1 回で戻る・ADR 0029 の決定 3 と同じ形）。
     fn apply_replace(&mut self) -> DocumentEffect {
         let Some(mut run) = self.replacing.take() else {
@@ -9304,6 +9321,28 @@ mod tests {
         }
         document.apply(Intent::Redo, normal());
         assert_eq!(cell_text(&document, 1, 0), Some("b#"));
+    }
+
+    /// 件数を見せている間は、何が何に変わるかの内訳と、部分一致の注意を出す。置き換えれば消える（GitHub Issue #289）。
+    #[test]
+    fn replacing_all_shows_what_changes_into_what() {
+        let mut document = indexed_editable();
+        assert!(document.replace_detail().is_empty());
+        replacing_all(&mut document, "1", "#");
+        let detail = document.replace_detail();
+        assert_eq!(
+            detail.first().map(|line| line.0.as_str()),
+            Some("“0012”→“00#2” 1 セル · “b1”→“b#” 1 セル")
+        );
+        assert_eq!(
+            detail.get(1),
+            Some(&(
+                String::from("ほか 1 通り · 一部だけ変わるセルあり · Alt+W で全体一致"),
+                true
+            ))
+        );
+        document.apply(Intent::Confirm, normal());
+        assert!(document.replace_detail().is_empty());
     }
 
     /// 置換の欄が開いている間に数えている（GitHub Issue #189）：案内の 1 行に進み具合を出し、Enter は何もせず、Esc は
