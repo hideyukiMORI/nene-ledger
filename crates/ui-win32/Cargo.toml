@@ -12,7 +12,7 @@ publish = false
 nene-ledger-application = { path = "../application" }
 nene-ledger-core = { path = "../core" }
 
-# 使う機能: 窓と描画（Foundation・Direct2D・DirectWrite・Dxgi の形式・Gdi の描き直し）・影と角丸（Dwm・Controls の MARGINS）・
+# 使う機能: 窓と描画（Foundation・Direct2D・DirectWrite・Dxgi の形式・Gdi の描き直し）・角丸（Dwm）・
 # 倍率の宣言（HiDpi）・キーとマウス（KeyboardAndMouse）・窓とメッセージ（WindowsAndMessaging）・モジュール（LibraryLoader）・
 # クリップボード（DataExchange・Memory・Ole の CF_UNICODETEXT）・ファイルを選ぶ画面（Controls_Dialogs）・`--dump` の親のコンソール（Console）。
 [target.'cfg(windows)'.dependencies]
@@ -29,7 +29,6 @@ windows = { version = "0.62.2", features = [
     "Win32_System_LibraryLoader",
     "Win32_System_Memory",
     "Win32_System_Ole",
-    "Win32_UI_Controls",
     "Win32_UI_Controls_Dialogs",
     "Win32_UI_HiDpi",
     "Win32_UI_Input_Ime",
