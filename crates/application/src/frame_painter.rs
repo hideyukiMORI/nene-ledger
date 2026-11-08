@@ -8,7 +8,7 @@ use nene_ledger_core::cell_edits::CellEdits;
 use nene_ledger_core::cell_value::CellValue;
 use nene_ledger_core::color::Color;
 use nene_ledger_core::column_id::ColumnId;
-use nene_ledger_core::display_width::char_columns;
+use nene_ledger_core::display_width::{char_columns, display_columns};
 use nene_ledger_core::draw_command::DrawCommand;
 use nene_ledger_core::find_query::FindQuery;
 use nene_ledger_core::glyph_metrics::GlyphMetrics;
@@ -45,6 +45,8 @@ pub(crate) struct FramePainter<'view> {
     found: Option<&'view FindQuery>,
     /// 本体の行が持つはずのセルの数（見出しの行のセルの数・GitHub Issue #317）。
     expected: Option<usize>,
+    /// 編集中のセルを右へ広げて描いたなら、その欄（カーソルの枠をその外周に描く・GitHub Issue #321）。
+    editing_wide: Option<PixelRect>,
     /// 固定した見出しの行の位置（これより上の本体の行は前書き・OPEN-11）。
     header_line: Option<u64>,
     /// 今描いている行が前書きか（字を薄くする・GitHub Issue #273）。
@@ -93,6 +95,7 @@ impl<'view> FramePainter<'view> {
             editing: None,
             found: None,
             expected: None,
+            editing_wide: None,
             header_line: None,
             preamble: false,
             commands: Vec::new(),
@@ -290,7 +293,8 @@ impl<'view> FramePainter<'view> {
             }
         }
         if let Some(rect) = cursor {
-            self.outline(rect);
+            let outlined = self.editing_wide.take().unwrap_or(rect);
+            self.outline(outlined);
         }
     }
 
@@ -302,7 +306,7 @@ impl<'view> FramePainter<'view> {
         mark: CellMark,
     ) {
         if let (CellMark::Cursor, Some(editing)) = (mark, self.editing) {
-            self.paint_editing(rect, editing);
+            self.paint_editing_cell(rect, editing);
             return;
         }
         match self.edited(style, row.row(), source) {
@@ -356,7 +360,33 @@ impl<'view> FramePainter<'view> {
         }
     }
 
-    /// 編集中のセル。地の色で塗り、欄の文字列とカーソルの棒と、確定前の文字列の下線を描く。
+    /// 編集中のセル。セルより長い文字列は、右の表の端までセルを広げ、隣のセルの上に重ねて全体を見せる（Excel と同じ・
+    /// GitHub Issue #321・専門家ペルソナの 4 巡目「0012999 が 2999 に見える」）。広げたときは外周をカーソルの色で囲う。
+    fn paint_editing_cell(&mut self, rect: PixelRect, editing: &EditingCell) {
+        let half = self.metrics.half_width().max(1);
+        let needed = display_columns(editing.text())
+            .saturating_add(1)
+            .saturating_mul(half)
+            .saturating_add(self.layout.padding().saturating_mul(2));
+        let room = self.size.width().saturating_sub(rect.origin().x());
+        let width = needed.min(room).max(rect.size().width());
+        if width == rect.size().width() {
+            self.paint_editing(rect, editing);
+            return;
+        }
+        let wide = PixelRect::new(rect.origin(), PixelSize::new(width, rect.size().height()));
+        // 隣のセルは後から塗るので、広げた欄は重ねる命令（`overlays`）へ回す（カーソルの棒はその上に残す）。カーソルの枠は
+        // 行の終わりに、広げた欄の外周に描く（`paint_row`）。
+        let start = self.commands.len();
+        self.paint_editing(wide, editing);
+        let drawn: Vec<DrawCommand> = self.commands.drain(start..).collect();
+        let caret = self.overlays.pop();
+        self.overlays.extend(drawn);
+        self.overlays.extend(caret);
+        self.editing_wide = Some(wide);
+    }
+
+    /// 編集中の欄 `rect`。地の色で塗り、欄の文字列とカーソルの棒と、確定前の文字列の下線を描く。
     /// 欄より長い文字列は、カーソルが右端に見えるまで頭の字を飛ばして描く（`…` は付けない）。
     fn paint_editing(&mut self, rect: PixelRect, editing: &EditingCell) {
         self.fill(rect, self.palette.background());
@@ -846,6 +876,40 @@ mod tests {
             None,
             &view(rows),
         )
+    }
+
+    /// 編集中のセルより長い文字列は、右の表の端までセルを広げて全体を描き、カーソルの枠を広げた欄の外周に描く。収まる
+    /// 文字列は広げない（GitHub Issue #321）。
+    #[test]
+    fn a_long_edit_widens_its_cell_to_show_the_whole_text() {
+        let rows = [row(1, &["ab", "cd", "ef"])];
+        let owned: Vec<Vec<String>> = rows.iter().map(|row| row.cells().to_strings()).collect();
+        let cells: Vec<&[String]> = owned.iter().map(Vec::as_slice).collect();
+        let layout = TableLayout::new(&ColumnWidths::fit(&cells), 0, 2, metrics());
+        let cell = layout.cell_rect(0, 0).unwrap();
+        let painted = |text: &str| {
+            let editing = EditingCell::new(String::from(text), 0, None);
+            FramePainter::new(&layout, metrics(), palette(), PixelSize::new(800, 600))
+                .with_selection(Selection::at(crate::cell_position::CellPosition::new(1, 0)))
+                .with_editing(Some(&editing))
+                .paint(&[], None, &view(&rows))
+        };
+        let long = "0012999123456";
+        let wide = painted(long);
+        assert!(texts(&wide).contains(&long), "全体を描く");
+        let widest_outline = fills_of(&wide, palette().cursor())
+            .into_iter()
+            .map(|rect| rect.size().width())
+            .max()
+            .unwrap();
+        assert!(widest_outline > cell.size().width());
+        let short = painted("a");
+        let outline = fills_of(&short, palette().cursor())
+            .into_iter()
+            .map(|rect| rect.size().width())
+            .max()
+            .unwrap();
+        assert!(outline <= cell.size().width() + 1);
     }
 
     /// 列の数が見出しと違う本体の行は、番号を注意の色にし、左に注意の色の帯を置く。見出しのセルの数を知らなければ印は無い
