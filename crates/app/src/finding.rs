@@ -3,6 +3,7 @@
 use core::ops::ControlFlow;
 use std::path::Path;
 
+use nene_ledger_application::cell_row::CellRow;
 use nene_ledger_application::find_scope::FindScope;
 use nene_ledger_core::cell_edits::CellEdits;
 use nene_ledger_core::column_id::ColumnId;
@@ -42,7 +43,7 @@ pub(crate) fn find_first(path: &Path, text: &str) -> Result<Option<(u64, usize)>
         format,
         RecordRange::new(0, SAMPLE_RECORDS),
     )?;
-    let width = sample.cells().iter().map(Vec::len).max().unwrap_or(0);
+    let width = sample.cells().iter().map(CellRow::len).max().unwrap_or(0);
     let columns = (0..width).map(ColumnId::Source).collect();
     let scope = FindScope::new(
         FindQuery::new(text, FindOptions::standard()),

@@ -8,9 +8,9 @@ use alloc::string::String;
 /// 空のセル 1 つだけのレコードは、空の行にする（読み手が「セルの無い行」と同じに読む約束に合わせる）。
 /// 🔴 製品の保存（原本のバイト列を写す・ADR 0005）とは別の、値を書き出す規則。
 #[must_use]
-pub fn rfc4180_record(cells: &[String]) -> String {
+pub fn rfc4180_record<'cell, I: IntoIterator<Item = &'cell str>>(cells: I) -> String {
     let mut out = String::new();
-    for (index, cell) in cells.iter().enumerate() {
+    for (index, cell) in cells.into_iter().enumerate() {
         if index > 0 {
             out.push(',');
         }
@@ -33,7 +33,7 @@ mod tests {
 
     fn record(cells: &[&str]) -> String {
         let cells: Vec<String> = cells.iter().map(|&cell| String::from(cell)).collect();
-        rfc4180_record(&cells)
+        rfc4180_record(cells.iter().map(String::as_str))
     }
 
     #[test]
@@ -45,6 +45,6 @@ mod tests {
         );
         assert_eq!(record(&["", "", ""]), ",,\r\n");
         assert_eq!(record(&[""]), "\r\n");
-        assert_eq!(rfc4180_record(&[]), "\r\n");
+        assert_eq!(rfc4180_record([]), "\r\n");
     }
 }

@@ -2,6 +2,7 @@
 
 use std::path::Path;
 
+use nene_ledger_application::cell_row::CellRow;
 use nene_ledger_application::cut_record::CutRecord;
 use nene_ledger_application::format_summary::FormatSummary;
 use nene_ledger_core::binary_sniff::looks_binary;
@@ -43,9 +44,15 @@ impl Opened {
         self.summary
     }
 
-    /// 先頭から読んだ行（復号したセルの値）。
-    pub(crate) fn rows(&self) -> &[Vec<String>] {
+    /// 先頭から読んだ行（復号したセルの値・テストで比べる）。
+    #[cfg(test)]
+    pub(crate) fn rows(&self) -> &[CellRow] {
         self.rows.cells()
+    }
+
+    /// 先頭から読んだ行を取り出す（画面に持ち主ごと渡す・後には空の並びが残る・GitHub Issue #22）。
+    pub(crate) fn take_rows(&mut self) -> Vec<CellRow> {
+        self.rows.take_cells()
     }
 
     /// 先頭から読んだ行のうち、上限で切り詰めたレコード（GitHub Issue #36）。
@@ -159,6 +166,11 @@ mod tests {
     use nene_ledger_core::quoting::Quoting;
     use std::path::PathBuf;
 
+    /// 読んだ行を、セルごとの文字列で（比べやすいように）。
+    fn strings(rows: &[CellRow]) -> Vec<Vec<String>> {
+        rows.iter().map(CellRow::to_strings).collect()
+    }
+
     fn fixture(name: &str) -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("fixtures")
@@ -226,7 +238,7 @@ mod tests {
             .collect();
         let opened = open(&path).unwrap();
         assert_eq!(opened.header(), Some(0));
-        assert_eq!(opened.rows(), expected.as_slice());
+        assert_eq!(strings(opened.rows()), expected.as_slice());
         assert!(expected.iter().any(|row| row[1] == "MARCH1"));
         assert!(expected.iter().any(|row| row[1] == " 7 "));
     }
@@ -235,14 +247,14 @@ mod tests {
     fn duplicate_and_empty_headers_are_kept_as_they_are() {
         let opened = open(&fixture("duplicate-headers.csv")).unwrap();
         assert_eq!(opened.header(), Some(0));
-        assert_eq!(opened.rows()[0], ["id", "名前", "名前", "", "id"]);
+        assert_eq!(strings(opened.rows())[0], ["id", "名前", "名前", "", "id"]);
     }
 
     #[test]
     fn the_screenshot_sample_opens_with_its_bom_skipped() {
         let opened = open(&fixture("screenshot.csv")).unwrap();
         assert_eq!(opened.header(), Some(0));
-        let rows = opened.rows();
+        let rows = strings(opened.rows());
         assert_eq!(rows.len(), 7);
         assert_eq!(rows[0][0], "社員番号");
         assert_eq!(rows[1][0], "00123");
@@ -318,7 +330,7 @@ mod tests {
         .iter()
         .map(|row| row.iter().map(|cell| String::from(*cell)).collect())
         .collect();
-        assert_eq!(opened.rows(), expected.as_slice());
+        assert_eq!(strings(opened.rows()), expected.as_slice());
     }
 
     #[test]
@@ -341,6 +353,6 @@ mod tests {
         .iter()
         .map(|row| row.iter().map(|cell| String::from(*cell)).collect())
         .collect();
-        assert_eq!(opened.rows(), expected.as_slice());
+        assert_eq!(strings(opened.rows()), expected.as_slice());
     }
 }

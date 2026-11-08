@@ -108,7 +108,7 @@ fn dump_to(path: &Path, out: &mut impl Write) -> Result<DumpCuts, OpenFailure> {
             return Ok(cuts);
         }
         for row in rows {
-            out.write_all(rfc4180_record(row).as_bytes())
+            out.write_all(rfc4180_record(row.iter()).as_bytes())
                 .map_err(OpenFailure::Write)?;
         }
         first = first.saturating_add(u64::try_from(rows.len()).unwrap_or(u64::MAX));
@@ -136,7 +136,10 @@ mod tests {
             RecordRange::new(0, 100),
         )
         .unwrap();
-        rows.cells().iter().map(|row| rfc4180_record(row)).collect()
+        rows.cells()
+            .iter()
+            .map(|row| rfc4180_record(row.iter()))
+            .collect()
     }
 
     /// 書き込みを `failure` で断る書き手。

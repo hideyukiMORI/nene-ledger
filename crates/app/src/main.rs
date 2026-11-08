@@ -194,15 +194,15 @@ struct Start {
     stamp: Option<FileStamp>,
 }
 
-/// 窓を開き、その起こす口で裏の索引の仕事を始め、閉じられるまで描く。開いた先頭の行は画面を作ったら手放す（窓が開いている
-/// 間ずっと、セルごとの `String` の写しを持たない・GitHub Issue #22）。
+/// 窓を開き、その起こす口で裏の索引の仕事を始め、閉じられるまで描く。開いた先頭の行は画面に持ち主ごと渡す（写しを作らず、
+/// 窓の行を 2 組持たない・GitHub Issue #22）。
 fn show(
     path: &Path,
-    opened: opening::Opened,
+    mut opened: opening::Opened,
     (theme, stamp): (Option<ThemeState>, Option<FileStamp>),
 ) -> ExitCode {
     let start = Start {
-        document: first_document(&opened),
+        document: first_document(&mut opened),
         format: opened.summary().format(),
         path: Some(path.to_path_buf()),
         stamp,
@@ -268,15 +268,15 @@ fn run_window(
         .map_err(|failure| format!("窓が止まった: {failure:?}"))
 }
 
-/// 開いた先頭の行の画面。方言の判別に確信が無ければそれを知らせ（Issue #3）、文字のファイルでないようならそちらを知らせる
+/// 開いた先頭の行の画面（行は `opened` から取り出して画面に渡す）。方言の判別に確信が無ければそれを知らせ（Issue #3）、文字のファイルでないようならそちらを知らせる
 /// （知らせは 1 つなので、後のほうが残る）。
-fn first_document(opened: &opening::Opened) -> nene_ledger_application::document::Document {
+fn first_document(opened: &mut opening::Opened) -> nene_ledger_application::document::Document {
     use nene_ledger_application::notice::Notice;
     let mut document = nene_ledger_application::document::Document::open(
         opened.title().to_owned(),
         opened.summary(),
         opened.header(),
-        opened.rows(),
+        opened.take_rows(),
     );
     document.mark_cut(opened.cuts().to_vec());
     if let Some(doubt) = opened.doubt() {
