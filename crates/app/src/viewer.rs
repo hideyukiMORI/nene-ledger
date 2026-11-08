@@ -827,14 +827,14 @@ impl Viewer {
                 self.open_candidates();
                 None
             }
-            PaletteOutcome::FindRagged => self.find_ragged(),
+            PaletteOutcome::FindRagged { forward } => self.find_ragged(forward),
         }
     }
 
-    /// パレットを閉じて、列の数が見出しと違う次の行へ探す（GitHub Issue #338）。
-    fn find_ragged(&mut self) -> Option<ClipboardText> {
+    /// パレットを閉じて、列の数が見出しと違う次の（`forward` でなければ前の）行へ探す（GitHub Issue #338・#340）。
+    fn find_ragged(&mut self, forward: bool) -> Option<ClipboardText> {
         self.palette = None;
-        let effect = self.document.find_ragged(true);
+        let effect = self.document.find_ragged(forward);
         self.effect(effect)
     }
 
