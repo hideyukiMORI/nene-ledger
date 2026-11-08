@@ -1035,6 +1035,18 @@ Windows の exe の `--version`（コマンドプロンプトに結んで書く�
 | 2 | ドラッグ＆ドロップ（CLIP-04・GitHub Issue #243） | エクスプローラーから `drop-a.csv`・`drop-b.csv` を一緒に落とすと、それぞれ新しい窓で開き、元の窓は残る |
 | 3 | Excel が開いているファイル（FILE-04・GitHub Issue #240） | `drop-a.csv` を Excel で開いたまま NeNe Ledger の窓へ落とすと、新しい窓が読み取り専用で開き、状態の行に「ほかのアプリ（Excel など）が開いているので、読み取り専用で開きました」 |
 
+## 95. 外へ送らず、ほかのプログラムを起こさない（CNF-016・GitHub Issue #249・FR-031・SEC-01・SEC-05）
+
+2026-11-08。CNF-012 の対象の外（scan・store）と Cargo.toml に、本物のファイルで禁じた行を書いて `cargo run -p xtask -- conformance` を回した（書いた行は戻した）：
+
+| 書いた所 | 書いた行 | 結果 |
+| --- | --- | --- |
+| `crates/scan/src/source.rs`（CNF-012 の対象の外） | `use std::net::TcpStream;` | `CNF-016: crates/scan/src/source.rs:3 — `std::net` は外へ送る経路である（FR-031・SEC-05）` |
+| `crates/store/src/saving.rs`（同） | `use std::process::Command;` | `CNF-016: crates/store/src/saving.rs:3 — `std::process::Command` はほかのプログラムを起こす。自分の exe を起こし直す new_window の外で使わない（FR-031・SEC-01）` |
+| `crates/ui-win32/Cargo.toml` | `"Win32_Networking_WinHttp",` | `CNF-016: crates/ui-win32/Cargo.toml:39 — `Win32_Networking` は外へ送る機能である（FR-031）` |
+
+`規約違反 3 件（CNF-016）`。戻した後は `規約違反なし（検査 427 ファイル）`。正例・反例は xtask のテスト（`cnf016_catches_sending_out_in_every_crate`・`cnf016_allows_spawning_only_the_own_exe_in_new_window`）。数式を評価しないこと（評価する処理が無いこと）は、数式に見えるセル（`=1+1`・`=HYPERLINK(…)`・`+cmd|…`・`@SUM(…)`・`=WEBSERVICE(…)`）が表とコピーで字のまま残る application のテスト `formula_like_cells_stay_as_text` と、触っていない行は保存でバイト列が同じテスト（KEEP-02）で示す。
+
 ## 7. active の規則と、その証明
 
 CNF-009 は active の規則ごとに `| ID |` で始まる行がここにあることを要求する。
@@ -1083,6 +1095,7 @@ CNF-009 は active の規則ごとに `| ID |` で始まる行がここにある
 | CNF-013 | 許されない依存 | 同上 ＋ 実ファイル（第 5 節） | xtask |
 | CNF-014 | unsafe を許すクレートの lint の表のずれ | 同上 | xtask |
 | CNF-015 | scan の `File::create`・`.write(true`・書き込める写像 | 同上 | xtask |
+| CNF-016 | どのクレートでも `std::net`・`new_window` の外の `Command`・`Win32_Networking` | 同上 ＋ 実ファイル（第 95 節） | xtask |
 | GIT-001 | `Closes #N` の無い PR 本文 | 単体テスト ＋ CI の `make ci`（第 51 節） | xtask |
 | GIT-002 | 形の違う枝名・`main` への直接 push | `validate-git`（第 6 節）＋ ruleset（第 51 節） | xtask / GitHub |
 | GIT-003 | 形の違う件名・PR タイトル | commit-msg フック（第 6 節）＋ CI（第 51 節・実行 41832778822 が失敗） | xtask |

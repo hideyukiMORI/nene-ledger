@@ -492,6 +492,81 @@ pub(crate) fn no_nondeterministic_input(file: &SourceFile) -> Vec<Violation> {
         .collect()
 }
 
+/// 外へ送る名前（FR-031・SEC-05）。どのクレートでも使わない。
+const NETWORK_NAMES: [&str; 9] = [
+    "std::net",
+    "TcpStream",
+    "TcpListener",
+    "UdpSocket",
+    "ToSocketAddrs",
+    "WinHttp",
+    "InternetOpen",
+    "URLDownloadToFile",
+    "WSAStartup",
+];
+
+/// ほかのプログラムを起こす名前（FR-031・SEC-01）。
+const SPAWNING_NAMES: [&str; 5] = [
+    "std::process::Command",
+    "Command::new",
+    "ShellExecute",
+    "CreateProcess",
+    "WinExec",
+];
+
+/// ほかのプログラムを起こしてよいファイル。自分の exe を起こし直して新しい窓を開くだけ（ADR 0028 の決定 1・CLIP-04）。
+const SPAWNING_ALLOWED: [&str; 2] = [
+    "crates/adapters-x11/src/new_window.rs",
+    "crates/adapters-windows/src/new_window.rs",
+];
+
+/// 外へ送る `windows` の機能（`Cargo.toml`）。
+const NETWORK_FEATURE: &str = "\"Win32_Networking";
+
+/// CNF-016 — どのクレートも外へ送らず、自分の exe を起こし直すアダプターの外でほかのプログラムを起こさない（FR-031・
+/// SEC-01・SEC-05・GitHub Issue #249）。注釈の行は見ない（字句検査なので別名・間接呼び出しは見えない）。
+pub(crate) fn no_network_or_spawning(file: &SourceFile) -> Vec<Violation> {
+    let path = file.path();
+    if !path.starts_with("crates/") {
+        return Vec::new();
+    }
+    if file.has_extension("toml") {
+        return file
+            .numbered_lines()
+            .filter(|&(_, line)| line.contains(NETWORK_FEATURE))
+            .map(|(number, _)| {
+                Violation::new(
+                    "CNF-016",
+                    path,
+                    number,
+                    "`Win32_Networking` は外へ送る機能である（FR-031）".to_owned(),
+                )
+            })
+            .collect();
+    }
+    if !file.has_extension("rs") {
+        return Vec::new();
+    }
+    let may_spawn = SPAWNING_ALLOWED.contains(&path);
+    production_lines(file)
+        .filter(|&(_, line)| !line.trim_start().starts_with("//"))
+        .filter_map(|(number, line)| {
+            let network = NETWORK_NAMES.iter().find(|name| line.contains(*name));
+            let spawning = SPAWNING_NAMES
+                .iter()
+                .find(|name| !may_spawn && line.contains(*name));
+            let message = match (network, spawning) {
+                (Some(name), _) => format!("`{name}` は外へ送る経路である（FR-031・SEC-05）"),
+                (None, Some(name)) => format!(
+                    "`{name}` はほかのプログラムを起こす。自分の exe を起こし直す new_window の外で使わない（FR-031・SEC-01）"
+                ),
+                (None, None) => return None,
+            };
+            Some(Violation::new("CNF-016", path, number, message))
+        })
+        .collect()
+}
+
 /// 書き込みで開く・作る API と、開かずに書く・消す・名前を変える `std::fs` の関数（ADR 0005）。
 ///
 /// 🔴 `fs::write` は Issue #12 で足した。開き方だけを見ていたので、scan の本番のコードに書いても通った（gate-proofs 第 9 節）。
@@ -966,6 +1041,87 @@ mod tests {
             "[workspace.lints.clippy]\nunwrap_used = \"forbid\"\n",
         );
         assert!(no_gate_disabling(&file).is_empty());
+    }
+
+    // ── CNF-016 ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn cnf016_catches_sending_out_in_every_crate() {
+        for (path, line) in [
+            ("crates/scan/src/source.rs", "use std::net::TcpStream;\n"),
+            (
+                "crates/store/src/saving.rs",
+                "let socket = UdpSocket::bind(address)?;\n",
+            ),
+            (
+                "crates/adapters-x11/src/new_window.rs",
+                "let _ = TcpStream::connect(host);\n",
+            ),
+            (
+                "crates/ui-win32/src/ui.rs",
+                "unsafe { WinHttpOpen(None, 0, None, None, 0) };\n",
+            ),
+            (
+                "crates/app/src/main.rs",
+                "let _ = URLDownloadToFile(None, url, file, 0, None);\n",
+            ),
+        ] {
+            assert_eq!(
+                rules(&no_network_or_spawning(&fixture(path, line))),
+                vec!["CNF-016"],
+                "{path}"
+            );
+        }
+        let manifest = fixture(
+            "crates/ui-win32/Cargo.toml",
+            "    \"Win32_Networking_WinHttp\",\n",
+        );
+        assert_eq!(rules(&no_network_or_spawning(&manifest)), vec!["CNF-016"]);
+    }
+
+    #[test]
+    fn cnf016_allows_spawning_only_the_own_exe_in_new_window() {
+        for (path, line) in [
+            (
+                "crates/adapters-windows/src/file_replacing.rs",
+                "let _ = Command::new(\"cmd\").spawn();\n",
+            ),
+            ("crates/store/src/saving.rs", "use std::process::Command;\n"),
+            (
+                "crates/ui-win32/src/ui.rs",
+                "unsafe { ShellExecuteW(None, w!(\"open\"), url, None, None, 1) };\n",
+            ),
+            (
+                "crates/app/src/viewer.rs",
+                "unsafe { CreateProcessW(None, line, None, None, false, 0, None, None, &si, &mut pi) };\n",
+            ),
+        ] {
+            assert_eq!(
+                rules(&no_network_or_spawning(&fixture(path, line))),
+                vec!["CNF-016"],
+                "{path}"
+            );
+        }
+        for path in SPAWNING_ALLOWED {
+            let own = fixture(
+                path,
+                "let child = Command::new(exe).arg(\"--new\").spawn()?;\n",
+            );
+            assert!(no_network_or_spawning(&own).is_empty(), "{path}");
+        }
+        // 注釈とテストのモジュールは見ない。xtask は製品の外。
+        let comment = fixture("crates/scan/src/source.rs", "// std::net は使わない\n");
+        assert!(no_network_or_spawning(&comment).is_empty());
+        let test = fixture(
+            "crates/app/src/main.rs",
+            "fn a() {}\n#[cfg(test)]\nmod tests {\n    use std::process::Command;\n}\n",
+        );
+        assert!(no_network_or_spawning(&test).is_empty());
+        let tool = fixture(
+            "xtask/src/main.rs",
+            "let status = Command::new(\"cargo\").status()?;\n",
+        );
+        assert!(no_network_or_spawning(&tool).is_empty());
     }
 
     // ── CNF-015 ────────────────────────────────────────────────────────────

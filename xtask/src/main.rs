@@ -59,6 +59,7 @@ fn inspect(files: &[SourceFile], root: &Path) -> Vec<Violation> {
             found.extend(check::no_gate_disabling(file));
             found.extend(check::no_nondeterministic_input(file));
             found.extend(check::scan_does_not_write(file));
+            found.extend(check::no_network_or_spawning(file));
             found.extend(check::dependencies_follow_graph(file));
             found
         })
