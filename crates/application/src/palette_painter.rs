@@ -104,8 +104,61 @@ impl<'state> PalettePainter<'state> {
     }
 
     /// 検索欄。背景で塗り、下辺は強調の色。打った字の後ろに入力の印。空なら案内文。右端に該当と全部の数。
+    /// 置換の段は欄を 2 つ縦に並べ、左に名札（「探す」「置換後」）を付け、打っている欄だけ下辺を強調の色にして入力の印を
+    /// 置く（GitHub Issue #287）。全部選んだ探す欄は、字の後ろを選択の色で塗る。
     fn field(&mut self) {
-        let field = self.layout.field();
+        let mode = self.palette.mode();
+        let Some(second) = self.layout.second() else {
+            let query = self.palette.field_text();
+            self.input(
+                self.layout.field(),
+                (None, query, placeholder(mode)),
+                (true, self.palette.whole_selected()),
+            );
+            let Some(total) = self.total() else {
+                return;
+            };
+            let count = format!("{} / {total}", self.palette.items().len());
+            self.right_text(self.layout.field(), count);
+            return;
+        };
+        let with = mode == (PaletteMode::Replace { with: true });
+        let label = Some(self.label_width());
+        self.input(
+            self.layout.field(),
+            (
+                label.map(|width| ("探す", width)),
+                self.palette.query(),
+                "探す文字",
+            ),
+            (!with, self.palette.whole_selected()),
+        );
+        self.input(
+            second,
+            (
+                label.map(|width| ("置換後", width)),
+                self.palette.replacement(),
+                "置き換える文字（空なら当たった所を消す）",
+            ),
+            (with, false),
+        );
+    }
+
+    /// 名札の列の幅（長いほうの名札と、字との空き）。
+    fn label_width(&self) -> u32 {
+        self.width_of("置換後")
+            .max(self.width_of("探す"))
+            .saturating_add(self.px(TEXT_INSET).saturating_mul(2))
+    }
+
+    /// 入力の欄 1 つ。`label` は名札とその列の幅、`text` は中身、`hint` は空のときの案内。`active` なら下辺を強調の色に
+    /// して入力の印を置き、そうでなければ下辺は縁の色。`selected` なら字の後ろを選択の色で塗る。
+    fn input(
+        &mut self,
+        field: PixelRect,
+        (label, text, hint): (Option<(&str, u32)>, &str, &str),
+        (active, selected): (bool, bool),
+    ) {
         self.fill(field, self.colors.background());
         let line_top = bottom(field).saturating_sub(self.px(1));
         self.fill(
@@ -113,14 +166,17 @@ impl<'state> PalettePainter<'state> {
                 PixelPoint::new(field.origin().x(), line_top),
                 PixelSize::new(field.size().width(), self.px(1)),
             ),
-            self.colors.cursor(),
+            if active {
+                self.colors.cursor()
+            } else {
+                self.colors.border()
+            },
         );
-        let left = field.origin().x().saturating_add(self.px(TEXT_INSET));
-        let query = self.palette.field_text();
-        if query.is_empty() {
+        let left = self.label(field, label, active);
+        if text.is_empty() {
             self.text_at(
                 from_left(field, left),
-                String::from(placeholder(self.palette.mode())),
+                String::from(hint),
                 self.colors.gutter_text(),
             );
         }
@@ -128,32 +184,52 @@ impl<'state> PalettePainter<'state> {
         let room = field
             .size()
             .width()
-            .saturating_sub(self.px(TEXT_INSET).saturating_mul(2))
+            .saturating_sub(left.saturating_sub(field.origin().x()))
+            .saturating_sub(self.px(TEXT_INSET))
             .saturating_sub(self.px(2));
-        let shown = self.tail_within(query, room);
-        if !query.is_empty() {
+        let shown = self.tail_within(text, room);
+        let line_height = self.metrics.line_height();
+        let caret_top = field
+            .origin()
+            .y()
+            .saturating_add(field.size().height().saturating_sub(line_height) / 2);
+        if selected && !text.is_empty() {
+            self.fill(
+                PixelRect::new(
+                    PixelPoint::new(left, caret_top),
+                    PixelSize::new(self.width_of(&shown), line_height),
+                ),
+                self.colors.selection(),
+            );
+        }
+        if !text.is_empty() {
             self.text_at(from_left(field, left), shown.clone(), self.colors.text());
         }
-        let caret_x = left.saturating_add(self.width_of(&shown));
-        let caret_top = field.origin().y().saturating_add(
-            field
-                .size()
-                .height()
-                .saturating_sub(self.metrics.line_height())
-                / 2,
-        );
-        self.fill(
-            PixelRect::new(
-                PixelPoint::new(caret_x, caret_top),
-                PixelSize::new(self.px(2), self.metrics.line_height()),
-            ),
-            self.colors.cursor(),
-        );
-        let Some(total) = self.total() else {
-            return;
+        if active {
+            let caret_x = left.saturating_add(self.width_of(&shown));
+            self.fill(
+                PixelRect::new(
+                    PixelPoint::new(caret_x, caret_top),
+                    PixelSize::new(self.px(2), line_height),
+                ),
+                self.colors.cursor(),
+            );
+        }
+    }
+
+    /// 欄の左の名札（打っている欄は濃い字）。字を書き始める左端を返す（名札が無ければ内側の余白の後ろ）。
+    fn label(&mut self, field: PixelRect, label: Option<(&str, u32)>, active: bool) -> u32 {
+        let inset = field.origin().x().saturating_add(self.px(TEXT_INSET));
+        let Some((name, width)) = label else {
+            return inset;
         };
-        let count = format!("{} / {total}", self.palette.items().len());
-        self.right_text(field, count);
+        let color = if active {
+            self.colors.text()
+        } else {
+            self.colors.gutter_text()
+        };
+        self.text_at(from_left(field, inset), String::from(name), color);
+        field.origin().x().saturating_add(width)
     }
 
     /// 段の候補の全部の数（検索欄の右端の「該当 / 全部」）。飛ぶ先の段は数を出さない。
@@ -172,25 +248,11 @@ impl<'state> PalettePainter<'state> {
         }
     }
 
-    /// 配色の段の、試しの案内（試している配色の名前と、決める・戻すのキー）。置換の段は、打っていないほうの欄の中身。
+    /// 配色の段の、試しの案内（試している配色の名前と、決める・戻すのキー）。
     fn hint(&mut self) {
         let Some(hint) = self.layout.hint() else {
             return;
         };
-        if let PaletteMode::Replace { with } = self.palette.mode() {
-            let (label, other) = if with {
-                ("探す", self.palette.query())
-            } else {
-                ("置き換える", self.palette.replacement())
-            };
-            let text = format!("{label}: “{other}”（Tab で替える）");
-            self.text_at(
-                from_left(hint, hint.origin().x()),
-                text,
-                self.colors.gutter_text(),
-            );
-            return;
-        }
         let text = match self.palette.items().get(self.palette.selected()) {
             Some(&PaletteItem::Theme(position)) => {
                 format!(
@@ -305,7 +367,7 @@ impl<'state> PalettePainter<'state> {
         let lines = if let PaletteMode::Replace { .. } = self.palette.mode() {
             vec![
                 note.clone().unwrap_or_else(|| {
-                    String::from("Enter 置き換えて次へ · Alt+A 全部 · Shift+Enter 前を探す")
+                    String::from("Enter 置き換えて次へ · Alt+A 全部 · Tab 欄を替える")
                 }),
                 conditions,
                 folding,
@@ -566,8 +628,7 @@ fn placeholder(mode: PaletteMode) -> &'static str {
         PaletteMode::Commands => "操作の名前を英字かローマ字で（例: theme, haishoku）",
         PaletteMode::GoTo => "行の番号（例: 1200、列も選ぶなら 1200,3）",
         PaletteMode::Find => "探す文字（Enter で次・Shift+Enter で前）",
-        PaletteMode::Replace { with: false } => "探す文字（Tab で置き換える文字の欄へ）",
-        PaletteMode::Replace { with: true } => "置き換える文字（空なら当たった所を消す）",
+        PaletteMode::Replace { .. } => "探す文字",
         PaletteMode::SaveAs { .. } => "保存先のファイルの道筋（例: /srv/data/表.csv）",
         PaletteMode::Keys => "キーか操作の名前で絞る（例: ctrl, shift, kopi-）",
         PaletteMode::About => "このアプリについて（Esc で閉じる）",
@@ -694,24 +755,46 @@ mod tests {
         assert!(fills(&commands, colors().selection()).is_empty());
     }
 
-    /// 置換の段は打っている欄の中身を欄に、もう一方を下の行に、その下に置き換え方と条件のキーを出す（ADR 0030 の決定 6）。
+    /// 置換の段は 2 つの欄を縦に並べて名札を付け、その下に置き換え方と条件のキーを出す（ADR 0030 の決定 6・GitHub Issue #287）。
     #[test]
     fn the_replace_step_shows_both_fields_and_its_keys() {
-        let mut palette = CommandPalette::open_replace("tok", "東京", FindOptions::standard());
+        let palette = CommandPalette::open_replace("tok", "東京", FindOptions::standard());
+        let layout = PaletteLayout::new(view(), &palette);
+        let (find, second) = (layout.field(), layout.second().unwrap());
+        assert!(second.origin().y() > find.origin().y() + find.size().height() - 1);
         let commands = palette.paint(view(), colors(), DetailPane::Closed);
         let shown = texts(&commands);
-        assert!(shown.contains(&"東京"), "{shown:?}");
-        assert!(shown.contains(&"探す: “tok”（Tab で替える）"), "{shown:?}");
+        assert_eq!(&shown[..4], &["探す", "tok", "置換後", "東京"], "{shown:?}");
         assert!(
             shown.contains(&"Alt+C 大小を区別しない · Alt+W 部分一致 · Alt+R 文字どおり"),
             "{shown:?}"
         );
-        palette.handle(Intent::Advance(CursorStep::Left), 0);
+    }
+
+    /// 打っている欄だけ下辺を強調の色にして入力の印を置き、全部選んだ字の後ろは選択の色。Tab と欄を押すことで替わる
+    /// （GitHub Issue #287）。
+    #[test]
+    fn only_the_typed_field_is_accented() {
+        let mut palette = CommandPalette::open_replace("tok", "東京", FindOptions::standard());
+        let layout = PaletteLayout::new(view(), &palette);
+        let (find, second) = (layout.field(), layout.second().unwrap());
+        let accented = |commands: &[DrawCommand], area: PixelRect| {
+            fills(commands, colors().cursor()).iter().any(|&rect| {
+                rect.origin().y() >= area.origin().y()
+                    && rect.origin().y() < area.origin().y() + area.size().height()
+            })
+        };
+        let first = palette.paint(view(), colors(), DetailPane::Closed);
+        assert!(accented(&first, find) && !accented(&first, second));
+        assert_eq!(fills(&first, colors().selection()).len(), 1);
+        palette.handle(Intent::Advance(CursorStep::Right), 0);
         let swapped = palette.paint(view(), colors(), DetailPane::Closed);
-        let texts_now = texts(&swapped);
-        assert!(
-            texts_now.contains(&"tok") && texts_now.contains(&"置き換える: “東京”（Tab で替える）")
-        );
+        assert!(accented(&swapped, second) && !accented(&swapped, find));
+        assert!(fills(&swapped, colors().selection()).is_empty());
+        assert_eq!(layout.field_at(find.origin()), Some(false));
+        assert_eq!(layout.field_at(second.origin()), Some(true));
+        palette.click_field(false);
+        assert_eq!(palette.mode(), PaletteMode::Replace { with: false });
     }
 
     /// 探す段の条件の行は Alt+R の状態を出し、正規表現の式が読めなければそう出す（ADR 0031）。置換の段はキーの行が増える。
@@ -729,7 +812,7 @@ mod tests {
         assert!(texts(&ok).contains(&"Alt+C 大小を区別しない · Alt+W 部分一致 · Alt+R 正規表現"));
         let replacing = CommandPalette::open_replace("b", "x", FindOptions::standard());
         let both = replacing.paint(view(), colors(), DetailPane::Closed);
-        assert!(texts(&both).contains(&"Enter 置き換えて次へ · Alt+A 全部 · Shift+Enter 前を探す"));
+        assert!(texts(&both).contains(&"Enter 置き換えて次へ · Alt+A 全部 · Tab 欄を替える"));
     }
 
     /// パレットの案内の長さの上限（表示の桁・全角 = 2）。Xvfb の画面写し（Noto Sans CJK JP・倍率 100%・2026-11-06）で

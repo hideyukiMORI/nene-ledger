@@ -1145,6 +1145,9 @@ fn palette_outcome(
     let state = open.state_mut();
     if let Intent::Point { at, .. } = intent {
         let layout = PaletteLayout::new(view, state);
+        if let Some(with) = layout.field_at(at) {
+            return state.click_field(with);
+        }
         match layout.item_at(at) {
             Some(index) => state.click(index, current),
             None if layout.contains(at) => PaletteOutcome::Stay,

@@ -24,6 +24,7 @@ const MAX_ROWS: u32 = 10;
 pub struct PaletteLayout {
     panel: PixelRect,
     field: PixelRect,
+    second: Option<PixelRect>,
     hint: Option<PixelRect>,
     list_top: u32,
     row_height: u32,
@@ -71,6 +72,7 @@ impl PaletteLayout {
         Self {
             panel: move_rect(self.panel),
             field: move_rect(self.field),
+            second: self.second.map(move_rect),
             hint: self.hint.map(move_rect),
             list_top: self.list_top.saturating_add(down),
             ..self
@@ -99,11 +101,9 @@ impl PaletteLayout {
             inner_width,
             field_height,
         );
-        // 試しの案内の行（配色・読み方）と、置換の段の打っていないほうの欄の行。
-        let hint = (palette.mode().tries_the_selection()
-            || matches!(palette.mode(), PaletteMode::Replace { .. }))
-        .then(|| rect(inner_left, bottom(field), inner_width, row_height));
-        let list_top = hint
+        let (second, hint) = below_field(palette.mode(), field, row_height, padding);
+        let list_top = second
+            .or(hint)
             .map_or(bottom(field), bottom)
             .saturating_add(padding / 2);
         let room = size
@@ -124,6 +124,7 @@ impl PaletteLayout {
         Self {
             panel: rect(left, top, width, height),
             field,
+            second,
             hint,
             list_top,
             row_height,
@@ -142,6 +143,24 @@ impl PaletteLayout {
     #[must_use]
     pub fn field(&self) -> PixelRect {
         self.field
+    }
+
+    /// 置換の段の 2 つ目の欄（置き換える文字）。ほかの段は `None`。
+    #[must_use]
+    pub fn second(&self) -> Option<PixelRect> {
+        self.second
+    }
+
+    /// 窓の中の位置 `at` が、置換の段のどちらの欄か（`Some(true)` は置き換える欄）。欄の外なら `None`。
+    #[must_use]
+    pub fn field_at(&self, at: PixelPoint) -> Option<bool> {
+        if contains(self.field, at) {
+            Some(false)
+        } else {
+            self.second
+                .filter(|&second| contains(second, at))
+                .map(|_| true)
+        }
     }
 
     /// 配色の段の、試しの案内の行。
@@ -189,6 +208,29 @@ impl PaletteLayout {
     pub fn contains(&self, at: PixelPoint) -> bool {
         contains(self.panel, at)
     }
+}
+
+/// 欄の下に置く物：置換の段の 2 つ目の欄（置き換える文字・探す欄の下に同じ大きさで・GitHub Issue #287）と、試しの
+/// 案内の行（配色・読み方・判別の候補）。
+fn below_field(
+    mode: PaletteMode,
+    field: PixelRect,
+    row_height: u32,
+    padding: u32,
+) -> (Option<PixelRect>, Option<PixelRect>) {
+    let (left, width) = (field.origin().x(), field.size().width());
+    let second = matches!(mode, PaletteMode::Replace { .. }).then(|| {
+        rect(
+            left,
+            bottom(field).saturating_add(padding / 2),
+            width,
+            field.size().height(),
+        )
+    });
+    let hint = mode
+        .tries_the_selection()
+        .then(|| rect(left, bottom(field), width, row_height));
+    (second, hint)
 }
 
 fn rect(left: u32, top: u32, width: u32, height: u32) -> PixelRect {

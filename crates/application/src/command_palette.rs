@@ -41,6 +41,9 @@ pub struct CommandPalette {
     replacement: String,
     /// 窓の下へ寄せているか（表の端の当たりが箱の下に入ったとき・GitHub Issue #286）。閉じるまでそのまま。
     low: bool,
+    /// 探す欄の文字を全部選んでいるか（前に探した文字を入れて開いたとき）。打てば置き換わり、Backspace で消える
+    /// （Excel・VS Code と同じ・GitHub Issue #287）。ほかのキーで選びを外す。
+    whole_selected: bool,
 }
 
 impl CommandPalette {
@@ -55,10 +58,12 @@ impl CommandPalette {
             find_options: FindOptions::standard(),
             replacement: String::new(),
             low: false,
+            whole_selected: false,
         }
     }
 
     /// 探す文字を打つ段で開く（Ctrl+F・ADR 0030 の決定 1）。前に探した文字 `text` と条件 `options` を入れておく。
+    /// 前に探した文字は全部選んでおく（打てば置き換わる・GitHub Issue #287）。
     #[must_use]
     pub fn open_find(text: &str, options: FindOptions) -> Self {
         Self {
@@ -69,23 +74,24 @@ impl CommandPalette {
             find_options: options,
             replacement: String::new(),
             low: false,
+            whole_selected: !text.is_empty(),
         }
     }
 
     /// 探す文字と置き換える文字を打つ段で開く（Ctrl+H・ADR 0030 の決定 6）。前に探した文字 `text`・置き換えた文字
-    /// `replacement`・条件 `options` を入れておく。探す欄が空なら探す欄から、そうでなければ置き換える欄から打つ。
+    /// `replacement`・条件 `options` を入れておく。いつも探す欄から打ち、前に探した文字は全部選んでおく（打てば置き換わる・
+    /// GitHub Issue #287。前は前に探した文字があると置き換える欄から始め、どちらに打っているかを取り違えた）。
     #[must_use]
     pub fn open_replace(text: &str, replacement: &str, options: FindOptions) -> Self {
         Self {
-            mode: PaletteMode::Replace {
-                with: !text.is_empty(),
-            },
+            mode: PaletteMode::Replace { with: false },
             query: String::from(text),
             selected: 0,
             candidates: Vec::new(),
             find_options: options,
             replacement: String::from(replacement),
             low: false,
+            whole_selected: !text.is_empty(),
         }
     }
 
@@ -99,6 +105,32 @@ impl CommandPalette {
     /// （GitHub Issue #286）。閉じるまでそのまま。
     pub fn set_low(&mut self, low: bool) {
         self.low = low;
+    }
+
+    /// 全部選んだ探す欄は、字と Backspace と条件の切り替えのほかで選びを外す（GitHub Issue #287）。
+    fn keep_selection_for(&mut self, intent: Intent) {
+        if !matches!(
+            intent,
+            Intent::Type(_) | Intent::Erase | Intent::FindToggle(_)
+        ) {
+            self.whole_selected = false;
+        }
+    }
+
+    /// 欄を押した（`with` は置換の段の置き換える欄）。置換の段ならその欄へ打つ先を移し、全部の選びを外す
+    /// （GitHub Issue #287）。ほかの段の欄はそのまま。
+    pub fn click_field(&mut self, with: bool) -> PaletteOutcome {
+        self.whole_selected = false;
+        if let PaletteMode::Replace { .. } = self.mode {
+            self.mode = PaletteMode::Replace { with };
+        }
+        PaletteOutcome::Stay
+    }
+
+    /// 探す欄の文字を全部選んでいるか（打てば置き換わる・GitHub Issue #287）。
+    #[must_use]
+    pub const fn whole_selected(&self) -> bool {
+        self.whole_selected
     }
 
     /// 箱を窓の下へ寄せているか。
@@ -168,6 +200,7 @@ impl CommandPalette {
             find_options: FindOptions::standard(),
             replacement: String::new(),
             low: false,
+            whole_selected: false,
         }
     }
 
@@ -190,6 +223,7 @@ impl CommandPalette {
             find_options: FindOptions::standard(),
             replacement: String::new(),
             low: false,
+            whole_selected: false,
         }
     }
 
@@ -246,6 +280,7 @@ impl CommandPalette {
         } else {
             intent
         };
+        self.keep_selection_for(intent);
         if let Some(outcome) = self.mode_intent(intent) {
             return outcome;
         }
@@ -524,11 +559,17 @@ impl CommandPalette {
     /// 尋ねていればやめ、候補を頭から選び直す。長い文字列でも候補を探し直すのは 1 回だけ（1 字ごとに探し直すと、字の数の
     /// 2 乗の手間になり窓が止まった・GitHub Issue #207）。
     pub fn insert_text(&mut self, text: &str) -> PaletteOutcome {
+        let typing = text.chars().any(|character| !character.is_control());
+        let whole = typing && core::mem::take(&mut self.whole_selected);
         let field = if self.mode == (PaletteMode::Replace { with: true }) {
             &mut self.replacement
         } else {
             &mut self.query
         };
+        // 全部選んだ欄に打てば置き換わる（GitHub Issue #287）。
+        if whole {
+            field.clear();
+        }
         let before = field.len();
         field.extend(text.chars().filter(|character| !character.is_control()));
         if field.len() == before || self.mode == (PaletteMode::Replace { with: true }) {
@@ -540,7 +581,12 @@ impl CommandPalette {
 
     /// 検索の欄の最後の字を 1 つ消す。上書きを尋ねていればやめ、候補を頭から選び直す。
     fn erase_query(&mut self) -> PaletteOutcome {
-        self.query.pop();
+        // 全部選んでいれば全部を消す（GitHub Issue #287）。
+        if core::mem::take(&mut self.whole_selected) {
+            self.query.clear();
+        } else {
+            self.query.pop();
+        }
         self.stop_asking();
         self.retarget(0)
     }
@@ -664,7 +710,9 @@ mod tests {
             (palette.mode(), palette.query()),
             (PaletteMode::Find, "tok")
         );
-        typed(&mut palette, "yo");
+        // 前に探した文字は全部選んであり、打てば置き換わる（GitHub Issue #287・下のテスト）。
+        typed(&mut palette, "to");
+        typed(&mut palette, "kyo");
         assert_eq!(palette.query(), "tokyo");
         assert_eq!(
             palette.handle(Intent::Confirm, 0),
@@ -686,6 +734,16 @@ mod tests {
         assert!(palette.find_options().match_case() && palette.find_options().whole_cell());
         assert!(palette.items().is_empty());
         assert_eq!(palette.handle(Intent::Cancel, 0), PaletteOutcome::Close);
+    }
+
+    /// 前に探した文字を入れて開いた探す欄は全部選んであり、打てば置き換わり、その後は足していく（GitHub Issue #287）。
+    #[test]
+    fn a_previous_query_is_selected_and_typing_replaces_it() {
+        let palette = CommandPalette::open_find("tok", FindOptions::standard());
+        assert!(palette.whole_selected());
+        assert!(!CommandPalette::open_find("", FindOptions::standard()).whole_selected());
+        let (typed, _) = typed_one_by_one(&palette, "os");
+        assert_eq!((typed.query(), typed.whole_selected()), ("os", false));
     }
 
     /// 全角半角とひらがなカタカナも 1 つずつ切り替わる。既定は全角半角を区別せず、かなは区別する（ADR 0030 の決定 3・
@@ -718,12 +776,23 @@ mod tests {
         assert_eq!(palette.field_text(), "os");
         palette.handle(Intent::Advance(CursorStep::Left), 0);
         assert_eq!(palette.field_text(), "tok");
-        // 前に探した文字があれば、置き換える欄から打つ。
-        let again = CommandPalette::open_replace("tok", "os", FindOptions::standard());
+        // 前に探した文字があっても探す欄から打ち、その文字は全部選んである（GitHub Issue #287）。
+        let mut again = CommandPalette::open_replace("tok", "os", FindOptions::standard());
         assert_eq!(
-            (again.mode(), again.field_text()),
-            (PaletteMode::Replace { with: true }, "os")
+            (again.mode(), again.field_text(), again.whole_selected()),
+            (PaletteMode::Replace { with: false }, "tok", true)
         );
+        // Backspace で全部消える。Tab では選びが外れ、置き換える欄は選ばない。
+        again.handle(Intent::Erase, 0);
+        assert_eq!(again.query(), "");
+        let mut tabbed = CommandPalette::open_replace("tok", "os", FindOptions::standard());
+        tabbed.handle(Intent::Advance(CursorStep::Right), 0);
+        typed(&mut tabbed, "aka");
+        assert_eq!((tabbed.query(), tabbed.replacement()), ("tok", "osaka"));
+        // 条件の切り替えでは選んだまま。
+        let mut toggled = CommandPalette::open_find("tok", FindOptions::standard());
+        toggled.handle(Intent::FindToggle(FindToggle::Case), 0);
+        assert!(toggled.whole_selected());
     }
 
     /// 検索の欄の Ctrl+H は置換の欄へ、置換の欄の Ctrl+F は検索の欄へ、打った文字と条件を引き継いで切り替える。同じ欄を
