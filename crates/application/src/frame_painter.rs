@@ -556,7 +556,8 @@ impl<'view> FramePainter<'view> {
             let invisible = self.span_marks(
                 (rect, &shown, baseline),
                 &visible_marks(text, &shown, marks),
-                (background, self.palette.gutter_text()),
+                // 字の色とセルの背景の中間の灰色（施主の判断・GitHub Issue #269）。
+                (background, self.palette.text().mixed(background, MARK_FADE)),
             );
             let found = self.span_marks(
                 (rect, &shown, baseline),
@@ -669,6 +670,9 @@ fn scrolled_to_caret(text: &str, caret: u32, room: u32) -> (String, u32) {
     }
     (characters.collect(), skipped)
 }
+
+/// 見えない字の印の字の色を、字の色からセルの背景へ寄せる割合（百分率・GitHub Issue #269）。
+const MARK_FADE: u8 = 50;
 
 /// 元の値 `value` を表示の 1 行にしたときの、見えない字の印の範囲（長い値は数えない・当たった字と同じ約束）。
 fn marks_in(value: &str) -> Vec<Range<usize>> {
@@ -1131,7 +1135,7 @@ mod tests {
         assert_eq!((*start, *end), (text.len() - '…'.len_utf8(), text.len()));
     }
 
-    /// 見えない字の印は、背景はセルのまま、字は控えめな色（行番号の字の色）で書き直す。本物の `→` は書き直さない
+    /// 見えない字の印は、背景はセルのまま、字は字の色と背景の中間の灰色で書き直す（GitHub Issue #269）。本物の `→` は書き直さない
     /// （VIEW-05・GitHub Issue #261）。
     #[test]
     fn invisible_character_marks_are_muted() {
@@ -1153,7 +1157,9 @@ mod tests {
                     color,
                     ink,
                     ..
-                } if *ink == palette().gutter_text() => Some((text.as_str(), *start, *end, *color)),
+                } if *ink == palette().text().mixed(palette().background(), MARK_FADE) => {
+                    Some((text.as_str(), *start, *end, *color))
+                }
                 DrawCommand::Fill { .. }
                 | DrawCommand::Text { .. }
                 | DrawCommand::Line { .. }
