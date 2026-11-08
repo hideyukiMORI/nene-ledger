@@ -47,6 +47,7 @@ pub mod find_query;
 pub mod frame;
 pub mod glyph_metrics;
 pub mod header_guess;
+pub mod json_layout;
 pub mod line_ending;
 pub mod line_ending_counts;
 pub mod number_reading;

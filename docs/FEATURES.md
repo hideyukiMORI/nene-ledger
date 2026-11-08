@@ -93,7 +93,7 @@
 | VIEW-04 | セルの折り返しの切り替えと、行の高さ | 2 | 未着手 | FR-026 | 一部 | 競合・SmoothCSV |
 | VIEW-05 | セルの中の改行・タブ・見えない文字（NBSP・ゼロ幅・全角空白・NUL）の可視化 | 1 | 実装済み | FR-026 | 少 | 要望・翻訳・文献・落とし穴 17・改行（¶）・タブ（→）・NUL を含む制御文字（·）は Issue #19（gate-proofs 第 13・27 節）、全角空白（□）・NBSP（␣）・ゼロ幅（¦）・行と段落の区切り（¶）は Issue #53（第 40 節）。表と詳細ペインの両方で、値は変えない。Windows の字体での印は Issue #59（gate-proofs 第 46 節）。印の色分けはまだ |
 | VIEW-06 | 引用符の有無の表示（元のファイルでどう書かれていたか） | 2 | 未着手 | FR-026 | 少 | 競合・SmoothCSV |
-| VIEW-07 | セルの詳細ペイン（長い値・改行・JSON の整形表示・文字数とバイト数） | 1 | 未着手 | FR-026 | 少 | 討議 K・要望・GIS・全文と文字数は Issue #31（gate-proofs 第 22 節）、拡大に合わせた行の数は Issue #38・#39（第 28 節）、ファイルの文字コードでのバイト数は Issue #59（core の `encoded_length`・`encoding_rs` との総当たりのテスト・gate-proofs 第 46 節）。JSON の整形はまだ |
+| VIEW-07 | セルの詳細ペイン（長い値・改行・JSON の整形表示・文字数とバイト数） | 1 | 実装済み | FR-026 | 少 | 討議 K・要望・GIS・全文と文字数は Issue #31（gate-proofs 第 22 節）、拡大に合わせた行の数は Issue #38・#39（第 28 節）、ファイルの文字コードでのバイト数は Issue #59（core の `encoded_length`・`encoding_rs` との総当たりのテスト・gate-proofs 第 46 節）。JSON のオブジェクトか配列のセルは 2 字下げで整形して見せ、補助の行に「JSON（整形して表示）」と添える（値は変えない・切り詰めた値は整形しない・深さ 128・1 MiB まで・GitHub Issue #247・core の `json_layout`・application のテスト `the_pane_lays_out_a_json_cell`）。本文は 5 行なので、長い JSON は「〈あと N 行〉」。Windows の実機での JSON の整形はまだ |
 | VIEW-08 | 1 行をフォームで縦に見る・編集する（レコード表示） | 2 | 未着手 | FR-026 | 一部 | 競合・Ron's / SmoothCSV / Easy |
 | VIEW-09 | 行の交互の色・列の色分け | 2 | 未着手 | FR-026 | 一部 | 競合・Rainbow / Modern |
 | VIEW-10 | 数として見る列の右寄せ | 2 | 未着手 | FR-026 | 少 | 競合・Tad |

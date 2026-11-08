@@ -9617,4 +9617,39 @@ mod tests {
             assert!(!document.is_read_only());
         }
     }
+
+    /// JSON のオブジェクトか配列のセルは、詳細ペインで整形して見せ、補助の行に印を添える。値（文字数とバイト数）は元の
+    /// まま。JSON でないセルは今までどおり（VIEW-07・GitHub Issue #247）。
+    #[test]
+    fn the_pane_lays_out_a_json_cell() {
+        let rows = table(&[
+            &["id", "data"],
+            &["1", r#"{"a":1,"b":[true,"x"]}"#],
+            &["2", "{a:1}"],
+        ]);
+        let mut document = opened_with(&rows);
+        let window = view(400, 400, WindowPlacement::Normal);
+        document.apply(moving(CursorStep::Right), window);
+        let frame = document.frame(window, palette());
+        let texts = all_texts(&frame);
+        for wanted in [
+            "2 行目　2 列目　22 文字　UTF-8 で 22 バイト　JSON（整形して表示）",
+            "{",
+            "  \"a\": 1,",
+            "  \"b\": [",
+            "    true,",
+            // 詳細ペインの本文は 5 行（DETAIL_LINES）。残りは今までの長い値と同じく行の数で知らせる。
+            "〈あと 3 行〉",
+        ] {
+            assert!(texts.contains(&wanted), "{wanted} が無い: {texts:?}");
+        }
+        document.apply(moving(CursorStep::Down), window);
+        let next = document.frame(window, palette());
+        let plain = all_texts(&next);
+        assert!(
+            plain.contains(&"3 行目　2 列目　5 文字　UTF-8 で 5 バイト"),
+            "{plain:?}"
+        );
+        assert!(plain.contains(&"{a:1}"), "{plain:?}");
+    }
 }
