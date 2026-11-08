@@ -43,6 +43,8 @@ pub(crate) struct FramePainter<'view> {
     edits: Option<&'view CellEdits>,
     editing: Option<&'view EditingCell>,
     found: Option<&'view FindQuery>,
+    /// 本体の行が持つはずのセルの数（見出しの行のセルの数・GitHub Issue #317）。
+    expected: Option<usize>,
     /// 固定した見出しの行の位置（これより上の本体の行は前書き・OPEN-11）。
     header_line: Option<u64>,
     /// 今描いている行が前書きか（字を薄くする・GitHub Issue #273）。
@@ -53,6 +55,8 @@ pub(crate) struct FramePainter<'view> {
 
 /// カーソルの枠の太さ（画素・100% のとき）。
 const CURSOR_LINE: u32 = 2;
+/// 列の数が見出しと違う行の番号の左の帯の幅（画素・100% のとき・GitHub Issue #317）。
+const RAGGED_BAR: u32 = 3;
 /// 選んだ範囲の外周の枠の太さ（画素・100% のとき）。
 const SELECTION_LINE: u32 = 1;
 /// 切り取りの点線の枠の太さ（画素・100% のとき・ADR 0029 の決定 5）。
@@ -88,6 +92,7 @@ impl<'view> FramePainter<'view> {
             edits: None,
             editing: None,
             found: None,
+            expected: None,
             header_line: None,
             preamble: false,
             commands: Vec::new(),
@@ -131,6 +136,11 @@ impl<'view> FramePainter<'view> {
     }
 
     /// 問い `found` に当たる本体のセルと字に印を付ける（検索と置換の欄が開いている間・GitHub Issue #189）。
+    /// 本体の行が持つはずのセルの数（見出しの行のセルの数）。違う行の番号に注意の印を付ける（GitHub Issue #317）。
+    pub(crate) fn with_expected(self, expected: Option<usize>) -> Self {
+        Self { expected, ..self }
+    }
+
     pub(crate) fn with_found(self, found: Option<&'view FindQuery>) -> Self {
         Self { found, ..self }
     }
@@ -214,13 +224,30 @@ impl<'view> FramePainter<'view> {
                 (self.palette.gutter(), self.palette.gutter_text())
             }
         };
-        // 足した行の番号は強調の色にする（ADR 0027 の決定 1）。前書きの行の番号は薄く。
+        // 足した行の番号は強調の色にする（ADR 0027 の決定 1）。前書きの行の番号は薄く。列の数が見出しと違う原本の行は注意の
+        // 色にし、左に注意の色の帯を置く（色だけに頼らない・GitHub Issue #317）。
+        let ragged = matches!(style, RowStyle::Body(_))
+            && !self.preamble
+            && matches!(row.row(), RowId::Source(_))
+            && self
+                .expected
+                .is_some_and(|expected| row.cells().len() != expected);
         let gutter_ink = match row.row() {
             RowId::Added(_) => self.palette.cursor(),
             RowId::Source(_) if self.preamble => gutter_ink.mixed(gutter_fill, MARK_FADE),
+            RowId::Source(_) if ragged => self.palette.danger(),
             RowId::Source(_) => gutter_ink,
         };
         self.fill(gutter, gutter_fill);
+        if ragged {
+            self.fill(
+                PixelRect::new(
+                    gutter.origin(),
+                    PixelSize::new(self.metrics.px(RAGGED_BAR), gutter.size().height()),
+                ),
+                self.palette.danger(),
+            );
+        }
         // 行番号はファイルの中のレコードの番号で、1 始まりで見せる（レコードの番号は 0 始まり）。
         if style != RowStyle::Numbers {
             let shown = row.line().saturating_add(1).to_string();
@@ -819,6 +846,45 @@ mod tests {
             None,
             &view(rows),
         )
+    }
+
+    /// 列の数が見出しと違う本体の行は、番号を注意の色にし、左に注意の色の帯を置く。見出しのセルの数を知らなければ印は無い
+    /// （GitHub Issue #317）。
+    #[test]
+    fn rows_with_another_number_of_cells_are_marked_in_the_gutter() {
+        let header = row(0, &["a", "b", "c"]);
+        let rows = [
+            row(1, &["1", "2", "3"]),
+            row(2, &["1", "2"]),
+            row(3, &["1", "2", "3", "4"]),
+        ];
+        let owned: Vec<Vec<String>> = core::iter::once(&header)
+            .chain(&rows)
+            .map(|row| row.cells().to_strings())
+            .collect();
+        let cells: Vec<&[String]> = owned.iter().map(Vec::as_slice).collect();
+        let layout = TableLayout::new(&ColumnWidths::fit(&cells), 0, 4, metrics());
+        let painted = |expected: Option<usize>| {
+            FramePainter::new(&layout, metrics(), palette(), PixelSize::new(800, 600))
+                .with_expected(expected)
+                .paint(core::slice::from_ref(&header), None, &view(&rows))
+        };
+        let marked = painted(Some(3));
+        let danger_texts: Vec<&str> = marked
+            .iter()
+            .filter_map(|command| match command {
+                DrawCommand::Text { text, color, .. } if *color == palette().danger() => {
+                    Some(text.as_str())
+                }
+                DrawCommand::Text { .. }
+                | DrawCommand::Fill { .. }
+                | DrawCommand::Line { .. }
+                | DrawCommand::TextSpan { .. } => None,
+            })
+            .collect();
+        assert_eq!(danger_texts, vec!["3", "4"]);
+        assert_eq!(fills_of(&marked, palette().danger()).len(), 2);
+        assert!(fills_of(&painted(None), palette().danger()).is_empty());
     }
 
     #[test]

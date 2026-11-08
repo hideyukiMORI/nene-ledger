@@ -267,7 +267,14 @@ fn aux_text(
     column: &str,
     encoding: TextEncoding,
 ) -> String {
-    let row = format!("{} 行目", group_digits(place.record().saturating_add(1)));
+    let number = format!("{} 行目", group_digits(place.record().saturating_add(1)));
+    // 列の数が見出しと違う行は、そう言う（GitHub Issue #317・専門家ペルソナの 4 巡目）。
+    let row = match place.shape() {
+        Some((cells, expected)) => {
+            format!("{number}（列の数が違う：{cells} 列・見出しは {expected} 列）")
+        }
+        None => number,
+    };
     let position = match place.name() {
         Some(_) => format!("{row}　{column}"),
         None => row,
