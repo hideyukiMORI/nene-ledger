@@ -10,6 +10,7 @@ use nene_ledger_core::detecting::READ_LIMIT;
 use nene_ledger_core::detection::Detection;
 use nene_ledger_core::dialect::Dialect;
 use nene_ledger_core::encoding_guess::EncodingGuess;
+use nene_ledger_core::header_rows::HeaderRows;
 use nene_ledger_core::line_ending_counts::LineEndingCounts;
 use nene_ledger_core::text_encoding::TextEncoding;
 use nene_ledger_core::text_format::TextFormat;
@@ -31,7 +32,7 @@ pub(crate) struct Opened {
     rows: Rows,
     title: String,
     summary: FormatSummary,
-    header: Option<u64>,
+    header: Option<HeaderRows>,
     binary: bool,
     doubt: Option<DialectDoubt>,
 }
@@ -64,7 +65,7 @@ impl Opened {
     }
 
     /// 見出しのレコードの番号。
-    pub(crate) fn header(&self) -> Option<u64> {
+    pub(crate) fn header(&self) -> Option<HeaderRows> {
         self.header
     }
 
@@ -230,7 +231,7 @@ mod tests {
             .map(|line| line.split(',').map(String::from).collect())
             .collect();
         let opened = open(&path).unwrap();
-        assert_eq!(opened.header(), Some(0));
+        assert_eq!(opened.header(), Some(HeaderRows::single(0)));
         assert_eq!(strings(opened.rows()), expected.as_slice());
         assert!(expected.iter().any(|row| row[1] == "MARCH1"));
         assert!(expected.iter().any(|row| row[1] == " 7 "));
@@ -239,14 +240,14 @@ mod tests {
     #[test]
     fn duplicate_and_empty_headers_are_kept_as_they_are() {
         let opened = open(&fixture("duplicate-headers.csv")).unwrap();
-        assert_eq!(opened.header(), Some(0));
+        assert_eq!(opened.header(), Some(HeaderRows::single(0)));
         assert_eq!(strings(opened.rows())[0], ["id", "名前", "名前", "", "id"]);
     }
 
     #[test]
     fn the_screenshot_sample_opens_with_its_bom_skipped() {
         let opened = open(&fixture("screenshot.csv")).unwrap();
-        assert_eq!(opened.header(), Some(0));
+        assert_eq!(opened.header(), Some(HeaderRows::single(0)));
         let rows = strings(opened.rows());
         assert_eq!(rows.len(), 7);
         assert_eq!(rows[0][0], "社員番号");
@@ -336,7 +337,7 @@ mod tests {
             nene_ledger_core::text_encoding::TextEncoding::Utf16LeWithBom
         );
         assert_eq!(format.dialect().delimiter().byte(), b'\t');
-        assert_eq!(opened.header(), Some(0));
+        assert_eq!(opened.header(), Some(HeaderRows::single(0)));
         let expected: Vec<Vec<String>> = [
             &["社員番号", "氏名", "所属", "備考"][..],
             &["0012", "山田 太郎", "経理部", "月末\t締め"][..],

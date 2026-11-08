@@ -2,6 +2,7 @@
 
 use alloc::vec::Vec;
 
+use nene_ledger_core::header_rows::HeaderRows;
 use nene_ledger_core::quoting::Quoting;
 use nene_ledger_core::text_encoding::TextEncoding;
 
@@ -9,7 +10,7 @@ use crate::reading_choice::ReadingChoice;
 
 /// 区切りの候補（カンマ・タブ・セミコロン・縦棒・空白・キャレット・コロン）。
 const DELIMITERS: &[u8; 7] = b",\t;| ^:";
-/// 見出しの行の候補の数（「見出しなし」の後に 1〜10 行目）。
+/// 見出しの最初の行の候補の数（「見出しなし」の後に 1〜10 行目。それぞれ 1〜3 行・ADR 0034）。
 const HEADER_ROWS: u64 = 10;
 
 /// 開き直すときに選ぶ、読み方の 1 つの面（OPEN-01・05・09・11）。
@@ -60,7 +61,10 @@ impl ReadingAspect {
             .map(|(quoting, quote)| ReadingChoice::quoting(quoting, quote))
             .collect(),
             Self::Header => core::iter::once(ReadingChoice::Header(None))
-                .chain((0..HEADER_ROWS).map(|record| ReadingChoice::Header(Some(record))))
+                .chain((0..HEADER_ROWS).flat_map(|first| {
+                    (1..=HeaderRows::MAX)
+                        .map(move |count| ReadingChoice::Header(HeaderRows::new(first, count)))
+                }))
                 .collect(),
         }
     }

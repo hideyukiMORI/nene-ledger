@@ -2,6 +2,8 @@
 
 use alloc::vec::Vec;
 
+use nene_ledger_core::header_rows::HeaderRows;
+
 use crate::body_mapping::body_of;
 use crate::cell_row::CellRow;
 use crate::view_row::ViewRow;
@@ -14,10 +16,10 @@ pub struct TableView {
 }
 
 impl TableView {
-    /// 行の並びの位置 `first_record` から読んだ行 `rows`（復号したセルの値）から、見出しの位置 `header` を除いて作る。
+    /// 行の並びの位置 `first_record` から読んだ行 `rows`（復号したセルの値）から、見出しの行 `header` を除いて作る。
     /// 行の同一性は原本のレコード（行を足し消ししていないとき）。
     #[must_use]
-    pub fn from_records(first_record: u64, rows: Vec<CellRow>, header: Option<u64>) -> Self {
+    pub fn from_records(first_record: u64, rows: Vec<CellRow>, header: Option<HeaderRows>) -> Self {
         let rows = rows
             .into_iter()
             .zip(first_record..)
@@ -26,12 +28,12 @@ impl TableView {
         Self::from_rows(first_record, rows, header)
     }
 
-    /// 位置 `first_line` からの行 `rows` から、見出しの位置 `header` の行を除いて作る。
+    /// 位置 `first_line` からの行 `rows` から、見出しの行 `header` を除いて作る。
     #[must_use]
-    pub fn from_rows(first_line: u64, rows: Vec<ViewRow>, header: Option<u64>) -> Self {
+    pub fn from_rows(first_line: u64, rows: Vec<ViewRow>, header: Option<HeaderRows>) -> Self {
         let rows = rows
             .into_iter()
-            .filter(|row| Some(row.line()) != header)
+            .filter(|row| !header.is_some_and(|header| header.contains(row.line())))
             .collect();
         Self {
             first_body: body_of(first_line, header),
@@ -77,16 +79,21 @@ mod tests {
 
     #[test]
     fn the_header_record_is_left_out() {
-        let from_top = TableView::from_records(0, rows(4).clone(), Some(0));
+        let from_top = TableView::from_records(0, rows(4).clone(), Some(HeaderRows::single(0)));
         assert_eq!(from_top.first_body(), 0);
         assert_eq!(records(&from_top), vec![1, 2, 3]);
         // 前書き 2 行の後ろに見出し（レコード 2）。
-        let with_preamble = TableView::from_records(1, rows(4).clone(), Some(2));
+        let with_preamble =
+            TableView::from_records(1, rows(4).clone(), Some(HeaderRows::single(2)));
         assert_eq!(with_preamble.first_body(), 1);
         assert_eq!(records(&with_preamble), vec![1, 3, 4]);
-        let after = TableView::from_records(10, rows(2).clone(), Some(2));
+        let after = TableView::from_records(10, rows(2).clone(), Some(HeaderRows::single(2)));
         assert_eq!(after.first_body(), 9);
         assert_eq!(records(&after), vec![10, 11]);
+        // 2 行の見出し（レコード 1・2）。
+        let two = TableView::from_records(0, rows(5).clone(), HeaderRows::new(1, 2));
+        assert_eq!(two.first_body(), 0);
+        assert_eq!(records(&two), vec![0, 3, 4]);
     }
 
     #[test]

@@ -108,6 +108,7 @@ use nene_ledger_core::draw_command::DrawCommand;
 use nene_ledger_core::find_query::FindQuery;
 use nene_ledger_core::frame::Frame;
 use nene_ledger_core::glyph_metrics::GlyphMetrics;
+use nene_ledger_core::header_rows::HeaderRows;
 use nene_ledger_core::line_ending::LineEnding;
 use nene_ledger_core::line_ending_counts::LineEndingCounts;
 use nene_ledger_core::order_run::OrderRun;
@@ -128,7 +129,8 @@ use nene_ledger_core::text_role::TextRole;
 pub struct Document {
     title: String,
     format: FormatSummary,
-    header: Option<ViewRow>,
+    /// 上に固定した見出しの行（続いた 0〜3 行・ADR 0034）。
+    header: Vec<ViewRow>,
     widths: ColumnWidths,
     view: TableView,
     first_column: usize,
@@ -156,8 +158,8 @@ pub struct Document {
     columns: ColumnOrder,
     /// 読んだ行の中で最も多い原本のセルの数（表の列の数は、ここから列の並びで数える）。
     source_width: usize,
-    /// 見出しの行の、原本の順のセル（列を足し消ししたら並べ直す）。
-    header_source: Option<Vec<String>>,
+    /// 見出しの各行の、原本の順のセル（列を足し消ししたら並べ直す）。
+    header_source: Vec<Vec<String>>,
     /// 書き換えたセル（ADR 0024 の層 2）。画面の表は原本 ＋ これから作る派生値。
     edits: CellEdits,
     /// 編集中のセル（ADR 0026）。
@@ -256,20 +258,17 @@ impl Document {
     pub fn open(
         title: String,
         format: FormatSummary,
-        header: Option<u64>,
+        header: Option<HeaderRows>,
         rows: Vec<CellRow>,
     ) -> Self {
-        let header = header.and_then(|record| {
-            let cells = rows.get(usize::try_from(record).ok()?)?;
-            Some(ViewRow::from_values(record, cells.clone()))
-        });
+        let header = header_rows_in(header, &rows);
         let source_width = rows.iter().map(CellRow::len).max().unwrap_or(0);
-        let view = TableView::from_records(0, rows, header.as_ref().map(ViewRow::line));
-        let header_source = header.as_ref().map(|row| row.values().to_strings());
+        let view = TableView::from_records(0, rows, lines_of(&header));
+        let header_source = header.iter().map(|row| row.values().to_strings()).collect();
         let mut widths = ColumnWidths::fit(&[]);
         let shown: Vec<&ViewRow> = header.iter().chain(view.rows()).collect();
         widen_to(&mut widths, &shown);
-        let first_data = header.as_ref().map_or(0, ViewRow::line);
+        let first_data = header.first().map_or(0, ViewRow::line);
         Self {
             title,
             format,
@@ -515,14 +514,20 @@ impl Document {
         if !self.columns.is_whole() {
             self.header_source = self
                 .header_source
-                .as_ref()
-                .map(|cells| self.arranged(&CellRow::new(cells)));
+                .iter()
+                .map(|cells| self.arranged(&CellRow::new(cells)))
+                .collect();
             self.source_width = self.columns.len(self.source_width);
         }
-        if let Some(line) = self.header_line() {
-            self.header = self.header.take().map(|header| {
-                ViewRow::from_values(line, header.values().clone()).with_row(RowId::Source(line))
-            });
+        if let Some(lines) = self.header_line() {
+            self.header = core::mem::take(&mut self.header)
+                .into_iter()
+                .zip(lines.lines())
+                .map(|(header, line)| {
+                    ViewRow::from_values(line, header.values().clone())
+                        .with_row(RowId::Source(line))
+                })
+                .collect();
         }
         self.rows = RowOrder::whole();
         self.columns = ColumnOrder::whole();
@@ -622,10 +627,23 @@ impl Document {
         self.format
     }
 
-    /// 固定した見出しの行。
+    /// 固定した見出しの行（上から・無ければ空・ADR 0034）。
     #[must_use]
-    pub fn header(&self) -> Option<&ViewRow> {
-        self.header.as_ref()
+    pub fn header(&self) -> &[ViewRow] {
+        &self.header
+    }
+
+    /// 列 `column`（表示だけの入れ替えの前の列）の名前。見出しの各行のその列の値を上から「 / 」でつなぐ（空の値は飛ばす・ADR 0034 の決定 3）。
+    /// 見出しが無いか、どの行にも値が無ければ `None`。
+    #[must_use]
+    pub fn column_name(&self, column: usize) -> Option<String> {
+        let names: Vec<&str> = self
+            .header
+            .iter()
+            .filter_map(|row| row.cells().get(column))
+            .filter(|name| !name.is_empty())
+            .collect();
+        (!names.is_empty()).then(|| names.join(" / "))
     }
 
     /// 本体の見えている行。
@@ -754,7 +772,12 @@ impl Document {
     pub fn page_rows(&self, view: WindowView) -> u64 {
         let row = TableLayout::row_height_for(view.content_metrics()).max(1);
         // 上に固定した行（見出しか、見出しが無ければ列の番号）の分を除く。
-        let body = self.bars(view).body().size().height().saturating_sub(row);
+        let body = self
+            .bars(view)
+            .body()
+            .size()
+            .height()
+            .saturating_sub(row.saturating_mul(self.fixed_rows()));
         u64::from((body / row).max(1))
     }
 
@@ -2388,8 +2411,8 @@ impl Document {
         let index = usize::try_from(cursor.body().checked_sub(self.view.first_body())?).ok()?;
         self.view.rows().get(index)?;
         let layout = self.layout(self.first_column, window.content_metrics());
-        // 最初の行は上に固定した行（見出しか列の番号）。
-        let cell = layout.cell_rect(index.checked_add(1)?, cursor.column())?;
+        // 上の行は上に固定した行（見出しか列の番号）。
+        let cell = layout.cell_rect(index.checked_add(self.fixed_slots())?, cursor.column())?;
         let body = self.bars(window).body();
         let origin = PixelPoint::new(
             body.origin().x().saturating_add(cell.origin().x()),
@@ -2656,14 +2679,15 @@ impl Document {
     fn after_columns_changed(&mut self, column: usize, window: WindowView) -> DocumentEffect {
         self.order.clear();
         self.counted = None;
-        self.header = self.header.take().map(|header| {
-            let cells = self
-                .header_source
-                .as_deref()
-                .map(|cells| self.arranged(&CellRow::new(cells)))
-                .unwrap_or_default();
-            ViewRow::new(header.line(), &cells).with_row(header.row())
-        });
+        self.header = self
+            .header
+            .iter()
+            .zip(&self.header_source)
+            .map(|(header, cells)| {
+                let cells = self.arranged(&CellRow::new(cells));
+                ViewRow::new(header.line(), &cells).with_row(header.row())
+            })
+            .collect();
         let column = column.min(self.widths.columns().len().saturating_sub(1));
         let body = self.selection.cursor().body();
         self.select(CellPosition::new(body, column), SelectionMode::Collapse);
@@ -2722,10 +2746,10 @@ impl Document {
         let (top, bottom, _) = self.chosen_rows();
         let (first, last) = (self.line_of(top), self.line_of(bottom));
         let spans = match self.header_line() {
-            Some(header) if first < header && header < last => {
+            Some(header) if first < header.first() && header.end() <= last => {
                 vec![
-                    (header.saturating_add(1), last),
-                    (first, header.saturating_sub(1)),
+                    (header.end(), last),
+                    (first, header.first().saturating_sub(1)),
                 ]
             }
             Some(_) | None => vec![(first, last)],
@@ -3307,11 +3331,7 @@ impl Document {
     /// レコードの番号は本体の行に写す（見出しのレコードならその次の行）。行の数より先なら最後の行。列が無ければ今の列。
     fn jump(&mut self, target: GoToTarget, page: u64, window: WindowView) -> u64 {
         let line = target.record();
-        let body = match self.header_line() {
-            Some(header) if line > header => line - 1,
-            Some(_) | None => line,
-        }
-        .min(self.last_body());
+        let body = body_of(line, self.header_line()).min(self.last_body());
         let last_column = self.widths.columns().len().saturating_sub(1);
         let column = target
             .column()
@@ -3794,8 +3814,8 @@ impl Document {
     fn bars_in(&self, area: PixelRect, metrics: GlyphMetrics) -> Scrollbars {
         let whole = self.layout(0, metrics);
         let row = whole.row_height();
-        // 上に固定した行は、見出しの行か、見出しが無ければ列の番号の行（Issue #48）。
-        let header = row;
+        // 上に固定した行は、見出しの行か、見出しが無ければ列の番号の行（Issue #48・ADR 0034）。
+        let header = row.saturating_mul(self.fixed_rows());
         let gutter = whole.gutter_width();
         let rows = match self.hold {
             Some(PointerHold::Thumb {
@@ -4205,9 +4225,9 @@ impl Document {
         }
     }
 
-    /// 選んだ範囲の帯（行はレコードの番号）と、見出しのレコードの番号（裏の集計に渡す）。
+    /// 選んだ範囲の帯（行はレコードの番号）と、見出しの行の範囲（裏の集計に渡す）。
     #[must_use]
-    pub fn totals_scope(&self) -> (Vec<RowBand>, Option<u64>) {
+    pub fn totals_scope(&self) -> (Vec<RowBand>, Option<HeaderRows>) {
         let bands = self
             .ranges()
             .bands()
@@ -4289,7 +4309,7 @@ impl Document {
         let header = self.header_line();
         rows.iter()
             .zip(first_record..)
-            .filter(|&(_, line)| Some(line) != header)
+            .filter(|&(_, line)| !header.is_some_and(|header| header.contains(line)))
             .map(|(cells, _)| cells)
             .collect()
     }
@@ -4342,8 +4362,8 @@ impl Document {
         }
         let layout = self.layout(self.first_column, window.content_metrics());
         let slot = layout.row_at(y);
-        // 最初の行は上に固定した行（見出しか列の番号）。
-        let index = slot.checked_sub(1)?;
+        // 上の行は上に固定した行（見出しか列の番号）。
+        let index = slot.checked_sub(self.fixed_slots())?;
         self.view.rows().get(index)?;
         let body = self
             .view
@@ -4445,19 +4465,30 @@ impl Document {
         }
     }
 
-    /// 見出しのレコードの番号（無ければ `None`）。
+    /// 見出しのレコードの範囲（無ければ `None`・ADR 0034）。
     #[must_use]
-    pub fn header_record(&self) -> Option<u64> {
-        match self.header.as_ref().map(ViewRow::row) {
-            Some(RowId::Source(record)) => Some(record),
+    pub fn header_record(&self) -> Option<HeaderRows> {
+        let count = u64::try_from(self.header.len()).ok()?;
+        match self.header.first().map(ViewRow::row) {
+            Some(RowId::Source(record)) => HeaderRows::new(record, count),
             Some(RowId::Added(_)) | None => None,
         }
     }
 
-    /// 見出しの行の、行の並びの位置（前書きの行を足し消しすると動く）。
-    fn header_line(&self) -> Option<u64> {
-        self.header_record()
-            .and_then(|record| self.rows.position_of(RowId::Source(record)))
+    /// 見出しの行の、行の並びの位置の範囲（前書きの行を足し消しすると動く。見出しの行の間には足せないので続いている）。
+    fn header_line(&self) -> Option<HeaderRows> {
+        let header = self.header_record()?;
+        header.at(self.rows.position_of(RowId::Source(header.first()))?)
+    }
+
+    /// 上に固定した行の数（見出しの行の数か、見出しが無ければ列の番号の 1 行・ADR 0034）。
+    fn fixed_slots(&self) -> usize {
+        self.header.len().max(1)
+    }
+
+    /// [`Self::fixed_slots`] を画素の掛け算に使う形で。
+    fn fixed_rows(&self) -> u32 {
+        u32::try_from(self.fixed_slots()).unwrap_or(1)
     }
 
     /// 原本のレコードの数 `records` のときの、本体の行の数（行の並びの行の数から見出しを除く）。
@@ -4604,11 +4635,11 @@ impl Document {
         palette: Palette,
     ) -> Vec<DrawCommand> {
         let cursor = self.selection.cursor();
+        let name = self.column_name(self.source_column(cursor.column()));
         let place = DetailPlace::new(
             self.line_of(cursor.body()),
             self.source_column(cursor.column()),
-            self.header()
-                .and_then(|header| header.cells().get(self.source_column(cursor.column()))),
+            name.as_deref(),
         );
         DetailPainter::new(pane, metrics, palette, self.format.format().encoding())
             .paint(place, self.detail_content())
@@ -4787,7 +4818,7 @@ impl Document {
 
     /// 見出しの行が無い表の、列の番号の行（1 始まり・Issue #48）。見出しの行があれば `None`。
     fn column_numbers(&self) -> Option<ViewRow> {
-        if self.header.is_some() {
+        if !self.header.is_empty() {
             return None;
         }
         let numbers: Vec<String> = (1..=self.widths.columns().len())
@@ -4798,6 +4829,23 @@ impl Document {
 }
 
 /// 行 `rows` の表示の文字列から、今より多い列の幅を決めて `widths` に足す（VIEW-02・今ある列の幅は変えない）。
+/// 読んだ行 `rows` の中の、見出しの行 `header`（ファイルが短ければ、ある行だけ）。
+fn header_rows_in(header: Option<HeaderRows>, rows: &[CellRow]) -> Vec<ViewRow> {
+    header
+        .iter()
+        .flat_map(|header| header.lines())
+        .map_while(|record| {
+            let cells = rows.get(usize::try_from(record).ok()?)?;
+            Some(ViewRow::from_values(record, cells.clone()))
+        })
+        .collect()
+}
+
+/// 見出しの行 `header`（上から）の、行の並びの位置の範囲。
+fn lines_of(header: &[ViewRow]) -> Option<HeaderRows> {
+    HeaderRows::new(header.first()?.line(), u64::try_from(header.len()).ok()?)
+}
+
 /// 小さい順の列の番号 `columns`（重ならない）を、続く列をまとめた範囲の並びにする。
 fn spans_of(columns: &[usize]) -> Vec<Range<usize>> {
     let mut spans: Vec<Range<usize>> = Vec::new();
@@ -5384,7 +5432,7 @@ mod tests {
         closed(Document::open(
             String::from("t"),
             summary(),
-            Some(0),
+            Some(HeaderRows::single(0)),
             rows.clone(),
         ))
     }
@@ -5392,7 +5440,7 @@ mod tests {
     #[test]
     fn the_header_is_frozen_and_left_out_of_the_body() {
         let document = headed();
-        assert_eq!(document.header().map(ViewRow::line), Some(0));
+        assert_eq!(document.header().first().map(ViewRow::line), Some(0));
         let records: Vec<u64> = document.view().rows().iter().map(ViewRow::line).collect();
         assert_eq!(records, vec![1, 2]);
         let frame = document.frame(normal(), palette());
@@ -5407,9 +5455,107 @@ mod tests {
     #[test]
     fn a_header_beyond_the_rows_is_dropped() {
         let rows = table(&[&["only"]]);
-        let document = Document::open(String::from("t"), summary(), Some(3), rows.clone());
-        assert!(document.header().is_none());
+        let document = Document::open(
+            String::from("t"),
+            summary(),
+            Some(HeaderRows::single(3)),
+            rows.clone(),
+        );
+        assert!(document.header().is_empty());
         assert_eq!(document.view().rows().len(), 1);
+    }
+
+    /// 前書き 1 行（レコード 0）と 2 行の見出し（レコード 1・2）の表（ADR 0034）。
+    fn two_header_rows() -> (Document, Vec<CellRow>) {
+        let rows = table(&[
+            &["note"],
+            &["id", "n"],
+            &["", "円"],
+            &["1", "10"],
+            &["2", "20"],
+        ]);
+        let mut document = closed(Document::open(
+            String::from("t"),
+            summary(),
+            HeaderRows::new(1, 2),
+            rows.clone(),
+        ));
+        document.report(JobReport::Finished(IndexSummary::new(5, None)));
+        (document, rows)
+    }
+
+    #[test]
+    fn every_header_row_is_frozen_and_left_out_of_the_body() {
+        let (document, _) = two_header_rows();
+        let lines: Vec<u64> = document.header().iter().map(ViewRow::line).collect();
+        assert_eq!(lines, [1, 2]);
+        let records: Vec<u64> = document.view().rows().iter().map(ViewRow::line).collect();
+        assert_eq!(records, [0, 3, 4]);
+        assert_eq!(document.header_record(), HeaderRows::new(1, 2));
+        assert_eq!((document.line_of(0), document.line_of(1)), (0, 3));
+        // カーソルはデータの 1 行目（本体の 1 番目）。
+        assert_eq!(document.selection().cursor(), CellPosition::new(1, 0));
+        // 見出しの 2 行が上に固定され、本体はその下（タイトルバー 28・行の高さ 25）。
+        let frame = document.frame(normal(), palette());
+        assert_eq!(text_at(&frame, "id").1.origin().y(), 28);
+        assert_eq!(text_at(&frame, "円").1.origin().y(), 28 + 25);
+        assert_eq!(text_at(&frame, "note").1.origin().y(), 28 + 50);
+        // 1 画面の行の数は固定した 2 行を除く（1 行の見出しなら 8 行）。
+        assert_eq!(
+            document.page_rows(view(400, 303, WindowPlacement::Normal)),
+            7
+        );
+    }
+
+    /// 2 列目の見出し「n」のセルの真ん中の x（列の幅は前書きの行でも変わる。境目の近くは幅を変える所）。
+    fn second_column_x(document: &Document) -> u32 {
+        let (_, cell) = text_at(&document.frame(normal(), palette()), "n");
+        cell.origin().x() + cell.size().width() / 2
+    }
+
+    #[test]
+    fn column_names_join_the_header_rows_with_a_slash() {
+        let (mut document, _) = two_header_rows();
+        assert_eq!(document.column_name(0).as_deref(), Some("id"));
+        assert_eq!(document.column_name(1).as_deref(), Some("n / 円"));
+        assert_eq!(document.column_name(2), None);
+        assert_eq!(headed().column_name(1).as_deref(), Some("name"));
+        assert_eq!(self::document().column_name(0), None);
+        // 詳細ペインの見出しにも出る（本体の 1 番目の 2 列目を押す）。
+        let x = second_column_x(&document);
+        document.apply(pointing(x, 110, SelectionMode::Collapse), normal());
+        document.apply(Intent::Release, normal());
+        assert_eq!(document.selection().cursor(), CellPosition::new(1, 1));
+        document.detail = DetailPane::Open;
+        text_at(&document.frame(normal(), palette()), "n / 円");
+    }
+
+    #[test]
+    fn any_header_row_selects_the_whole_column() {
+        let (mut document, _) = two_header_rows();
+        // 2 行目の見出しの 2 列目。
+        let x = second_column_x(&document);
+        document.apply(pointing(x, 60, SelectionMode::Collapse), normal());
+        document.apply(Intent::Release, normal());
+        assert_eq!(
+            document.selection().bottom_right(),
+            CellPosition::new(TO_END, 1)
+        );
+    }
+
+    #[test]
+    fn copying_across_a_header_of_two_rows_skips_both() {
+        let (mut document, rows) = two_header_rows();
+        document.apply(moving(CursorStep::Up), normal());
+        document.apply(
+            Intent::Move {
+                step: CursorStep::Down,
+                mode: SelectionMode::Extend,
+            },
+            normal(),
+        );
+        let text = copy_from(&mut document, &rows).unwrap();
+        assert_eq!(text.as_str(), "note\r\n1\r\n");
     }
 
     #[test]
@@ -5681,7 +5827,12 @@ mod tests {
     #[test]
     fn copying_reads_the_selected_records_and_leaves_out_the_header() {
         let rows = table(&[&["id", "name"], &["1", "a"], &["2", "b\tc"]]);
-        let mut document = Document::open(String::from("t"), summary(), Some(0), rows.clone());
+        let mut document = Document::open(
+            String::from("t"),
+            summary(),
+            Some(HeaderRows::single(0)),
+            rows.clone(),
+        );
         let window = normal();
         document.apply(
             Intent::Move {
@@ -5720,7 +5871,12 @@ mod tests {
     fn copying_across_a_header_after_preamble_rows_skips_it() {
         // 前書き 1 行（レコード 0）、見出しはレコード 1。本体の 0〜1 番目はレコード 0 と 2。
         let rows = table(&[&["note"], &["id"], &["1"]]);
-        let mut document = Document::open(String::from("t"), summary(), Some(1), rows.clone());
+        let mut document = Document::open(
+            String::from("t"),
+            summary(),
+            Some(HeaderRows::single(1)),
+            rows.clone(),
+        );
         // 開いたときのカーソルはデータの 1 行目（GitHub Issue #273）。前書きの行へ上がってから広げる。
         assert_eq!(document.selection().cursor(), CellPosition::new(1, 0));
         document.apply(moving(CursorStep::Up), normal());
@@ -5831,7 +5987,12 @@ mod tests {
     }
 
     fn opened_with(rows: &[CellRow]) -> Document {
-        Document::open(String::from("t"), summary(), Some(0), rows.to_vec())
+        Document::open(
+            String::from("t"),
+            summary(),
+            Some(HeaderRows::single(0)),
+            rows.to_vec(),
+        )
     }
 
     #[test]
@@ -5936,8 +6097,13 @@ mod tests {
             TextFormat::new(encoding, Dialect::rfc4180()),
             summary().line_endings(),
         );
-        Document::open(String::from("t"), format, Some(0), table(rows))
-            .frame(view(400, 400, WindowPlacement::Normal), palette())
+        Document::open(
+            String::from("t"),
+            format,
+            Some(HeaderRows::single(0)),
+            table(rows),
+        )
+        .frame(view(400, 400, WindowPlacement::Normal), palette())
     }
 
     #[test]
@@ -6088,7 +6254,7 @@ mod tests {
         let mut document = closed(Document::open(
             String::from("t"),
             summary(),
-            Some(0),
+            Some(HeaderRows::single(0)),
             rows.clone(),
         ));
         extend(&mut document, CursorStep::Down);
@@ -6134,7 +6300,7 @@ mod tests {
                     1..=MAX_TOTAL_ROWS + 1,
                     vec![core::ops::RangeInclusive::new(0, 1)]
                 )],
-                Some(0)
+                Some(HeaderRows::single(0))
             )
         );
         assert_eq!(
@@ -6503,7 +6669,7 @@ mod tests {
         closed(Document::open(
             String::from("t"),
             summary(),
-            Some(0),
+            Some(HeaderRows::single(0)),
             rows.clone(),
         ))
     }
@@ -6718,7 +6884,7 @@ mod tests {
         closed(Document::open(
             String::from("t"),
             summary(),
-            Some(0),
+            Some(HeaderRows::single(0)),
             rows.clone(),
         ))
     }
@@ -6797,7 +6963,7 @@ mod tests {
         let document = closed(Document::open(
             String::from("t"),
             summary(),
-            Some(0),
+            Some(HeaderRows::single(0)),
             table(&cells),
         ));
         let frame = document.frame(view(800, 900, WindowPlacement::Normal), palette());
@@ -6818,7 +6984,7 @@ mod tests {
         let mut document = closed(Document::open(
             String::from("t"),
             summary(),
-            Some(0),
+            Some(HeaderRows::single(0)),
             rows.clone(),
         ));
         let frame = document.frame(window, palette());
@@ -6871,7 +7037,7 @@ mod tests {
         let mut document = closed(Document::open(
             String::from("t"),
             summary(),
-            Some(0),
+            Some(HeaderRows::single(0)),
             rows.clone(),
         ));
         document.apply(Intent::SelectColumns, normal());
@@ -6894,7 +7060,7 @@ mod tests {
         let mut document = closed(Document::open(
             String::from("t"),
             summary(),
-            Some(0),
+            Some(HeaderRows::single(0)),
             rows.clone(),
         ));
         document.report(JobReport::Finished(IndexSummary::new(1, None)));
@@ -7475,6 +7641,7 @@ mod tests {
     fn header_cells(document: &Document) -> Vec<String> {
         document
             .header()
+            .first()
             .map(|row| row.cells().to_strings())
             .unwrap_or_default()
     }
@@ -7619,7 +7786,7 @@ mod tests {
         // 保存したファイルの見出しは、今の列の順。
         assert_eq!(
             document.header_source,
-            Some(table(&[&["a", "", "b", "c"]]).remove(0).to_strings())
+            vec![table(&[&["a", "", "b", "c"]]).remove(0).to_strings()]
         );
         document.apply(Intent::Undo, normal());
         text_at(
@@ -8073,7 +8240,7 @@ mod tests {
             summary(),
         ));
         reread(&mut document, &[]);
-        assert_eq!(document.header(), None);
+        assert!(document.header().is_empty());
         assert_eq!(document.view().rows().len(), 1);
         assert_eq!(document.view().rows()[0].cells().to_strings(), ["", "", ""]);
         assert_eq!(document.widths().columns().len(), 3);
@@ -9456,7 +9623,7 @@ mod tests {
     ];
 
     /// 左から 3 列だけを持つ窓の行で開いた表（見出しは全部の列）と、全部の列を持つ表。
-    fn held_and_whole(source: &[Vec<String>], header: Option<u64>) -> (Document, Document) {
+    fn held_and_whole(source: &[Vec<String>], header: Option<HeaderRows>) -> (Document, Document) {
         let first = 0..3_usize;
         let mut opened = held_rows(source, Some(core::slice::from_ref(&first)));
         if let (Some(_), Some(cells)) = (header, source.first()) {
@@ -9507,7 +9674,10 @@ mod tests {
         let mut checked = 0_usize;
         for _ in 0..40_u32 {
             let source = ragged_table(&mut rng);
-            let (mut held, mut whole) = held_and_whole(&source, (rng.below(2) == 0).then_some(0));
+            let (mut held, mut whole) = held_and_whole(
+                &source,
+                (rng.below(2) == 0).then_some(HeaderRows::single(0)),
+            );
             for _ in 0..60_u32 {
                 let intent = WINDOW_STEPS[rng.below(WINDOW_STEPS.len())];
                 step_both((&mut held, &mut whole), &source, (intent, window));
@@ -9794,7 +9964,12 @@ mod tests {
     #[test]
     fn preamble_rows_are_faded_and_the_cursor_starts_on_data() {
         let rows = table(&[&["売上集計"], &["作成日"], &["地域"], &["東京"]]);
-        let document = closed(Document::open(String::from("t"), summary(), Some(2), rows));
+        let document = closed(Document::open(
+            String::from("t"),
+            summary(),
+            Some(HeaderRows::single(2)),
+            rows,
+        ));
         assert_eq!(document.selection().cursor(), CellPosition::new(2, 0));
         let frame = document.frame(normal(), palette());
         let ink_of = |wanted: &str| {
