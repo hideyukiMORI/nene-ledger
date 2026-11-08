@@ -70,6 +70,23 @@ pub fn is_single_line(value: &str) -> bool {
     value.chars().all(|character| mark_of(character).is_none())
 }
 
+/// `single_line(value)` の中で、見えない字・改行・タブを替えた印のバイトの範囲（左から・重ならない）。元の値にあった
+/// 本物の `¶`・`→` などは入らない（印かどうかは元の字で決める・VIEW-05・GitHub Issue #261）。
+#[must_use]
+pub fn mark_spans(value: &str) -> Vec<Range<usize>> {
+    let mut spans = Vec::new();
+    let mut shown = 0_usize;
+    for (at, character) in shown_characters(value) {
+        let end = shown.saturating_add(character.len_utf8());
+        let original = value.get(at..).and_then(|rest| rest.chars().next());
+        if original.and_then(mark_of).is_some() {
+            spans.push(shown..end);
+        }
+        shown = end;
+    }
+    spans
+}
+
 /// 元の値 `value` の中の左から並んだ重ならないバイトの範囲 `spans` を、`single_line(value)` の中のバイトの範囲に写す
 /// （検索で当たった字の印・GitHub Issue #189）。`\r\n` の間で切れる範囲は `¶` の後ろに寄せる。長さ 0 になった範囲は落とす。
 #[must_use]
@@ -276,5 +293,21 @@ mod tests {
         assert_eq!(single_line("一\u{2028}二\u{2029}三"), "一¶二¶三");
         // 普通の空白は変えない。
         assert_eq!(single_line("a b"), "a b");
+    }
+
+    /// 印の範囲は替えた字だけ。元の値にあった本物の `¶`・`→` は入らない。`\r\n` は 1 つの `¶`（VIEW-05・GitHub Issue
+    /// #261）。
+    #[test]
+    fn mark_spans_cover_only_replaced_characters() {
+        let value = "a\tb\r\nc¶→d\u{3000}e\u{a0}\u{0}";
+        let shown = single_line(value);
+        let marked: Vec<&str> = mark_spans(value)
+            .iter()
+            .map(|span| shown.get(span.clone()).unwrap())
+            .collect();
+        assert_eq!(marked, ["→", "¶", "□", "␣", "·"]);
+        assert_eq!(shown, "a→b¶c¶→d□e␣·");
+        assert!(mark_spans("plain ¶→·").is_empty());
+        assert!(mark_spans("").is_empty());
     }
 }
