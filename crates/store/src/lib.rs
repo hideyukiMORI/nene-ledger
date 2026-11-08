@@ -17,3 +17,4 @@ pub mod saving;
 pub mod stamping;
 mod temporary_file;
 mod watched_sink;
+pub mod write_access;
