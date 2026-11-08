@@ -45,6 +45,9 @@ pub(crate) struct FramePainter<'view> {
     found: Option<&'view FindQuery>,
     /// 本体の行が持つはずのセルの数（見出しの行のセルの数・GitHub Issue #317）。
     expected: Option<usize>,
+    /// 選んだ行の帯を描くか。列全体を選んだときは、どの行も選んだ行なので帯を描かない（表が一面に染まり、どの列を
+    /// 選んだか分からなくなる・GitHub Issue #325）。
+    row_bands: bool,
     /// 編集中のセルを右へ広げて描いたなら、その欄（カーソルの枠をその外周に描く・GitHub Issue #321）。
     editing_wide: Option<PixelRect>,
     /// 固定した見出しの行の位置（これより上の本体の行は前書き・OPEN-11）。
@@ -98,6 +101,7 @@ impl<'view> FramePainter<'view> {
             found: None,
             expected: None,
             editing_wide: None,
+            row_bands: true,
             header_line: None,
             preamble: false,
             commands: Vec::new(),
@@ -141,6 +145,11 @@ impl<'view> FramePainter<'view> {
     }
 
     /// 問い `found` に当たる本体のセルと字に印を付ける（検索と置換の欄が開いている間・GitHub Issue #189）。
+    /// 選んだ行の帯を描くか（列全体を選んだときは描かない・GitHub Issue #325）。
+    pub(crate) fn with_row_bands(self, row_bands: bool) -> Self {
+        Self { row_bands, ..self }
+    }
+
     /// 本体の行が持つはずのセルの数（見出しの行のセルの数）。違う行の番号に注意の印を付ける（GitHub Issue #317）。
     pub(crate) fn with_expected(self, expected: Option<usize>) -> Self {
         Self { expected, ..self }
@@ -595,7 +604,7 @@ impl<'view> FramePainter<'view> {
             CellMark::Cursor
         } else if ranges.contains(body, column) {
             CellMark::Selected
-        } else if self.covers_row(body) || self.covers_column(column) {
+        } else if (self.row_bands && self.covers_row(body)) || self.covers_column(column) {
             CellMark::Band
         } else {
             CellMark::Unselected
@@ -904,6 +913,25 @@ mod tests {
             None,
             &view(rows),
         )
+    }
+
+    /// 列全体を選んだとき（行の帯を描かない）は、選んだ列の外のセルに帯を付けない（表が一面に染まらない・GitHub Issue #325）。
+    #[test]
+    fn without_row_bands_only_the_column_band_remains() {
+        use crate::cell_position::CellPosition;
+        let rows = [row(0, &["a", "b", "c"]), row(1, &["d", "e", "f"])];
+        let owned: Vec<Vec<String>> = rows.iter().map(|row| row.cells().to_strings()).collect();
+        let cells: Vec<&[String]> = owned.iter().map(Vec::as_slice).collect();
+        let layout = TableLayout::new(&ColumnWidths::fit(&cells), 0, 2, metrics());
+        let painted = |row_bands: bool| {
+            FramePainter::new(&layout, metrics(), palette(), PixelSize::new(800, 600))
+                .with_selection(Selection::at(CellPosition::new(1, 1)))
+                .with_row_bands(row_bands)
+                .paint(&[], None, &view(&rows))
+        };
+        // 行の帯あり：同じ行の d・f と同じ列の b。無し：同じ列の b だけ。
+        assert_eq!(fills_of(&painted(true), palette().band()).len(), 3);
+        assert_eq!(fills_of(&painted(false), palette().band()).len(), 1);
     }
 
     /// 編集中のセルより長い文字列は、右の表の端までセルを広げて全体を描き、カーソルの枠を広げた欄の外周に描く。収まる

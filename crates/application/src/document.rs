@@ -4998,7 +4998,13 @@ impl Document {
             .with_editing(editing.as_ref())
             .with_found(found)
             .with_expected(self.expected_columns())
+            .with_row_bands(!self.columns_selected())
             .paint(self.header(), self.column_numbers().as_ref(), &self.view)
+    }
+
+    /// 今の範囲が列全体（本体の頭から終わりまで）か。行の帯を描かない（GitHub Issue #325）。
+    fn columns_selected(&self) -> bool {
+        self.selection.top_left().body() == 0 && self.selection.bottom_right().body() == TO_END
     }
 
     /// 本体の行が持つはずのセルの数（GitHub Issue #317）。見出しの行（の 1 行目）のセルの数。見出しが無いか、列を足し消し
