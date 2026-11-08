@@ -1025,6 +1025,16 @@ Windows の exe の `--version`（コマンドプロンプトに結んで書く�
 
 2026-11-08。release の exe で `first.csv` を開き、XDND の送り手を真似る使い捨ての道具（x11rb 0.14.0・scratchpad・リポジトリには無い）から、`file://<ホスト名>/…/drop%20dir/%E6%9D%B1%E4%BA%AC%20a.csv` と `file:///…/first.csv` の 2 つを落とした。道具の見たこと：`XdndAware = 5`・`XdndStatus` は受け取る（1）で動きは写す・`SelectionRequest` の形は `text/uri-list`・`XdndFinished` は受け取った（1）で写す。落とした後の窓は `東京 a.csv — NeNe Ledger` と `first.csv — NeNe Ledger` が増えて 3 つ（元の窓は残る）。Windows の `WM_DROPFILES` は型と lint だけで、実機はまだ（QLT-013）。
 
+## 94. 読み取り専用・ドラッグ＆ドロップ・Excel が開いているファイル（GitHub Issue #245）— 施主の Windows の実機（QLT-013）
+
+2026-11-08、main `8ef8ed8` の Windows の exe（`make build-windows`）と試しのファイルを施主の機械の試しの置き場（`candidate-1108b`・場所は開発機の `CLAUDE.local.md`）に置き、施主が 3 つを確かめた。施主「うん、全部オッケー」〔伝聞：施主の報告・私は画面を見ていない〕。
+
+| # | 項目 | 試したこと |
+| --- | --- | --- |
+| 1 | 読み取り専用（EDIT-13・GitHub Issue #238） | Ctrl+Shift+P → `yomitori` → Enter でタイトルバーに「（読み取り専用）」が付き、字を打っても直らず知らせが出る。もう一度切り替えると直せる |
+| 2 | ドラッグ＆ドロップ（CLIP-04・GitHub Issue #243） | エクスプローラーから `drop-a.csv`・`drop-b.csv` を一緒に落とすと、それぞれ新しい窓で開き、元の窓は残る |
+| 3 | Excel が開いているファイル（FILE-04・GitHub Issue #240） | `drop-a.csv` を Excel で開いたまま NeNe Ledger の窓へ落とすと、新しい窓が読み取り専用で開き、状態の行に「ほかのアプリ（Excel など）が開いているので、読み取り専用で開きました」 |
+
 ## 7. active の規則と、その証明
 
 CNF-009 は active の規則ごとに `| ID |` で始まる行がここにあることを要求する。
