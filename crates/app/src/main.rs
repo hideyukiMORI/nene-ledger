@@ -201,8 +201,11 @@ fn show(
     mut opened: opening::Opened,
     (theme, stamp): (Option<ThemeState>, Option<FileStamp>),
 ) -> ExitCode {
+    let mut document = first_document(&mut opened);
+    // 書けないファイル（Excel が開いている・権限が無い）は読み取り専用で開く（FILE-04・GitHub Issue #240）。
+    document.start_read_only_if_blocked(nene_ledger_store::write_access::write_blocker(path));
     let start = Start {
-        document: first_document(&mut opened),
+        document,
         format: opened.summary().format(),
         path: Some(path.to_path_buf()),
         stamp,

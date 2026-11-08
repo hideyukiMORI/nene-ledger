@@ -66,6 +66,7 @@ use crate::pointer_shape::PointerShape;
 use crate::press_kind::PressKind;
 use crate::ranges::Ranges;
 use crate::read_only_notice::ReadOnlyNotice;
+use crate::replace_failure::ReplaceFailure;
 use crate::replace_notice::ReplaceNotice;
 use crate::replace_run::ReplaceRun;
 use crate::row_band::RowBand;
@@ -994,6 +995,20 @@ impl Document {
             Access::Writable => ReadOnlyNotice::Off,
         }));
         current
+    }
+
+    /// 開いた原本を保存で置き換えられない理由 `blocked` があれば、読み取り専用で始めて理由を知らせる（FILE-04・
+    /// GitHub Issue #240）。外せば直せる（保存はもう一度確かめる）。
+    pub fn start_read_only_if_blocked(&mut self, blocked: Option<ReplaceFailure>) {
+        let notice = match blocked {
+            None => return,
+            Some(ReplaceFailure::Locked) => ReadOnlyNotice::OpenedLocked,
+            Some(ReplaceFailure::Denied | ReplaceFailure::Interrupted | ReplaceFailure::Other) => {
+                ReadOnlyNotice::OpenedDenied
+            }
+        };
+        self.access = Access::ReadOnly;
+        self.notice = Some(Notice::ReadOnly(notice));
     }
 
     /// 読み取り専用か（EDIT-13）。
@@ -9573,5 +9588,33 @@ mod tests {
             edited(&document, 1, 1),
             Some(&CellValue::Text(String::from("y")))
         );
+    }
+
+    /// 書けないファイルは読み取り専用で始まり、理由を知らせ、直せない。理由が無ければそのまま（FILE-04・GitHub Issue #240）。
+    #[test]
+    fn a_blocked_file_starts_read_only_and_says_why() {
+        let window = normal();
+        let mut plain = editable();
+        plain.start_read_only_if_blocked(None);
+        assert!(!plain.is_read_only() && plain.notice.is_none());
+        for (blocked, notice) in [
+            (ReplaceFailure::Locked, ReadOnlyNotice::OpenedLocked),
+            (ReplaceFailure::Denied, ReadOnlyNotice::OpenedDenied),
+        ] {
+            let mut document = editable();
+            document.start_read_only_if_blocked(Some(blocked));
+            assert!(document.is_read_only());
+            assert_eq!(document.notice, Some(Notice::ReadOnly(notice)));
+            assert_eq!(
+                document.window_name(),
+                "e.csv（読み取り専用） — NeNe Ledger"
+            );
+            let before = table_state(&document);
+            typed(&mut document, "x");
+            assert_eq!(table_state(&document), before);
+            assert!(document.editor.is_none());
+            document.apply(Intent::ToggleReadOnly, window);
+            assert!(!document.is_read_only());
+        }
     }
 }

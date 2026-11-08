@@ -206,6 +206,10 @@ const fn read_only_status(notice: ReadOnlyNotice) -> &'static str {
         ReadOnlyNotice::Refused => {
             "読み取り専用です。直すには Ctrl+Shift+P の「読み取り専用を切り替える」で外します"
         }
+        ReadOnlyNotice::OpenedLocked => {
+            "ほかのアプリ（Excel など）が開いているので、読み取り専用で開きました"
+        }
+        ReadOnlyNotice::OpenedDenied => "書き込みの権限が無いので、読み取り専用で開きました",
     }
 }
 
