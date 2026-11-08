@@ -4225,14 +4225,9 @@ impl Document {
             return column;
         }
         let width = self.bars(window).body().size().width();
-        let fits = |first: usize| {
-            self.layout(first, window.content_metrics())
-                .column_right(column)
-                .is_some_and(|right| right <= width)
-        };
-        (self.first_column..column)
-            .find(|&first| fits(first))
-            .unwrap_or(column)
+        // 配置は 1 回だけ作る（候補ごとに作り直すと列の数の 2 乗の手間になる・GitHub Issue #236）。
+        self.layout(self.first_column, window.content_metrics())
+            .first_column_showing(column, self.first_column, width)
     }
 
     /// 窓の中の位置 `at` の、本体のセル。見出しの行・行番号の列・見えている行と列の外なら `None`。

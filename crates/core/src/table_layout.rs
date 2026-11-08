@@ -91,6 +91,48 @@ impl TableLayout {
         }
     }
 
+    /// 列 `column` の右端が本体の幅 `width` に収まる、いちばん左の表示の最初の列（`from` より左にはしない）。
+    /// `from` から `column` の手前までのどれでも収まらなければ `column`。固定した列はこの配置と同じ。
+    ///
+    /// 最初の列の候補ごとに配置を作り直さず、`column` から左へ列の幅を足していく（手間は動かす列の数に比例する・
+    /// GitHub Issue #236）。答えは、候補 `first` ごとに `with_frozen` した配置の `column_right(column) <= width` を
+    /// `from` から順に試して最初に満たすものと同じ。
+    #[must_use]
+    pub fn first_column_showing(&self, column: usize, from: usize, width: u32) -> usize {
+        // 無い列は、どの候補でも右端が無いので収まらない。
+        if column <= from || column >= self.column_widths.len() {
+            return column;
+        }
+        let width_of = |at: usize| self.column_widths.get(at).copied().unwrap_or(0);
+        let sum = |range: core::ops::Range<usize>| {
+            range.fold(0_u32, |total, at| total.saturating_add(width_of(at)))
+        };
+        // 固定した列の右端は、最初の列の候補に依らない。
+        if column < self.frozen {
+            let right = self
+                .gutter_width
+                .saturating_add(sum(0..column.saturating_add(1)));
+            return if right <= width { from } else { column };
+        }
+        let after_frozen = self.gutter_width.saturating_add(sum(0..self.frozen));
+        // 固定した列より左の候補は、配置が固定した列の次から始まる（固定した列の次の候補と同じ配置）。
+        let start = from.max(self.frozen);
+        let mut right = after_frozen.saturating_add(width_of(column));
+        let mut first = column;
+        for candidate in (start..column).rev() {
+            let wider = right.saturating_add(width_of(candidate));
+            if wider > width {
+                break;
+            }
+            right = wider;
+            first = candidate;
+        }
+        if start > from && first == start && right <= width {
+            return from;
+        }
+        first
+    }
+
     /// 1 行の高さ（1.5 行分 ＋ 罫線）。表の行と、窓の下の状態の行で同じ高さを使う。
     #[must_use]
     pub fn row_height_for(metrics: GlyphMetrics) -> u32 {
@@ -431,5 +473,57 @@ mod tests {
         let scaled = TableLayout::new(&ColumnWidths::fit(&slices), 0, 9, metrics);
         assert_eq!(scaled.grid(), 2);
         assert_eq!(layout(&[&["abc"]], 9).grid(), 1);
+    }
+
+    /// 種を固定した xorshift（テストは乱数の名前に頼らない・ARC-007）。
+    struct Xorshift(u64);
+
+    impl Xorshift {
+        fn below(&mut self, bound: usize) -> usize {
+            self.0 ^= self.0 << 13_u32;
+            self.0 ^= self.0 >> 7_u32;
+            self.0 ^= self.0 << 17_u32;
+            usize::try_from(self.0 % u64::try_from(bound).unwrap()).unwrap()
+        }
+    }
+
+    /// 候補ごとに配置を作り直して試す、今までの探し方（参照）。
+    fn first_showing_by_trying(
+        widths: &ColumnWidths,
+        frozen: usize,
+        (column, from, width): (usize, usize, u32),
+    ) -> usize {
+        (from..column)
+            .find(|&first| {
+                TableLayout::new(widths, first, 99, metrics())
+                    .with_frozen(frozen)
+                    .column_right(column)
+                    .is_some_and(|right| right <= width)
+            })
+            .unwrap_or(column)
+    }
+
+    /// 見せる最初の列を左へ幅を足して探しても、候補ごとに配置を作り直して試すのと同じ答え（無作為の幅・固定した列・
+    /// 探し始める列・本体の幅・GitHub Issue #236）。
+    #[test]
+    fn the_first_column_showing_a_column_matches_trying_every_candidate() {
+        let mut rng = Xorshift(0x2026_1108_0236);
+        for _ in 0..3_000_u32 {
+            let cells: Vec<String> = (0..=rng.below(40))
+                .map(|_| "x".repeat(rng.below(30)))
+                .collect();
+            let widths = ColumnWidths::fit(&[cells.as_slice()]);
+            let count = cells.len();
+            let frozen = rng.below(4);
+            let column = rng.below(count + 1);
+            let from = rng.below(count + 1);
+            let width = u32::try_from(rng.below(900)).unwrap();
+            let layout = TableLayout::new(&widths, from, 99, metrics()).with_frozen(frozen);
+            assert_eq!(
+                layout.first_column_showing(column, from, width),
+                first_showing_by_trying(&widths, frozen, (column, from, width)),
+                "{cells:?} frozen {frozen} column {column} from {from} width {width}"
+            );
+        }
     }
 }
