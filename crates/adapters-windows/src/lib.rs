@@ -12,3 +12,4 @@ mod config_directory;
 pub mod file_replacing;
 pub mod new_window;
 pub mod saved_settings;
+pub mod text_scale;

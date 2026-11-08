@@ -54,6 +54,12 @@ impl Ui {
         Arc::new(self.window.wakeup())
     }
 
+    /// OS の文字の倍率（百分率・X の資源の `Xft.dpi` から・読めなければ 100・A11Y-03・GitHub Issue #263）。
+    #[must_use]
+    pub fn text_scale(&self) -> u32 {
+        self.window.text_scale()
+    }
+
     /// 閉じられるまで `session` を描く。起こされたら取り込み、キーとホイールは意図にして渡し、
     /// タイトルバーと縁の操作はウィンドウマネージャーに頼み、描き直す（ARC-011・ADR 0013）。
     ///

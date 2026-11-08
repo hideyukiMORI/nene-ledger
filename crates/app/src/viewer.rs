@@ -91,6 +91,8 @@ pub(crate) struct Viewer {
     saving_as: Option<PathBuf>,
     /// 直前の意図をパレットが受けたか（パレットの項目を押して閉じた直後の 2 度目の押しを、表のダブルクリックにしない）。
     palette_took_last: bool,
+    /// OS の文字の倍率（百分率・起動時に読む・設定の段に掛ける・A11Y-03・GitHub Issue #263）。
+    text_scale: u32,
 }
 
 impl Viewer {
@@ -118,6 +120,15 @@ impl Viewer {
             saving: None,
             saving_as: None,
             palette_took_last: false,
+            text_scale: 100,
+        }
+    }
+
+    /// OS の文字の倍率 `percent`（百分率）を掛ける窓（起動時に OS から読んだ値・A11Y-03・GitHub Issue #263）。
+    pub(crate) fn with_text_scale(self, percent: u32) -> Self {
+        Self {
+            text_scale: percent,
+            ..self
         }
     }
 
@@ -876,9 +887,10 @@ impl Viewer {
         }
         if let Intent::Zoom(step) = intent {
             // 文字の大きさも配色と同じく、ファイルの画面の状態ではないので設定として持つ（ADR 0020）。
-            let zoom = self.zoom().stepped(step);
+            // 段を変えるのは利用者の段（設定に残す）。知らせは OS の倍率を掛けた、描いている大きさ。
+            let zoom = self.preferences.settings().zoom().stepped(step);
             let saved = self.preferences.set_zoom(zoom);
-            self.notify_saved(Notice::Zoom(zoom), saved);
+            self.notify_saved(Notice::Zoom(zoom.scaled(self.text_scale)), saved);
             return None;
         }
         if let Intent::Theme(step) = intent {
@@ -968,7 +980,8 @@ impl Session for Viewer {
     }
 
     fn zoom(&self) -> ZoomLevel {
-        self.preferences.settings().zoom()
+        // 利用者の段に OS の文字の倍率を掛けた段で描く（A11Y-03）。
+        self.preferences.settings().zoom().scaled(self.text_scale)
     }
 
     fn refresh(&mut self, view: WindowView) {
