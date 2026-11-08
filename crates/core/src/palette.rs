@@ -141,4 +141,16 @@ impl Palette {
     pub fn found_ink(self) -> Color {
         self.color(PaletteRole::FoundInk)
     }
+
+    /// 済んだことの字（緑・パレットの面と背景の上で読める・GitHub Issue #305）。
+    #[must_use]
+    pub fn success(self) -> Color {
+        self.color(PaletteRole::Success)
+    }
+
+    /// 注意と誤りの字（赤・パレットの面と背景の上で読める・GitHub Issue #305）。
+    #[must_use]
+    pub fn danger(self) -> Color {
+        self.color(PaletteRole::Danger)
+    }
 }

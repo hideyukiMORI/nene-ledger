@@ -14,6 +14,7 @@ use nene_ledger_application::index_summary::IndexSummary;
 use nene_ledger_application::intent::Intent;
 use nene_ledger_application::job_progress::JobProgress;
 use nene_ledger_application::job_report::JobReport;
+use nene_ledger_application::note_tone::GuideNote;
 use nene_ledger_application::notice::Notice;
 use nene_ledger_application::palette_layout::PaletteLayout;
 use nene_ledger_application::palette_mode::PaletteMode;
@@ -1028,7 +1029,11 @@ impl Session for Viewer {
         commands.extend(open.state().paint_replacing(
             view,
             (open.colors(), self.document.detail()),
-            (note.as_deref(), &lines),
+            GuideNote {
+                text: note.as_deref(),
+                tone: self.document.replace_guide_tone(),
+                lines: &lines,
+            },
         ));
         Frame::new(view.size(), commands)
     }
