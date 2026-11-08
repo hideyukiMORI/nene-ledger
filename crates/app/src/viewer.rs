@@ -666,12 +666,29 @@ impl Viewer {
     fn reveal_found(&mut self, found: Option<(u64, usize)>, view: WindowView) -> DocumentEffect {
         self.document.set_cover(self.find_cover(view));
         let effect = self.document.found(found, view);
+        self.dodge_cover(view);
+        effect
+    }
+
+    /// 検索と置換の箱を開いたとき、カーソルのセルを箱の下に隠さない（GitHub Issue #300）。ほかの段は何もしない。
+    fn reveal_cursor(&mut self, view: WindowView) -> DocumentEffect {
+        let cover = self.find_cover(view);
+        self.document.set_cover(cover);
+        if cover.is_none() {
+            return DocumentEffect::Stay;
+        }
+        let effect = self.document.reveal_cursor(view);
+        self.dodge_cover(view);
+        effect
+    }
+
+    /// 表を送ってもカーソルのセルが箱の下に残る（表の端）なら、箱を反対の端へ寄せる（GitHub Issue #286）。
+    fn dodge_cover(&mut self, view: WindowView) {
         let hidden = self.document.cover_hides_cursor(view);
         if let Some(open) = self.palette.as_mut().filter(|_| hidden) {
             let low = open.state().is_low();
             open.state_mut().set_low(!low);
         }
-        effect
     }
 
     /// 開いている検索と置換の箱の面（窓の座標）。ほかの段と、閉じていれば `None`。
@@ -913,7 +930,9 @@ impl Viewer {
             return self.palette_intent(intent, view);
         }
         if self.opened_palette(intent) {
-            return None;
+            // 検索と置換の箱を開いたら、カーソルのセルを箱の下に隠さない（GitHub Issue #300）。
+            let effect = self.reveal_cursor(view);
+            return self.effect(effect);
         }
         if intent == Intent::NewTable {
             self.open_new_window();
