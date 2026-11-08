@@ -1047,6 +1047,23 @@ Windows の exe の `--version`（コマンドプロンプトに結んで書く�
 
 `規約違反 3 件（CNF-016）`。戻した後は `規約違反なし（検査 427 ファイル）`。正例・反例は xtask のテスト（`cnf016_catches_sending_out_in_every_crate`・`cnf016_allows_spawning_only_the_own_exe_in_new_window`）。数式を評価しないこと（評価する処理が無いこと）は、数式に見えるセル（`=1+1`・`=HYPERLINK(…)`・`+cmd|…`・`@SUM(…)`・`=WEBSERVICE(…)`）が表とコピーで字のまま残る application のテスト `formula_like_cells_stay_as_text` と、触っていない行は保存でバイト列が同じテスト（KEEP-02）で示す。
 
+## 96. JSON の整形・三点リーダー・列・キー・引用符・判別の候補・改行の混在・OS の文字の大きさ（GitHub Issue #266）— 施主の Windows の実機（QLT-013）
+
+2026-11-08、main `e94f5d5` の Windows の exe と試しのファイル（`check.csv`・`single-quote.csv`・`mixed-eol.csv`）を施主の機械の試しの置き場（`candidate-1108c`・場所は開発機の `CLAUDE.local.md`）に置き、施主が 10 の項目を確かめた〔伝聞：施主の報告・私は画面を見ていない〕。
+
+| # | 項目 | 施主の報告 |
+| --- | --- | --- |
+| 1 | 見えない文字の印の控えめな色（VIEW-05・GitHub Issue #261） | 「うーん、カラーのテーマのせいかな？薄い色かわからないな。よく見ると若干薄いかも？」→ 色の選び方を見直す |
+| 2 | 詳細ペインの JSON の整形（VIEW-07・GitHub Issue #247） | 「出る」 |
+| 3 | 三点リーダー（VIEW-17） | 「なってる」 |
+| 4 | 列の幅と順のドラッグ（VIEW-02） | 「変わる」 |
+| 5 | 左の列の固定（VIEW-01） | 「のこる。でも、狭めてlongだけ表示にした後広げてもdata列が出ない。出す方法が無い」→ GitHub Issue #265（Xvfb で再現した） |
+| 6 | キーだけの操作（A11Y-01：Shift+Space・Ctrl+Space・Ctrl+Shift+PageUp / PageDown・キーの一覧） | 「大丈夫」 |
+| 7 | 引用符の扱い（OPEN-05：シングルクォートを選んで開き直す） | 「OK」 |
+| 8 | 判別の候補（OPEN-02） | 「OK」 |
+| 9 | 改行の混在の知らせ（OPEN-08） | 「OK」 |
+| 10 | OS の文字の大きさ（A11Y-03・GitHub Issue #263・「テキストのサイズ」を大きくして開き直す） | 「OK」 |
+
 ## 7. active の規則と、その証明
 
 CNF-009 は active の規則ごとに `| ID |` で始まる行がここにあることを要求する。
