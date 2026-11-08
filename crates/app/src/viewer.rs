@@ -1,5 +1,6 @@
 //! 窓が描く相手。画面の状態と、裏の索引の仕事と、範囲の読み取りを結ぶ。
 
+use nene_ledger_application::cell_row::CellRow;
 use nene_ledger_application::clipboard_text::ClipboardText;
 use nene_ledger_application::close_state::CloseState;
 use nene_ledger_application::command_palette::CommandPalette;
@@ -318,7 +319,7 @@ impl Viewer {
             DocumentEffect::Read { first_body } => {
                 let first = self.document.line_of(first_body);
                 if let Ok((cells, cuts)) = self.read_lines(first, WINDOW_RECORDS) {
-                    self.document.show(first, &cells);
+                    self.document.show(first, cells);
                     self.document.mark_cut(cuts);
                 }
                 None
@@ -411,8 +412,8 @@ impl Viewer {
         &self,
         first_line: u64,
         count: usize,
-    ) -> Result<(Vec<Vec<String>>, Vec<CutRecord>), ScanFailure> {
-        let mut cells: Vec<Vec<String>> = Vec::with_capacity(count);
+    ) -> Result<(Vec<CellRow>, Vec<CutRecord>), ScanFailure> {
+        let mut cells: Vec<CellRow> = Vec::with_capacity(count);
         let mut cuts = Vec::new();
         let wanted = u64::try_from(count).unwrap_or(u64::MAX);
         for run in self.document.runs_from(first_line, wanted) {
@@ -424,7 +425,7 @@ impl Viewer {
                     cuts.extend(moved_cuts(part_cuts, first, line));
                     cells.extend(part);
                 }
-                OrderRun::Added(rows) => cells.extend(rows.iter().map(|_| Vec::new())),
+                OrderRun::Added(rows) => cells.extend(rows.iter().map(|_| CellRow::empty())),
             }
         }
         Ok((cells, cuts))
@@ -799,8 +800,9 @@ impl Viewer {
             return false;
         };
         let summary = FormatSummary::new(format, base.format_summary().line_endings());
-        let mut trial = Document::open(base.title().to_owned(), summary, header, rows.cells());
-        trial.mark_cut(rows.cuts().to_vec());
+        let (cells, cuts) = rows.into_parts();
+        let mut trial = Document::open(base.title().to_owned(), summary, header, cells);
+        trial.mark_cut(cuts);
         trial.set_detail(base.detail());
         let original = core::mem::replace(&mut self.document, trial);
         if self.trial.is_none() {
@@ -1039,7 +1041,7 @@ impl Session for Viewer {
 }
 
 /// `wanted` 行のうち、まだ読んでいない行の数。
-fn count_left(wanted: u64, read: &[Vec<String>]) -> usize {
+fn count_left(wanted: u64, read: &[CellRow]) -> usize {
     let left = wanted.saturating_sub(u64::try_from(read.len()).unwrap_or(u64::MAX));
     usize::try_from(left).unwrap_or(usize::MAX)
 }

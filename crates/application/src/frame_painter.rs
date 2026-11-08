@@ -655,6 +655,7 @@ fn scrolled_to_caret(text: &str, caret: u32, room: u32) -> (String, u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cell_row::CellRow;
     use alloc::vec;
     use nene_ledger_core::column_widths::ColumnWidths;
     use nene_ledger_core::find_options::FindOptions;
@@ -685,8 +686,8 @@ mod tests {
 
     /// 本体の続いた行 `rows`（最初のレコードの番号から本体の番目も同じ）。
     fn view(rows: &[ViewRow]) -> TableView {
-        let cells: Vec<Vec<String>> = rows.iter().map(|row| row.cells().to_strings()).collect();
-        TableView::from_records(rows.first().map_or(0, ViewRow::line), &cells, None)
+        let cells: Vec<CellRow> = rows.iter().map(|row| row.cells().clone()).collect();
+        TableView::from_records(rows.first().map_or(0, ViewRow::line), cells.clone(), None)
     }
 
     /// 見出しと本体の行から列の幅を決め、窓の大きさ `size` に描く。

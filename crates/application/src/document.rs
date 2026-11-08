@@ -246,12 +246,13 @@ impl Document {
         title: String,
         format: FormatSummary,
         header: Option<u64>,
-        rows: &[Vec<String>],
+        rows: Vec<CellRow>,
     ) -> Self {
         let header = header.and_then(|record| {
             let cells = rows.get(usize::try_from(record).ok()?)?;
-            Some(ViewRow::new(record, cells))
+            Some(ViewRow::from_values(record, cells.clone()))
         });
+        let source_width = rows.iter().map(CellRow::len).max().unwrap_or(0);
         let view = TableView::from_records(0, rows, header.as_ref().map(ViewRow::line));
         let header_source = header.as_ref().map(|row| row.values().to_strings());
         let mut widths = ColumnWidths::fit(&[]);
@@ -280,7 +281,7 @@ impl Document {
             grip: false,
             rows: RowOrder::whole(),
             columns: ColumnOrder::whole(),
-            source_width: rows.iter().map(Vec::len).max().unwrap_or(0),
+            source_width,
             header_source,
             edits: CellEdits::empty(),
             editor: None,
@@ -307,7 +308,7 @@ impl Document {
     /// この形を開いた直後とする（何も打たなければ未保存でない・Undo で消えない）。
     #[must_use]
     pub fn blank(title: String, format: FormatSummary) -> Self {
-        let mut document = Self::open(title, format, None, &[]);
+        let mut document = Self::open(title, format, None, Vec::new());
         let _row = document.rows.insert(0, BLANK_ROWS);
         let _columns = document.columns.insert(0, BLANK_COLUMNS);
         document.columns_inserted(0, &[NEW_COLUMN_WIDTH; BLANK_COLUMNS]);
@@ -498,7 +499,7 @@ impl Document {
             self.header_source = self
                 .header_source
                 .as_ref()
-                .map(|cells| self.arranged(cells));
+                .map(|cells| self.arranged(&CellRow::new(cells)));
             self.source_width = self.columns.len(self.source_width);
         }
         if let Some(line) = self.header_line() {
@@ -623,8 +624,8 @@ impl Document {
     }
 
     /// 読んだ原本の行 `rows` のセルの数を覚える（表の列の数を数える元）。
-    fn see_source(&mut self, rows: &[Vec<String>]) {
-        let widest = rows.iter().map(Vec::len).max().unwrap_or(0);
+    fn see_source(&mut self, rows: &[CellRow]) {
+        let widest = rows.iter().map(CellRow::len).max().unwrap_or(0);
         self.source_width = self.source_width.max(widest);
     }
 
@@ -643,9 +644,9 @@ impl Document {
     /// 原本の順のセル `cells` を、表の列の順に並べた行（列を足し消ししていなければそのまま）。足した列は空のセル。
     /// 原本に無いセルは、後ろに書くセルが無ければ書かない（「セルが無い」のまま）。セルごとに `String` を作らず 1 本の
     /// 文字列で作る（GitHub Issue #22）。
-    fn arranged_row(&self, cells: &[String]) -> CellRow {
+    fn arranged_row(&self, cells: &CellRow) -> CellRow {
         if self.columns.is_whole() {
-            return CellRow::new(cells);
+            return cells.clone();
         }
         let ids = self.table_ids();
         let last = ids.iter().rposition(|id| match id {
@@ -656,16 +657,26 @@ impl Document {
             ids.iter()
                 .take(last.map_or(0, |last| last.saturating_add(1)))
                 .map(|id| match id {
-                    ColumnId::Source(source) => cells.get(*source).map_or("", String::as_str),
+                    ColumnId::Source(source) => cells.get(*source).unwrap_or(""),
                     ColumnId::Added(_) => "",
                 }),
         )
     }
 
-    /// [`Self::arranged_row`] と同じ並びを、セルごとの `String` で（書き換えを重ねるコピーと集計の写し）。
-    fn arranged(&self, cells: &[String]) -> Vec<String> {
+    /// [`Self::arranged_row`] と同じ並びを、読んだ行 `cells` を持ち主ごと受け取って作る（列を足し消ししていなければ写さずに
+    /// そのまま使う・窓の行を 2 組持たない・GitHub Issue #22）。
+    fn arranged_owned(&self, cells: CellRow) -> CellRow {
         if self.columns.is_whole() {
-            return cells.to_vec();
+            cells
+        } else {
+            self.arranged_row(&cells)
+        }
+    }
+
+    /// [`Self::arranged_row`] と同じ並びを、セルごとの `String` で（書き換えを重ねるコピーと集計の写し）。
+    fn arranged(&self, cells: &CellRow) -> Vec<String> {
+        if self.columns.is_whole() {
+            return cells.to_strings();
         }
         self.arranged_row(cells).to_strings()
     }
@@ -685,16 +696,16 @@ impl Document {
 
     /// 位置 `first_line` から読んだ行 `rows` に差し替える（動いた先）。見出しは除き、列が増えていればその列の幅だけを足す。
     /// 足した行は空のセルで表の幅まで埋める。見出しを除いて行が残らなければ差し替えない。
-    pub fn show(&mut self, first_line: u64, rows: &[Vec<String>]) {
-        self.see_source(rows);
+    pub fn show(&mut self, first_line: u64, rows: Vec<CellRow>) {
+        self.see_source(&rows);
         let columns = self.columns.len(self.source_width);
         let shown: Vec<ViewRow> = rows
-            .iter()
+            .into_iter()
             .zip(first_line..)
             .map(|(cells, line)| {
                 let row = self.rows.row_at(line).unwrap_or(RowId::Source(line));
                 match row {
-                    RowId::Source(_) => ViewRow::from_values(line, self.arranged_row(cells)),
+                    RowId::Source(_) => ViewRow::from_values(line, self.arranged_owned(cells)),
                     RowId::Added(_) => ViewRow::new(line, &vec![String::new(); columns]),
                 }
                 .with_row(row)
@@ -1354,7 +1365,7 @@ impl Document {
     pub fn paste_rows(
         &mut self,
         first_record: u64,
-        (rows, cuts): (&[Vec<String>], &[CutRecord]),
+        (rows, cuts): (&[CellRow], &[CutRecord]),
         window: WindowView,
     ) -> DocumentEffect {
         let before = self.history.revision();
@@ -1375,7 +1386,7 @@ impl Document {
     fn write_pasted(
         &mut self,
         first_record: u64,
-        (rows, cuts): (&[Vec<String>], &[CutRecord]),
+        (rows, cuts): (&[CellRow], &[CutRecord]),
         window: WindowView,
     ) -> DocumentEffect {
         let Some(mut plan) = self.pasting.take() else {
@@ -1465,7 +1476,7 @@ impl Document {
         &self,
         plan: &PendingPaste,
         first_record: u64,
-        rows: &[Vec<String>],
+        rows: &[CellRow],
     ) -> Vec<(RowId, Vec<String>)> {
         self.body_cells(first_record, rows)
             .into_iter()
@@ -2453,7 +2464,7 @@ impl Document {
             let cells = self
                 .header_source
                 .as_deref()
-                .map(|cells| self.arranged(cells))
+                .map(|cells| self.arranged(&CellRow::new(cells)))
                 .unwrap_or_default();
             ViewRow::new(header.line(), &cells).with_row(header.row())
         });
@@ -3816,7 +3827,7 @@ impl Document {
     pub fn copy_text(
         &mut self,
         first_record: u64,
-        rows: &[Vec<String>],
+        rows: &[CellRow],
         cuts: &[CutRecord],
     ) -> Option<ClipboardText> {
         let cutting = self.cutting.take();
@@ -3825,17 +3836,17 @@ impl Document {
         // 書き換えたセルは、書き換えた値でコピーする（画面と同じ）。
         // 切り取りの元のファイルの値は、並べ直す前の原本の行から読む（並べ直した行を並べ直さない・GitHub Issue #153）。
         let source_rows = rows;
-        let overlaid;
-        let rows = if self.edits.is_empty() && self.columns.is_whole() {
-            rows
+        // タブ区切りはセルごとの文字列で作る（写すのは読んだ範囲の分だけ）。
+        let rows: Vec<Vec<String>> = if self.edits.is_empty() && self.columns.is_whole() {
+            rows.iter().map(CellRow::to_strings).collect()
         } else {
-            overlaid = self.overlaid(first_record, rows);
-            overlaid.as_slice()
+            self.overlaid(first_record, rows)
         };
         let kept: Vec<(&[String], u64)> = self
-            .body_cells(first_record, rows)
+            .body_cells(first_record, &rows)
             .into_iter()
             .zip(top..)
+            .map(|(cells, body)| (cells.as_slice(), body))
             .filter(|&(_, body)| shape.has_row(body))
             .collect();
         let cut = kept
@@ -3884,7 +3895,7 @@ impl Document {
         &self,
         range: Selection,
         first_record: u64,
-        rows: &[Vec<String>],
+        rows: &[CellRow],
     ) -> Vec<(CellChange, String)> {
         let (top, bottom) = self.row_span();
         let (left, right) = (range.top_left().column(), range.bottom_right().column());
@@ -4013,12 +4024,10 @@ impl Document {
 
     /// レコード `first_record`（選んだ範囲の最初の行）から読んだ行 `rows`（復号したセルの値）から、見出しのレコードを除いて
     /// 選んだ範囲を集計する（重なりは 1 回だけ）。
-    pub fn count_totals(&mut self, first_record: u64, rows: &[Vec<String>]) {
+    pub fn count_totals(&mut self, first_record: u64, rows: &[CellRow]) {
         let body = self.body_cells(first_record, rows);
         let (first, _) = self.ranges().row_span();
-        let stats = self.stats_of(first, body.into_iter(), |row, column| {
-            row.get(column).map(String::as_str)
-        });
+        let stats = self.stats_of(first, body.into_iter(), |row, column| row.get(column));
         self.totals = SelectionTotals::Counted(stats);
     }
 
@@ -4031,7 +4040,7 @@ impl Document {
 
     /// レコード `first_record` から読んだ行 `rows` のうち、見出しのレコードを除いたもの。
     /// レコード `first_record` から読んだ行 `rows` に、書き換えたセルを重ねた写し。「セルが無い」にしたセルは空にする。
-    fn overlaid(&self, first_record: u64, rows: &[Vec<String>]) -> Vec<Vec<String>> {
+    fn overlaid(&self, first_record: u64, rows: &[CellRow]) -> Vec<Vec<String>> {
         // 列の数が足りない行にも、足したセルの値を出す（欠けたセルはコピーで空になるので、空で埋めても同じ）。
         let width = self.widths.columns().len();
         rows.iter()
@@ -4058,16 +4067,12 @@ impl Document {
         }
     }
 
-    fn body_cells<'rows>(
-        &self,
-        first_record: u64,
-        rows: &'rows [Vec<String>],
-    ) -> Vec<&'rows [String]> {
+    fn body_cells<'rows, T>(&self, first_record: u64, rows: &'rows [T]) -> Vec<&'rows T> {
         let header = self.header_line();
         rows.iter()
             .zip(first_record..)
             .filter(|&(_, line)| Some(line) != header)
-            .map(|(cells, _)| cells.as_slice())
+            .map(|(cells, _)| cells)
             .collect()
     }
 
@@ -4865,7 +4870,7 @@ mod tests {
             String::from("a.csv — NeNe Ledger"),
             summary(),
             None,
-            &rows,
+            cell_rows(&rows),
         ))
     }
 
@@ -5068,7 +5073,7 @@ mod tests {
         );
         assert_eq!(document.selection().cursor(), CellPosition::new(99, 0));
         let rows: Vec<Vec<String>> = vec![vec![String::from("b")]];
-        document.show(92, &rows);
+        document.show(92, cell_rows(&rows));
         assert_eq!(document.view().first_body(), 92);
         assert_eq!(
             document.apply(Intent::Scroll(Scroll::Down { rows: 1 }), window),
@@ -5086,16 +5091,23 @@ mod tests {
         assert_eq!(bars.first().map(|title| title.size().height()), Some(10));
     }
 
-    fn table(cells: &[&[&str]]) -> Vec<Vec<String>> {
-        cells
-            .iter()
-            .map(|row| row.iter().map(|&cell| String::from(cell)).collect())
-            .collect()
+    fn table(cells: &[&[&str]]) -> Vec<CellRow> {
+        cells.iter().map(|row| CellRow::new(row)).collect()
+    }
+
+    /// セルごとの文字列の行を、窓の行の形にする。
+    fn cell_rows(rows: &[Vec<String>]) -> Vec<CellRow> {
+        rows.iter().map(|row| CellRow::new(row)).collect()
     }
 
     fn headed() -> Document {
         let rows = table(&[&["id", "name"], &["1", "a"], &["2", "b"]]);
-        closed(Document::open(String::from("t"), summary(), Some(0), &rows))
+        closed(Document::open(
+            String::from("t"),
+            summary(),
+            Some(0),
+            rows.clone(),
+        ))
     }
 
     #[test]
@@ -5116,7 +5128,7 @@ mod tests {
     #[test]
     fn a_header_beyond_the_rows_is_dropped() {
         let rows = table(&[&["only"]]);
-        let document = Document::open(String::from("t"), summary(), Some(3), &rows);
+        let document = Document::open(String::from("t"), summary(), Some(3), rows.clone());
         assert!(document.header().is_none());
         assert_eq!(document.view().rows().len(), 1);
     }
@@ -5134,12 +5146,12 @@ mod tests {
     fn column_widths_stay_while_scrolling_and_grow_for_new_columns() {
         let mut document = headed();
         assert_eq!(document.widths().columns(), &[3, 4]);
-        document.show(10, &table(&[&["123456789", "a very long name", "extra"]]));
+        document.show(10, table(&[&["123456789", "a very long name", "extra"]]));
         // 今ある列は変えず、増えた列だけを足す。
         assert_eq!(document.widths().columns(), &[3, 4, 5]);
         assert_eq!(document.view().first_body(), 9);
         // 見出しだけの範囲は差し替えない。
-        document.show(0, &table(&[&["id", "name"]]));
+        document.show(0, table(&[&["id", "name"]]));
         assert_eq!(document.view().first_body(), 9);
     }
 
@@ -5160,7 +5172,12 @@ mod tests {
     fn wide() -> Document {
         let long = "x".repeat(40);
         let row: Vec<String> = (0..10_u32).map(|_| long.clone()).collect();
-        closed(Document::open(String::from("t"), summary(), None, &[row]))
+        closed(Document::open(
+            String::from("t"),
+            summary(),
+            None,
+            vec![CellRow::new(&row)],
+        ))
     }
 
     #[test]
@@ -5186,7 +5203,12 @@ mod tests {
     /// 3 字の列が 10（`c0`〜`c9`）。
     fn narrow() -> Document {
         let row: Vec<String> = (0..10_u32).map(|n| format!("c{n}")).collect();
-        closed(Document::open(String::from("t"), summary(), None, &[row]))
+        closed(Document::open(
+            String::from("t"),
+            summary(),
+            None,
+            vec![CellRow::new(&row)],
+        ))
     }
 
     fn shown_texts(frame: &Frame) -> Vec<&str> {
@@ -5367,7 +5389,7 @@ mod tests {
         );
     }
 
-    fn copy_from(document: &mut Document, rows: &[Vec<String>]) -> Option<ClipboardText> {
+    fn copy_from(document: &mut Document, rows: &[CellRow]) -> Option<ClipboardText> {
         let DocumentEffect::Copy { first_line, count } = document.apply(Intent::Copy, normal())
         else {
             panic!("コピーなら読ませる");
@@ -5380,7 +5402,7 @@ mod tests {
     #[test]
     fn copying_reads_the_selected_records_and_leaves_out_the_header() {
         let rows = table(&[&["id", "name"], &["1", "a"], &["2", "b\tc"]]);
-        let mut document = Document::open(String::from("t"), summary(), Some(0), &rows);
+        let mut document = Document::open(String::from("t"), summary(), Some(0), rows.clone());
         let window = normal();
         document.apply(
             Intent::Move {
@@ -5419,7 +5441,7 @@ mod tests {
     fn copying_across_a_header_after_preamble_rows_skips_it() {
         // 前書き 1 行（レコード 0）、見出しはレコード 1。本体の 0〜1 番目はレコード 0 と 2。
         let rows = table(&[&["note"], &["id"], &["1"]]);
-        let mut document = Document::open(String::from("t"), summary(), Some(1), &rows);
+        let mut document = Document::open(String::from("t"), summary(), Some(1), rows.clone());
         document.apply(
             Intent::Move {
                 step: CursorStep::Down,
@@ -5449,8 +5471,8 @@ mod tests {
         );
         // 文字列が大きすぎるときも同じ。
         let big = vec![vec!["x".repeat(MAX_COPY_BYTES)]];
-        let mut small = Document::open(String::from("t"), summary(), None, &big);
-        assert_eq!(small.copy_text(0, &big, &[]), None);
+        let mut small = Document::open(String::from("t"), summary(), None, cell_rows(&big));
+        assert_eq!(small.copy_text(0, &cell_rows(&big), &[]), None);
         assert_eq!(
             small.right_status(),
             "選択が大きすぎるのでコピーしませんでした"
@@ -5522,12 +5544,12 @@ mod tests {
             })
         );
         // 行を差し替えると、切り詰めの印は外れる（読み直した行の分を app が渡し直す）。
-        document.show(1, &rows[1..]);
+        document.show(1, rows[1..].to_vec());
         assert!(!texts(&document).iter().any(|text| text.contains(cut_line)));
     }
 
-    fn opened_with(rows: &[Vec<String>]) -> Document {
-        Document::open(String::from("t"), summary(), Some(0), rows)
+    fn opened_with(rows: &[CellRow]) -> Document {
+        Document::open(String::from("t"), summary(), Some(0), rows.to_vec())
     }
 
     #[test]
@@ -5567,8 +5589,8 @@ mod tests {
         let texts_missing = document.frame(window, palette());
         assert!(all_texts(&texts_missing).contains(&"〈この行にはこの列のセルが無い〉"));
         // 見出しが無いときは列の番号を名前にし、補助の情報は行だけ。
-        let mut bare = Document::open(String::from("t"), summary(), None, &rows);
-        bare.show(50, &rows);
+        let mut bare = Document::open(String::from("t"), summary(), None, rows.clone());
+        bare.show(50, rows.clone());
         let texts_out = bare.frame(window, palette());
         let texts = all_texts(&texts_out);
         assert!(texts.contains(&"〈カーソルの行は見えている範囲の外〉"));
@@ -5582,7 +5604,7 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         let rows = vec![vec![String::from("h")], vec![long]];
-        let document = opened_with(&rows);
+        let document = opened_with(&cell_rows(&rows));
         let frame = document.frame(view(400, 400, WindowPlacement::Normal), palette());
         let texts = all_texts(&frame);
         // 5 行のうち 4 行を出し、残りの 4 行を数える。
@@ -5632,7 +5654,7 @@ mod tests {
             TextFormat::new(encoding, Dialect::rfc4180()),
             summary().line_endings(),
         );
-        Document::open(String::from("t"), format, Some(0), &table(rows))
+        Document::open(String::from("t"), format, Some(0), table(rows))
             .frame(view(400, 400, WindowPlacement::Normal), palette())
     }
 
@@ -5717,7 +5739,7 @@ mod tests {
         ]
         .join("\n");
         let rows = vec![vec![String::from("h")], vec![long]];
-        let document = opened_with(&rows);
+        let document = opened_with(&cell_rows(&rows));
         // 175% 相当（行の高さ 28）: 本文は 2 行。1 行を出し、残りの 7 行を数える。
         let zoomed = view(400, 400, WindowPlacement::Normal)
             .with_content_metrics(GlyphMetrics::new(14, 28, 21));
@@ -5731,7 +5753,7 @@ mod tests {
     fn a_very_large_zoom_still_shows_the_first_line_of_the_value() {
         let long = ["line-a", "line-b", "line-c"].join("\n");
         let rows = vec![vec![String::from("h")], vec![long]];
-        let document = opened_with(&rows);
+        let document = opened_with(&cell_rows(&rows));
         // 300% 相当（行の高さ 48）でも本文は 2 行: 値の 1 行目と「あと 2 行」。
         let zoomed = view(400, 600, WindowPlacement::Normal)
             .with_content_metrics(GlyphMetrics::new(24, 48, 36));
@@ -5781,11 +5803,16 @@ mod tests {
     #[test]
     fn a_range_outside_the_visible_rows_is_read_and_counted() {
         let rows = table(&[&["id", "n"], &["1", "0.1"], &["2", "0.2"]]);
-        let mut document = closed(Document::open(String::from("t"), summary(), Some(0), &rows));
+        let mut document = closed(Document::open(
+            String::from("t"),
+            summary(),
+            Some(0),
+            rows.clone(),
+        ));
         extend(&mut document, CursorStep::Down);
         extend(&mut document, CursorStep::Right);
         // 表示が 2 行目からだけになると、選んだ範囲の 1 行目が見えていない。
-        document.show(2, &table(&[&["2", "0.2"]]));
+        document.show(2, table(&[&["2", "0.2"]]));
         assert_eq!(
             document.refresh_totals(),
             TotalsRequest::Read {
@@ -5964,7 +5991,7 @@ mod tests {
         );
         // つまみが指の位置まで来たら止まる（表示が末尾へ動いた後）。
         let last = table(&[&["98", "x"]]);
-        document.show(99, &last);
+        document.show(99, last.clone());
         assert_eq!(document.tick(1, window), DocumentEffect::Stay);
         document.apply(Intent::Release, window);
         assert!(!document.wants_ticks());
@@ -6147,7 +6174,7 @@ mod tests {
         );
         assert_eq!(document.selection().cursor().body(), page);
         // 縁から遠いほど速い（100 画素で 3 行より多い）。
-        document.show(2, &table(&[&["1", "a"]]));
+        document.show(2, table(&[&["1", "a"]]));
         let effect = document.tick(1, window);
         document.apply(dragging_to(47, bottom + 100), window);
         let faster = document.tick(1, window);
@@ -6191,7 +6218,12 @@ mod tests {
     /// 見出し（id・n）と本体 3 行の数の表。
     fn numbers() -> Document {
         let rows = table(&[&["id", "n"], &["1", "10"], &["2", "20"], &["3", "30"]]);
-        closed(Document::open(String::from("t"), summary(), Some(0), &rows))
+        closed(Document::open(
+            String::from("t"),
+            summary(),
+            Some(0),
+            rows.clone(),
+        ))
     }
 
     #[test]
@@ -6363,7 +6395,12 @@ mod tests {
     fn a_table_without_a_header_gets_a_row_of_column_numbers_to_press() {
         let window = normal();
         let rows = table(&[&["1", "10"], &["2", "20"]]);
-        let mut document = closed(Document::open(String::from("t"), summary(), None, &rows));
+        let mut document = closed(Document::open(
+            String::from("t"),
+            summary(),
+            None,
+            rows.clone(),
+        ));
         let frame = document.frame(window, palette());
         // 列の番号の行は行番号の列を空けて「1」「2」。本体の最初の行の行番号も「1」なので、2 回書く。
         let ones = all_texts(&frame)
@@ -6396,7 +6433,12 @@ mod tests {
     /// 見出し（a・b・c）と本体 2 行。2 行目は 1 列だけ（セルが無い）。
     fn three() -> Document {
         let rows = table(&[&["a", "b", "c"], &["1", "2", "3"], &["4"]]);
-        closed(Document::open(String::from("t"), summary(), Some(0), &rows))
+        closed(Document::open(
+            String::from("t"),
+            summary(),
+            Some(0),
+            rows.clone(),
+        ))
     }
 
     fn header_texts(document: &Document) -> Vec<String> {
@@ -6474,7 +6516,7 @@ mod tests {
             String::from("t"),
             summary(),
             Some(0),
-            &table(&cells),
+            table(&cells),
         ));
         let frame = document.frame(view(800, 900, WindowPlacement::Normal), palette());
         let shown = all_texts(&frame);
@@ -6491,7 +6533,12 @@ mod tests {
             &["1", "山田", "太郎", "x", "10"],
             &["2", "佐藤", "花子", "", "20"],
         ]);
-        let mut document = closed(Document::open(String::from("t"), summary(), Some(0), &rows));
+        let mut document = closed(Document::open(
+            String::from("t"),
+            summary(),
+            Some(0),
+            rows.clone(),
+        ));
         let frame = document.frame(window, palette());
         let headings: Vec<PixelRect> = frame
             .commands()
@@ -6539,7 +6586,12 @@ mod tests {
     #[test]
     fn copying_to_the_end_waits_for_the_index() {
         let rows = table(&[&["n"], &["1"], &["2"], &["3"]]);
-        let mut document = closed(Document::open(String::from("t"), summary(), Some(0), &rows));
+        let mut document = closed(Document::open(
+            String::from("t"),
+            summary(),
+            Some(0),
+            rows.clone(),
+        ));
         document.apply(Intent::SelectColumns, normal());
         assert_eq!(document.apply(Intent::Copy, normal()), DocumentEffect::Stay);
         assert_eq!(document.notice, Some(Notice::CopyAwaitsIndex));
@@ -6557,7 +6609,12 @@ mod tests {
     #[test]
     fn nothing_is_copied_from_a_header_only_file() {
         let rows = table(&[&["id", "name"]]);
-        let mut document = closed(Document::open(String::from("t"), summary(), Some(0), &rows));
+        let mut document = closed(Document::open(
+            String::from("t"),
+            summary(),
+            Some(0),
+            rows.clone(),
+        ));
         document.report(JobReport::Finished(IndexSummary::new(1, None)));
         document.apply(Intent::SelectAll, normal());
         let effect = document.apply(Intent::Copy, normal());
@@ -6818,7 +6875,7 @@ mod tests {
             String::from("e.csv — NeNe Ledger"),
             summary(),
             None,
-            &rows,
+            cell_rows(&rows),
         ))
     }
 
@@ -6982,9 +7039,9 @@ mod tests {
     }
 
     /// 原本の行 `source`（レコードの順）から、合成ルートと同じく区間ごとに並べて、今の縦の位置から読み直させる。
-    fn reread(document: &mut Document, source: &[Vec<String>]) {
+    fn reread(document: &mut Document, source: &[CellRow]) {
         let top = document.line_of(document.view().first_body());
-        let mut rows: Vec<Vec<String>> = Vec::new();
+        let mut rows: Vec<CellRow> = Vec::new();
         for run in document.runs_from(top, 50) {
             match run {
                 OrderRun::Source { first, count } => {
@@ -6992,18 +7049,14 @@ mod tests {
                     let end = (start + usize::try_from(count.unwrap()).unwrap()).min(source.len());
                     rows.extend(source.get(start..end).unwrap_or_default().iter().cloned());
                 }
-                OrderRun::Added(added) => rows.extend(added.iter().map(|_| Vec::new())),
+                OrderRun::Added(added) => rows.extend(added.iter().map(|_| CellRow::empty())),
             }
         }
-        document.show(top, &rows);
+        document.show(top, rows.clone());
     }
 
-    fn editable_rows() -> Vec<Vec<String>> {
-        vec![
-            vec![String::from("0012"), String::from("東京")],
-            vec![String::from("b1"), String::from("b2")],
-            vec![String::from("c1")],
-        ]
+    fn editable_rows() -> Vec<CellRow> {
+        table(&[&["0012", "東京"], &["b1", "b2"], &["c1"]])
     }
 
     fn first_cells(document: &Document) -> Vec<String> {
@@ -7133,7 +7186,7 @@ mod tests {
         assert_eq!(first_cells(&document), ["0012", "b1", "c1"]);
     }
 
-    fn three_rows() -> Vec<Vec<String>> {
+    fn three_rows() -> Vec<CellRow> {
         table(&[&["a", "b", "c"], &["1", "2", "3"], &["4"]])
     }
 
@@ -7284,7 +7337,7 @@ mod tests {
         // 保存したファイルの見出しは、今の列の順。
         assert_eq!(
             document.header_source,
-            Some(table(&[&["a", "", "b", "c"]]).remove(0))
+            Some(table(&[&["a", "", "b", "c"]]).remove(0).to_strings())
         );
         document.apply(Intent::Undo, normal());
         text_at(
@@ -7318,7 +7371,7 @@ mod tests {
             Vec::new(),
             vec![String::from("b1"), String::from("b2")],
         ];
-        document.show(0, &rows);
+        document.show(0, cell_rows(&rows));
         let ids: Vec<RowId> = document.view().rows().iter().map(ViewRow::row).collect();
         assert_eq!(ids, vec![RowId::Source(0), added[0], RowId::Source(1)]);
         // 足した行は表の幅まで空のセル。番号は上から通し番号（ADR 0027 の決定 1）。
@@ -7422,7 +7475,7 @@ mod tests {
         let rows = vec![vec![String::from("c1")]];
         assert_eq!(
             document
-                .copy_text(2, &rows, &[])
+                .copy_text(2, &cell_rows(&rows), &[])
                 .map(|text| String::from(text.as_str())),
             Some(String::from("c1\tc2\r\n"))
         );
@@ -7440,7 +7493,7 @@ mod tests {
         document.apply(Intent::Confirm, normal());
         document.apply(moving(CursorStep::Up), normal());
         let rows: Vec<Vec<String>> = vec![vec![String::from("0012"), String::from("東京")]];
-        let copied = copy_from(&mut document, &rows);
+        let copied = copy_from(&mut document, &cell_rows(&rows));
         assert_eq!(copied.as_ref().map(ClipboardText::as_str), Some("新\r\n"));
     }
 
@@ -7686,13 +7739,7 @@ mod tests {
         document.saved();
         assert!(document.edits().is_empty());
         // 開き直した後の表示（保存した値）。
-        document.show(
-            0,
-            &[
-                vec![String::from("x"), String::from("東京")],
-                vec![String::from("b1"), String::from("b2")],
-            ],
-        );
+        document.show(0, table(&[&["x", "東京"], &["b1", "b2"]]));
         document.apply(Intent::Undo, normal());
         assert_eq!(
             edited(&document, 0, 0),
@@ -7857,7 +7904,7 @@ mod tests {
         match document.paste(text) {
             PasteRequest::Done => DocumentEffect::Stay,
             PasteRequest::Read { first_line, count } => {
-                let rows: Vec<Vec<String>> = editable_rows()
+                let rows: Vec<CellRow> = editable_rows()
                     .into_iter()
                     .skip(usize::try_from(first_line).unwrap())
                     .take(usize::try_from(count).unwrap())
@@ -7995,7 +8042,7 @@ mod tests {
     fn filled(document: &mut Document) -> DocumentEffect {
         let effect = document.apply(Intent::FillSelection, normal());
         if let DocumentEffect::ReadPasted { first_line, count } = effect {
-            let rows: Vec<Vec<String>> = editable_rows()
+            let rows: Vec<CellRow> = editable_rows()
                 .into_iter()
                 .skip(usize::try_from(first_line).unwrap_or(usize::MAX))
                 .take(usize::try_from(count).unwrap_or(0))
@@ -8242,7 +8289,7 @@ mod tests {
         else {
             panic!("切り取りは行を読ませるはず");
         };
-        let rows: Vec<Vec<String>> = editable_rows()
+        let rows: Vec<CellRow> = editable_rows()
             .into_iter()
             .skip(usize::try_from(first_line).unwrap())
             .take(usize::try_from(count).unwrap())
@@ -8367,7 +8414,7 @@ mod tests {
     #[test]
     fn cutting_after_a_column_insert_reads_the_right_source_column() {
         // 合成ルートと同じく、列を足し消しした後・貼った後・戻した後に見えている行を読み直す。
-        let reread = |document: &mut Document| document.show(0, &editable_rows());
+        let reread = |document: &mut Document| document.show(0, editable_rows());
         let mut document = indexed_editable();
         document.apply(Intent::InsertColumns(ColumnPlace::Left), normal());
         reread(&mut document);
@@ -8483,7 +8530,7 @@ mod tests {
         let hits = (pass.first()..end)
             .filter(|&record| document.rows.position_of(RowId::Source(record)).is_some())
             .filter_map(|record| {
-                let cells = rows[usize::try_from(record).unwrap()].clone();
+                let cells = rows[usize::try_from(record).unwrap()].to_strings();
                 record_hit(scope, pass.bound(), record, &cells).map(|column| (record, column))
             });
         match pass.bound() {
@@ -8566,8 +8613,8 @@ mod tests {
         document.apply(Intent::InsertRows(RowPlace::End), normal());
         // 合成ルートは足した行を含めて読み直す（足した行はセルの無い行）。
         let mut shown = editable_rows();
-        shown.push(Vec::new());
-        document.show(0, &shown);
+        shown.push(CellRow::empty());
+        document.show(0, shown.clone());
         typed(&mut document, "tail");
         document.apply(Intent::Confirm, normal());
         document.apply(moving(CursorStep::Top), normal());
@@ -8610,7 +8657,7 @@ mod tests {
             .zip(0_u64..)
             .filter(|&(_, record)| document.rows.position_of(RowId::Source(record)).is_some())
             .flat_map(|(cells, record)| {
-                let source = |index: usize| cells.get(index).cloned();
+                let source = |index: usize| cells.get(index).map(String::from);
                 (0..scope.width())
                     .filter_map(|display| {
                         scope.replaced_cell((RowId::Source(record), display), &source, &replacement)
@@ -8844,8 +8891,8 @@ mod tests {
         let mut document = indexed_editable();
         document.apply(Intent::InsertRows(RowPlace::End), normal());
         let mut shown = editable_rows();
-        shown.push(Vec::new());
-        document.show(0, &shown);
+        shown.push(CellRow::empty());
+        document.show(0, shown.clone());
         typed(&mut document, "tail1");
         document.apply(Intent::Confirm, normal());
         replacing_all(&mut document, "1", "#");
@@ -8985,8 +9032,8 @@ mod tests {
         document.apply(Intent::InsertRows(RowPlace::End), normal());
         // 合成ルートは足した行を含めて読み直す（足した行はセルの無い行）。
         let mut shown = editable_rows();
-        shown.push(Vec::new());
-        document.show(0, &shown);
+        shown.push(CellRow::empty());
+        document.show(0, shown.clone());
         assert_eq!(document.selection().cursor(), CellPosition::new(3, 0));
         document.apply(Intent::Undo, normal());
         assert_eq!(document.selection().cursor(), CellPosition::new(2, 0));

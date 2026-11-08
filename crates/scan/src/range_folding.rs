@@ -8,7 +8,7 @@ use crate::record_fold::RecordFold;
 use crate::record_length::RecordLength;
 use crate::record_range::RecordRange;
 use crate::scan_failure::ScanFailure;
-use crate::windowing::{nearest_mark, read_records_from};
+use crate::windowing::{nearest_mark, visit_records_from};
 
 /// 塊 `chunks`（先頭から続く範囲）のレコードを順に読み、1 つずつ `fold` に渡す。`fold` がもう要らないと言えば
 /// （`RecordFold::is_done`）そこで終える。塊を終えるたびに、渡した数を `report` に知らせ、`Break` なら止める。ファイルが範囲より先に終われば、そこで終わる。上限を超えるレコードが
@@ -38,30 +38,45 @@ where
         let mark = carried
             .filter(|mark| mark.record() <= chunk.first() && mark.record() >= indexed.record())
             .unwrap_or(indexed);
-        let window = read_records_from(from.source(), (from.index(), from.format()), mark, chunk)?;
-        let records = window.records();
-        if records.is_empty() {
+        // 1 レコードずつ渡して手放す（塊の全部を持たない・ADR 0033 の決定 2・GitHub Issue #22）。
+        let mut read = 0_u64;
+        let mut tail: Option<(u64, RecordLength)> = None;
+        let mut finished = false;
+        let mut number = chunk.first();
+        visit_records_from(
+            from.source(),
+            (from.index(), from.format()),
+            (mark, chunk),
+            |record| {
+                fold.record(number, &record);
+                number = number.saturating_add(1);
+                read = read.saturating_add(1);
+                tail = Some((record.offset(), record.length()));
+                if fold.is_done() {
+                    finished = true;
+                    return ControlFlow::Break(());
+                }
+                ControlFlow::Continue(())
+            },
+        )?;
+        if finished {
+            return Ok(ControlFlow::Continue(()));
+        }
+        if read == 0 {
             break;
         }
-        for (record, number) in records.iter().zip(chunk.first()..) {
-            fold.record(number, record);
-            if fold.is_done() {
-                return Ok(ControlFlow::Continue(()));
-            }
-        }
-        let read = u64::try_from(records.len())?;
         done = done.saturating_add(read);
-        carried = records.last().and_then(|last| match last.length() {
+        carried = tail.and_then(|(offset, length)| match length {
             RecordLength::Exact(length) => Some(Mark::new(
                 chunk.first().saturating_add(read),
-                last.offset().saturating_add(length),
+                offset.saturating_add(length),
             )),
             RecordLength::MoreThan(_) => None,
         });
         if report(done).is_break() {
             return Ok(ControlFlow::Break(()));
         }
-        if records.len() < chunk.count() {
+        if read < u64::try_from(chunk.count())? {
             break;
         }
     }

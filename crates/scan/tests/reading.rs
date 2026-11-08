@@ -25,7 +25,7 @@ mod reading {
     use nene_ledger_scan::source::Source;
     use nene_ledger_scan::sparse_index::SparseIndex;
     use nene_ledger_scan::window_record::{RECORD_READ_LIMIT, WindowRecord};
-    use nene_ledger_scan::windowing::{read_records, read_records_after};
+    use nene_ledger_scan::windowing::{read_records, read_records_after, visit_records};
 
     /// テストごとに別の名前で一時ファイルを置く（テストは並列に走る）。
     fn fixture(name: &str, contents: &[u8]) -> PathBuf {
@@ -591,6 +591,30 @@ mod reading {
 
     /// 前に読んだ最後のレコードの始まりから探しても、目印から探したときと同じ範囲を返す。番号の順に進む読みと、後ろへ
     /// 戻る読み（覚えた始まりは使わない）を混ぜる（GitHub Issue #209）。
+    /// 1 つずつ渡す読み（`visit_records`）は、まとめて返す読みと同じレコードを同じ順に渡し、`Break` でそこで止まる
+    /// （ADR 0033 の決定 2・GitHub Issue #22）。
+    fn assert_visits_match(
+        source: &Source,
+        (index, format): (&SparseIndex, TextFormat),
+        range: RecordRange,
+        expected: &[WindowRecord],
+    ) {
+        let mut visited = Vec::new();
+        visit_records(source, (index, format), range, |record| {
+            visited.push(record);
+            ControlFlow::Continue(())
+        })
+        .unwrap();
+        assert_eq!(visited, expected, "{range:?}");
+        let mut first = Vec::new();
+        visit_records(source, (index, format), range, |record| {
+            first.push(record);
+            ControlFlow::Break(())
+        })
+        .unwrap();
+        assert_eq!(first, expected.get(..1).unwrap_or_default(), "{range:?}");
+    }
+
     fn assert_known_marks_change_nothing(
         rng: &mut Xorshift,
         input: &[u8],
@@ -616,6 +640,7 @@ mod reading {
                 let plain = read_records(&source, &index, format, range).unwrap();
                 let after = read_records_after(&source, &index, format, (range, known)).unwrap();
                 assert_eq!(after, plain, "{name} {size} {range:?} {known:?}");
+                assert_visits_match(&source, (&index, format), range, plain.records());
                 known = after.last_mark().or(known);
                 first = next_first(rng, first, records);
             }

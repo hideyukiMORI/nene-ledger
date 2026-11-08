@@ -1,15 +1,19 @@
 //! 範囲のレコードを読み、セルを表示の値にする（開くとき・動いたとき・`--dump` の 1 つの経路）。
 
+use core::ops::ControlFlow;
+
+use nene_ledger_application::cell_row::CellRow;
 use nene_ledger_application::cut_record::CutRecord;
 use nene_ledger_core::text_format::TextFormat;
 use nene_ledger_core::value::value;
-use nene_ledger_scan::decoding::decode;
+use nene_ledger_scan::decoding::decode_into;
 use nene_ledger_scan::record_length::RecordLength;
 use nene_ledger_scan::record_range::RecordRange;
 use nene_ledger_scan::scan_failure::ScanFailure;
 use nene_ledger_scan::source::Source;
 use nene_ledger_scan::sparse_index::SparseIndex;
-use nene_ledger_scan::windowing::read_records;
+use nene_ledger_scan::window_record::WindowRecord;
+use nene_ledger_scan::windowing::visit_records;
 
 /// 窓のために一度に読む行の数。画面に入る行より多ければよい。
 pub(crate) const WINDOW_RECORDS: usize = 200;
@@ -17,13 +21,13 @@ pub(crate) const WINDOW_RECORDS: usize = 200;
 /// 範囲から読んだ行（復号したセルの値）と、そのうち上限で切り詰めて先頭の部分だけを読んだレコード（GitHub Issue #36）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Rows {
-    cells: Vec<Vec<String>>,
+    cells: Vec<CellRow>,
     cuts: Vec<CutRecord>,
 }
 
 impl Rows {
     /// 行の値。
-    pub(crate) fn cells(&self) -> &[Vec<String>] {
+    pub(crate) fn cells(&self) -> &[CellRow] {
         &self.cells
     }
 
@@ -32,13 +36,20 @@ impl Rows {
         &self.cuts
     }
 
+    /// 行の値を取り出す（後には空の並びが残る）。
+    pub(crate) fn take_cells(&mut self) -> Vec<CellRow> {
+        core::mem::take(&mut self.cells)
+    }
+
     /// 行の値と切り詰めたレコードに分ける。
-    pub(crate) fn into_parts(self) -> (Vec<Vec<String>>, Vec<CutRecord>) {
+    pub(crate) fn into_parts(self) -> (Vec<CellRow>, Vec<CutRecord>) {
         (self.cells, self.cuts)
     }
 }
 
-/// `range` の行を、索引の目印から読み、引用符とエスケープを外して復号する。
+/// `range` の行を、索引の目印から読み、引用符とエスケープを外して復号する。レコードは 1 つずつ受け取って行にし、すぐ
+/// 手放す。行はセルごとの `String` でなく 1 本の文字列で持つ（レコードの生のバイト列とセルの位置の並びも、範囲の全部の
+/// セルの `String` も一度に持たない・ADR 0033 の決定 2・GitHub Issue #22）。
 pub(crate) fn read_rows(
     source: &Source,
     index: &SparseIndex,
@@ -46,35 +57,28 @@ pub(crate) fn read_rows(
     range: RecordRange,
 ) -> Result<Rows, ScanFailure> {
     let dialect = format.dialect();
-    let window = read_records(source, index, format, range)?;
-    let cells = window
-        .records()
-        .iter()
-        .map(|record| {
-            record
-                .record()
-                .fields()
-                .iter()
-                .map(|&field| {
-                    let raw = value(record.bytes(), field, &dialect);
-                    decode(format.encoding(), &raw).text().to_owned()
-                })
-                .collect()
-        })
-        .collect();
-    let cuts = window
-        .records()
-        .iter()
-        .zip(range.first()..)
-        .filter(|(record, _)| record.is_truncated())
-        .map(|(record, number)| {
+    let mut cells = Vec::new();
+    let mut cuts = Vec::new();
+    let mut number = range.first();
+    visit_records(source, (index, format), range, |record: WindowRecord| {
+        let fields = record.record().fields();
+        let mut row = CellRow::with_capacity(fields.len(), record.bytes().len());
+        for &field in fields {
+            let raw = value(record.bytes(), field, &dialect);
+            row.push_with(|text| decode_into(format.encoding(), &raw, text));
+        }
+        row.shrink_to_fit();
+        cells.push(row);
+        if record.is_truncated() {
             let total = match record.length() {
                 RecordLength::Exact(length) => Some(length),
                 RecordLength::MoreThan(_) => None,
             };
-            CutRecord::new(number, total)
-        })
-        .collect();
+            cuts.push(CutRecord::new(number, total));
+        }
+        number = number.saturating_add(1);
+        ControlFlow::Continue(())
+    })?;
     Ok(Rows { cells, cuts })
 }
 

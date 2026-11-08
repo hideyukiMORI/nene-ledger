@@ -13,6 +13,36 @@ pub struct CellRow {
 }
 
 impl CellRow {
+    /// セルの無い行（足した行を読んだ行の並びに入れるとき）。
+    #[must_use]
+    pub const fn empty() -> Self {
+        Self {
+            text: String::new(),
+            ends: Vec::new(),
+        }
+    }
+
+    /// セルを `cells` 個・字を `bytes` バイトまで入れられる、セルの無い行（後ろに [`Self::push_with`] で足す）。
+    #[must_use]
+    pub fn with_capacity(cells: usize, bytes: usize) -> Self {
+        Self {
+            text: String::with_capacity(bytes),
+            ends: Vec::with_capacity(cells),
+        }
+    }
+
+    /// 後ろにセルを 1 つ足す。セルの字は `write` が行の文字列の後ろに書き足す（セルごとの `String` を作らない）。
+    pub fn push_with<F: FnOnce(&mut String)>(&mut self, write: F) {
+        write(&mut self.text);
+        self.ends.push(self.text.len());
+    }
+
+    /// 余った場所を手放す。
+    pub fn shrink_to_fit(&mut self) {
+        self.text.shrink_to_fit();
+        self.ends.shrink_to_fit();
+    }
+
     /// セルの文字列の並び `cells` から作る。
     #[must_use]
     pub fn new<S: AsRef<str>>(cells: &[S]) -> Self {
@@ -39,13 +69,13 @@ impl CellRow {
         Self { text, ends }
     }
 
-    /// セルの文字列を順に出す `cells` から作る。
+    /// セルの文字列を順に出す `cells` から作る（借りた `&str` でも、復号したての `String` でもよい）。
     #[must_use]
-    pub fn collect<'cell, I: Iterator<Item = &'cell str>>(cells: I) -> Self {
+    pub fn collect<S: AsRef<str>, I: Iterator<Item = S>>(cells: I) -> Self {
         let mut text = String::new();
         let mut ends = Vec::new();
         for cell in cells {
-            text.push_str(cell);
+            text.push_str(cell.as_ref());
             ends.push(text.len());
         }
         text.shrink_to_fit();
@@ -108,6 +138,19 @@ mod tests {
         assert_eq!(row.len(), 4);
         assert_eq!(row.to_strings(), cells);
         assert_eq!(row.iter().collect::<Vec<_>>(), ["1", "", "東京", ""]);
+    }
+
+    /// 1 つずつ足して作った行は、並びから作った行と同じ（場所を先に取っても・手放しても）。
+    #[test]
+    fn pushing_cells_one_by_one_builds_the_same_row() {
+        let cells = ["1", "", "東京", "x,y", ""];
+        let mut row = CellRow::with_capacity(2, 1);
+        for cell in cells {
+            row.push_with(|text| text.push_str(cell));
+        }
+        row.shrink_to_fit();
+        assert_eq!(row, CellRow::new(&cells));
+        assert_eq!(CellRow::with_capacity(9, 9), CellRow::empty());
     }
 
     /// セルの無い行と、空のセル 1 つの行は違う。

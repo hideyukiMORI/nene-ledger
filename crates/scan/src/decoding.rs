@@ -25,3 +25,49 @@ pub fn decode(encoding: TextEncoding, bytes: &[u8]) -> DecodedText {
     let (text, malformed) = table(encoding).decode_without_bom_handling(bytes);
     DecodedText::new(text.into_owned(), malformed)
 }
+
+/// [`decode`] と同じ復号で、字を `out` の後ろに書き足す（読めたかは返さない）。窓の行を 1 本の文字列で作るとき、セルごとの
+/// `String` を作らずに済む（GitHub Issue #22）。
+pub fn decode_into(encoding: TextEncoding, bytes: &[u8], out: &mut String) {
+    let (text, _malformed) = table(encoding).decode_without_bom_handling(bytes);
+    out.push_str(&text);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 書き足す復号は、`decode` と同じ字を出す（読めないバイト・BOM に見える並び・どの文字コードでも）。
+    #[test]
+    fn decoding_into_a_string_gives_the_same_text() {
+        let inputs: [&[u8]; 6] = [
+            b"plain",
+            "東京".as_bytes(),
+            b"\x93\x8c\x8b\x9e",
+            b"\xef\xbb\xbfbom",
+            b"\xff\xfe\x00",
+            b"",
+        ];
+        let encodings = [
+            TextEncoding::Utf8,
+            TextEncoding::Utf8WithBom,
+            TextEncoding::Utf16Le,
+            TextEncoding::Utf16BeWithBom,
+            TextEncoding::ShiftJis,
+            TextEncoding::EucJp,
+            TextEncoding::Windows1252,
+        ];
+        for encoding in encodings {
+            let mut out = String::from("前,");
+            for bytes in inputs {
+                let before = out.len();
+                decode_into(encoding, bytes, &mut out);
+                assert_eq!(
+                    out.get(before..),
+                    Some(decode(encoding, bytes).text()),
+                    "{encoding:?} {bytes:?}"
+                );
+            }
+        }
+    }
+}
