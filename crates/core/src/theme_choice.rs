@@ -35,9 +35,17 @@ impl ThemeChoice {
         }
     }
 
-    /// 観測した OS の明暗（分からなければライト）と合わせて、表示する配色の元にする。
+    /// 観測した OS の明暗（分からなければライト）と合わせて、表示する配色の元にする。OS の高コントラストが有効なら
+    /// （`high_contrast` がその明暗）、希望より優先して高コントラストの配色にする（A11Y-02）。
     #[must_use]
-    pub fn resolve(self, observed: Option<Appearance>) -> &'static ThemeSeed {
+    pub fn resolve(
+        self,
+        observed: Option<Appearance>,
+        high_contrast: Option<Appearance>,
+    ) -> &'static ThemeSeed {
+        if let Some(appearance) = high_contrast {
+            return theme_catalog::high_contrast_for(appearance);
+        }
         match self {
             Self::System => theme_catalog::default_for(observed.unwrap_or(Appearance::Light)),
             Self::Named(seed) => seed,
@@ -63,14 +71,38 @@ mod tests {
         );
         assert_eq!(ThemeChoice::from_keyword("no-such-theme"), None);
         assert_eq!(ThemeChoice::System.keyword(), "system");
-        assert_eq!(ThemeChoice::System.resolve(None).name(), "neutral-light");
         assert_eq!(
-            ThemeChoice::System.resolve(Some(Appearance::Dark)).name(),
+            ThemeChoice::System.resolve(None, None).name(),
+            "neutral-light"
+        );
+        assert_eq!(
+            ThemeChoice::System
+                .resolve(Some(Appearance::Dark), None)
+                .name(),
             "ubuntu-aubergine"
         );
         assert_eq!(
-            solarized.resolve(Some(Appearance::Light)).name(),
+            solarized.resolve(Some(Appearance::Light), None).name(),
             "solarized-dark"
         );
+    }
+
+    #[test]
+    fn the_os_high_contrast_wins_over_the_saved_choice() {
+        let solarized = ThemeChoice::from_keyword("solarized-dark").unwrap();
+        for choice in [ThemeChoice::System, solarized] {
+            assert_eq!(
+                choice
+                    .resolve(Some(Appearance::Light), Some(Appearance::Dark))
+                    .name(),
+                "vscode-high-contrast"
+            );
+            assert_eq!(
+                choice
+                    .resolve(Some(Appearance::Dark), Some(Appearance::Light))
+                    .name(),
+                "vscode-high-contrast-light"
+            );
+        }
     }
 }

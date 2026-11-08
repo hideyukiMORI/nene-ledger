@@ -29,7 +29,7 @@ pub(crate) struct Preferences {
 }
 
 impl Preferences {
-    /// 設定を読み、OS の明暗を 1 度観測して配色を決める（ADR 0012 の決定 5）。`override_theme` は `--theme` の指定で、
+    /// 設定を読み、OS の明暗と高コントラストを 1 度観測して配色を決める（ADR 0012 の決定 5・A11Y-02）。`override_theme` は `--theme` の指定で、
     /// この起動の間だけ設定より優先する（設定は変えない）。設定を読めなければ初期値で始め、利用者に知らせる文を返す。
     pub(crate) fn load(override_theme: Option<ThemeState>) -> (Self, Option<String>) {
         let (settings, store, warning) = match SettingsStore::in_config_directory() {
@@ -49,8 +49,13 @@ impl Preferences {
                 Some(format!("設定の置き場が無いので保存しない: {failure:?}")),
             ),
         };
-        let theme = override_theme
-            .unwrap_or_else(|| ThemeState::of(settings.theme().resolve(appearance::read())));
+        let theme = override_theme.unwrap_or_else(|| {
+            ThemeState::of(
+                settings
+                    .theme()
+                    .resolve(appearance::read(), appearance::high_contrast()),
+            )
+        });
         (
             Self {
                 settings,

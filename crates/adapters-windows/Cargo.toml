@@ -14,7 +14,15 @@ nene-ledger-core = { path = "../core" }
 
 [target.'cfg(windows)'.dependencies]
 # Win32_System_Registry: OS の明暗（AppsUseLightTheme）を読む。Win32_Storage_FileSystem: 保存の置き換え（ReplaceFileW・ADR 0025）。
-windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Registry"] }
+# Win32_UI_Accessibility・Win32_UI_WindowsAndMessaging・Win32_Graphics_Gdi: OS の高コントラスト（SPI_GETHIGHCONTRAST）と窓の背景の色（GetSysColor）。
+windows = { version = "0.62.2", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Registry",
+    "Win32_UI_Accessibility",
+    "Win32_UI_WindowsAndMessaging",
+] }
 
 # 🔴 unsafe を許す区画なので、workspace の lint の表をそのまま写し、unsafe_code だけを deny にする（ADR 0002 の 4・CNF-014）。
 #    workspace の表を変えたら、ここも同じ変更で写す（CNF-014 が違いを拒む）。

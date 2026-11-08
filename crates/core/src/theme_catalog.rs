@@ -1777,6 +1777,16 @@ pub fn default_for(appearance: Appearance) -> &'static ThemeSeed {
     wanted.unwrap_or(&SEEDS[0])
 }
 
+/// OS の高コントラストに合わせる配色（A11Y-02）。ダークは `vscode-high-contrast`、ライトは `vscode-high-contrast-light`。
+#[must_use]
+pub fn high_contrast_for(appearance: Appearance) -> &'static ThemeSeed {
+    let name = match appearance {
+        Appearance::Dark => "vscode-high-contrast",
+        Appearance::Light => "vscode-high-contrast-light",
+    };
+    named(name).unwrap_or(&SEEDS[0])
+}
+
 /// 表の中の位置。無ければ `None`。
 #[must_use]
 pub fn position_of(name: &str) -> Option<usize> {
@@ -1792,6 +1802,18 @@ pub fn at(index: usize) -> &'static ThemeSeed {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_high_contrast_seeds_are_the_builtin_ones() {
+        assert_eq!(
+            high_contrast_for(Appearance::Dark).name(),
+            "vscode-high-contrast"
+        );
+        assert_eq!(
+            high_contrast_for(Appearance::Light).name(),
+            "vscode-high-contrast-light"
+        );
+    }
 
     #[test]
     fn names_are_unique_lowercase_and_findable_with_underscores() {
