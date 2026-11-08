@@ -39,6 +39,8 @@ pub struct CommandPalette {
     candidates: Vec<DialectCandidate>,
     find_options: FindOptions,
     replacement: String,
+    /// 窓の下へ寄せているか（表の端の当たりが箱の下に入ったとき・GitHub Issue #286）。閉じるまでそのまま。
+    low: bool,
 }
 
 impl CommandPalette {
@@ -52,6 +54,7 @@ impl CommandPalette {
             candidates: Vec::new(),
             find_options: FindOptions::standard(),
             replacement: String::new(),
+            low: false,
         }
     }
 
@@ -65,6 +68,7 @@ impl CommandPalette {
             candidates: Vec::new(),
             find_options: options,
             replacement: String::new(),
+            low: false,
         }
     }
 
@@ -81,6 +85,7 @@ impl CommandPalette {
             candidates: Vec::new(),
             find_options: options,
             replacement: String::from(replacement),
+            low: false,
         }
     }
 
@@ -88,6 +93,18 @@ impl CommandPalette {
     pub fn set_replacement(&mut self, text: &str) {
         self.replacement.clear();
         self.replacement.push_str(text);
+    }
+
+    /// 箱を窓の下へ寄せる（`low`）か上へ戻す。表を送っても見つけたセルが箱の下に残るときに、反対の端へ寄せる
+    /// （GitHub Issue #286）。閉じるまでそのまま。
+    pub fn set_low(&mut self, low: bool) {
+        self.low = low;
+    }
+
+    /// 箱を窓の下へ寄せているか。
+    #[must_use]
+    pub const fn is_low(&self) -> bool {
+        self.low
     }
 
     /// 置き換える文字（置換の段）。
@@ -150,6 +167,7 @@ impl CommandPalette {
             candidates: Vec::new(),
             find_options: FindOptions::standard(),
             replacement: String::new(),
+            low: false,
         }
     }
 
@@ -171,6 +189,7 @@ impl CommandPalette {
             candidates: Vec::new(),
             find_options: FindOptions::standard(),
             replacement: String::new(),
+            low: false,
         }
     }
 
