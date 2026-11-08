@@ -484,7 +484,8 @@ impl Viewer {
         };
         if background {
             let (bands, header) = self.document.totals_scope();
-            let fold = TotalsFold::new(bands, header, self.reader.format());
+            let fold = TotalsFold::new(bands, header, self.reader.format())
+                .with_expected(self.document.totals_expected_columns());
             // 裏の集計は行を足し消ししていないときだけ来る（位置は原本のレコードの番号と同じ）。
             match self.reader.spawn_fold(first_line, count, fold) {
                 Ok(job) => self.totals = Some(job),

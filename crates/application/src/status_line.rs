@@ -362,9 +362,20 @@ pub fn totals_status(totals: SelectionTotals) -> Option<String> {
     }
 }
 
+/// 範囲に列の数が見出しと違う行があるときの、集計の頭の言葉（状態の行はこれで始まる集計を注意の色にする・GitHub Issue #329）。
+pub const RAGGED_TOTALS: &str = "列の数が違う行";
+
 /// 数えた集計の文言（件数 · 合計 · 平均 · 記号や指数を読んだ数 · 数でない）。数が 1 つも無ければ合計と平均を出さない。
 fn stats_status(stats: SelectionStats) -> String {
-    let mut parts = alloc::vec![format!("件数 {}", group_digits(stats.cells()))];
+    let mut parts = alloc::vec::Vec::new();
+    // 列の数が見出しと違う行が範囲にあれば、ずれた値を足しているかもしれないので頭に言う（GitHub Issue #329）。
+    if stats.ragged_rows() > 0 {
+        parts.push(format!(
+            "{RAGGED_TOTALS} {} を含む",
+            group_digits(stats.ragged_rows())
+        ));
+    }
+    parts.push(format!("件数 {}", group_digits(stats.cells())));
     if stats.numbers() > 0 {
         let sum = stats
             .sum()
@@ -532,6 +543,24 @@ mod tests {
         assert_eq!(
             totals_status(SelectionTotals::Counted(stats_of(&["0012", "-3.5"]))).as_deref(),
             Some("件数 2 · 合計 8.5 · 平均 4.25 · 数でない 0")
+        );
+    }
+
+    /// 範囲に列の数が見出しと違う行があれば、集計の頭にその数を言う（GitHub Issue #329）。
+    #[test]
+    fn totals_say_first_that_rows_with_another_number_of_cells_are_included() {
+        let mut stats = stats_of(&["1", "2"]);
+        stats.add_shape(3, 3);
+        assert!(
+            !totals_status(SelectionTotals::Counted(stats))
+                .unwrap()
+                .starts_with(RAGGED_TOTALS)
+        );
+        stats.add_shape(4, 3);
+        stats.add_shape(2, 3);
+        assert_eq!(
+            totals_status(SelectionTotals::Counted(stats)).as_deref(),
+            Some("列の数が違う行 2 を含む · 件数 2 · 合計 3 · 平均 1.5 · 数でない 0")
         );
     }
 

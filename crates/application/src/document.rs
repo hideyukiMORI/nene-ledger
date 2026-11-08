@@ -86,8 +86,8 @@ use crate::selection_mode::SelectionMode;
 use crate::selection_stats::SelectionStats;
 use crate::selection_totals::SelectionTotals;
 use crate::status_line::{
-    cursor_status, format_status, group_digits, index_status, notice_status, skipped_note,
-    totals_status,
+    RAGGED_TOTALS, cursor_status, format_status, group_digits, index_status, notice_status,
+    skipped_note, totals_status,
 };
 use crate::table_changes::TableChanges;
 use crate::table_extent::TableExtent;
@@ -4359,7 +4359,14 @@ impl Document {
             .visible_rows(first, last)
             .filter(|rows| self.rows_hold_ranges(rows))
         {
-            let stats = self.stats_of(first, rows.iter(), |row, column| row.values().get(column));
+            let stats = self.stats_of(
+                first,
+                rows.iter(),
+                (
+                    |row: &&ViewRow, column| row.values().get(column),
+                    |row: &&ViewRow| row.values().len(),
+                ),
+            );
             self.totals = SelectionTotals::Counted(stats);
             return TotalsRequest::Settled;
         }
@@ -4384,16 +4391,31 @@ impl Document {
     }
 
     /// 本体の `first` 番目から続く行 `rows`（復号した値）を、選んだ範囲の帯で数える（重なりは 1 回だけ）。
-    fn stats_of<R, C>(&self, first: u64, rows: impl Iterator<Item = R>, cell: C) -> SelectionStats
+    /// 列の数が見出しと違う原本の行は数えておく（`width` は行のセルの数・GitHub Issue #329）。
+    fn stats_of<R, C, W>(
+        &self,
+        first: u64,
+        rows: impl Iterator<Item = R>,
+        (cell, width): (C, W),
+    ) -> SelectionStats
     where
         C: for<'row> Fn(&'row R, usize) -> Option<&'row str>,
+        W: Fn(&R) -> usize,
     {
         let bands = self.ranges().bands();
+        let expected = self.expected_columns();
         let mut stats = SelectionStats::empty();
         for (row, body) in rows.zip(first..) {
             let Some(band) = bands.iter().find(|band| band.rows().contains(&body)) else {
                 continue;
             };
+            let source = matches!(
+                self.rows.row_at(self.line_of(body)),
+                None | Some(RowId::Source(_))
+            );
+            if let Some(expected) = expected.filter(|_| source) {
+                stats.add_shape(width(&row), expected);
+            }
             stats.add_cells(
                 |column| cell(&row, column),
                 &self.source_columns(band.columns()),
@@ -4428,12 +4450,22 @@ impl Document {
         (bands, self.header_line())
     }
 
+    /// 裏の集計で、列の数が見出しと違う行を数えるときの、見出しのセルの数（GitHub Issue #329）。
+    #[must_use]
+    pub fn totals_expected_columns(&self) -> Option<usize> {
+        self.expected_columns()
+    }
+
     /// レコード `first_record`（選んだ範囲の最初の行）から読んだ行 `rows`（復号したセルの値）から、見出しのレコードを除いて
     /// 選んだ範囲を集計する（重なりは 1 回だけ）。
     pub fn count_totals(&mut self, first_record: u64, rows: &[CellRow]) {
         let body = self.body_cells(first_record, rows);
         let (first, _) = self.ranges().row_span();
-        let stats = self.stats_of(first, body.into_iter(), |row, column| row.get(column));
+        let stats = self.stats_of(
+            first,
+            body.into_iter(),
+            (|row, column| row.get(column), |row| row.len()),
+        );
         self.totals = SelectionTotals::Counted(stats);
     }
 
@@ -4915,8 +4947,13 @@ impl Document {
             },
             DrawCommand::Text {
                 baseline: PixelPoint::new(hint_left, baseline_y),
+                // 範囲に列の数が違う行があれば、集計は注意の色（GitHub Issue #329）。
+                color: if right.starts_with(RAGGED_TOTALS) {
+                    palette.danger()
+                } else {
+                    palette.gutter_text()
+                },
                 text: right,
-                color: palette.gutter_text(),
                 clip: hint_clip,
                 role: TextRole::Chrome,
             },
@@ -6454,6 +6491,29 @@ mod tests {
         document.apply(moving(CursorStep::Up), normal());
         document.refresh_totals();
         assert_eq!(document.right_status(), PALETTE_HINT);
+    }
+
+    /// 範囲に列の数が見出しと違う行があれば、その場の集計の頭にその数を言い、注意の色で描く（GitHub Issue #329）。
+    #[test]
+    fn totals_over_rows_with_another_number_of_cells_say_so() {
+        let rows = table(&[&["id", "n"], &["1", "10"], &["2", "20", "x"], &["3", "30"]]);
+        let mut document = closed(Document::open(
+            String::from("t"),
+            summary(),
+            Some(HeaderRows::single(0)),
+            rows,
+        ));
+        document.apply(moving(CursorStep::Right), normal());
+        extend(&mut document, CursorStep::Down);
+        extend(&mut document, CursorStep::Down);
+        assert_eq!(document.refresh_totals(), TotalsRequest::Settled);
+        let wanted = "列の数が違う行 1 を含む · 件数 3 · 合計 60 · 平均 20 · 数でない 0";
+        assert_eq!(document.right_status(), wanted);
+        let frame = document.frame(view(1000, 300, WindowPlacement::Normal), palette());
+        assert!(frame.commands().iter().any(|command| matches!(
+            command,
+            DrawCommand::Text { text, color, .. } if text == wanted && *color == palette().danger()
+        )));
     }
 
     #[test]
