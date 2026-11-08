@@ -82,3 +82,58 @@ fn failure_of(code: HRESULT) -> ReplaceFailure {
         ReplaceFailure::Other
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::os::windows::fs::OpenOptionsExt;
+    use std::path::PathBuf;
+
+    /// テストごとの一時のフォルダ（Windows の一時フォルダの中・テストの名前で分ける）。
+    fn folder(name: &str) -> PathBuf {
+        let folder = std::env::temp_dir()
+            .join("nene-ledger-replacing")
+            .join(name);
+        let _cleared = fs::remove_dir_all(&folder);
+        fs::create_dir_all(&folder).unwrap();
+        folder
+    }
+
+    /// 掴まれていない原本は、一時ファイルの中身に置き換わり、一時ファイルは無くなる（ADR 0025 の決定 4）。
+    #[test]
+    fn an_unheld_file_is_replaced() {
+        let folder = folder("unheld");
+        let (target, replacement) = (folder.join("t.csv"), folder.join("t.tmp"));
+        fs::write(&target, b"old\n").unwrap();
+        fs::write(&replacement, b"new\n").unwrap();
+        assert_eq!(FileReplacing.replace(&replacement, &target), Ok(()));
+        assert_eq!(fs::read(&target).unwrap(), b"new\n");
+        assert!(!replacement.exists());
+    }
+
+    /// ほかのアプリが共有の指定なしで掴んでいる原本（Excel が開いているのと同じ共有違反）は、再試行の後で `Locked`
+    /// になり、原本は元のまま、一時ファイルも残る（ADR 0025 の施主の判断 3・FILE-04 の後半）。
+    #[test]
+    fn a_file_held_without_sharing_stays_and_is_reported_locked() {
+        let folder = folder("held");
+        let (target, replacement) = (folder.join("t.csv"), folder.join("t.tmp"));
+        fs::write(&target, b"old\n").unwrap();
+        fs::write(&replacement, b"new\n").unwrap();
+        let held = fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(&target)
+            .unwrap();
+        assert_eq!(
+            FileReplacing.replace(&replacement, &target),
+            Err(ReplaceFailure::Locked)
+        );
+        drop(held);
+        assert_eq!(fs::read(&target).unwrap(), b"old\n");
+        assert_eq!(fs::read(&replacement).unwrap(), b"new\n");
+        // 放せば、もう一度の保存で置き換わる（再試行）。
+        assert_eq!(FileReplacing.replace(&replacement, &target), Ok(()));
+        assert_eq!(fs::read(&target).unwrap(), b"new\n");
+    }
+}
