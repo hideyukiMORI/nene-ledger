@@ -56,6 +56,7 @@ pub mod fixed_parts;
 pub mod format_summary;
 mod frame_painter;
 pub mod go_to_target;
+mod held_columns;
 pub mod index_summary;
 pub mod intent;
 pub mod job_progress;

@@ -14,15 +14,13 @@ use nene_ledger_core::line_ending_counts::LineEndingCounts;
 use nene_ledger_core::text_encoding::TextEncoding;
 use nene_ledger_core::text_format::TextFormat;
 use nene_ledger_scan::block_size::BlockSize;
-use nene_ledger_scan::record_range::RecordRange;
 use nene_ledger_scan::scan_failure::ScanFailure;
 use nene_ledger_scan::source::Source;
-use nene_ledger_scan::sparse_index::SparseIndex;
 
 use crate::dialect_doubt::DialectDoubt;
 use crate::guessed::Guessed;
 use crate::open_failure::OpenFailure;
-use crate::rows::{Rows, WINDOW_RECORDS, read_rows};
+use crate::rows::{Rows, read_first_window};
 
 /// 判別に読む量（core の標本の 64 KiB ＋ BOM ＋ 1。続きがあることを判別に伝える・GitHub Issue #10）。
 const SAMPLE_BYTES: usize = READ_LIMIT;
@@ -109,12 +107,7 @@ pub(crate) fn open(path: &Path) -> Result<Opened, OpenFailure> {
     let source = Source::open(path)?;
     let guessed = guess_format(&source)?;
     let format = guessed.format();
-    let rows = read_rows(
-        &source,
-        &SparseIndex::empty(),
-        format,
-        RecordRange::new(0, WINDOW_RECORDS),
-    )?;
+    let rows = read_first_window(&source, format, guessed.header())?;
     Ok(Opened {
         rows,
         title: title_of(path),

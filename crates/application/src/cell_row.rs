@@ -2,14 +2,22 @@
 
 use alloc::string::String;
 use alloc::vec::Vec;
+use core::ops::Range;
+
+use crate::held_columns::HeldColumns;
 
 /// 1 行のセルの文字列。セルごとに `String` を持つと、1 セルあたり 24 バイトの頭とヒープの割り当て（短い値でも 30 バイトほど）
 /// が要る。数万列の表で窓の記憶が GB 単位になった（GitHub Issue #22）。ここでは全部のセルを 1 本の文字列に続けて置き、
 /// セルの終わりの位置だけを持つ（1 セルあたり 8 バイト ＋ 字）。
+///
+/// 窓の行は、見えている列の範囲（＋余白）のセルだけを持つことがある（ADR 0033 の決定 1）。そのときは行の列の数と持っている
+/// 列の範囲を覚え、持っていない列を「セルが無い」と取り違えないよう [`Self::holds`] で確かめられるようにする。
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CellRow {
     text: String,
     ends: Vec<usize>,
+    /// 一部の列だけを持つなら、行の列の数と持っている列の範囲。全部の列を持つなら `None`。
+    held: Option<HeldColumns>,
 }
 
 impl CellRow {
@@ -19,6 +27,7 @@ impl CellRow {
         Self {
             text: String::new(),
             ends: Vec::new(),
+            held: None,
         }
     }
 
@@ -28,6 +37,7 @@ impl CellRow {
         Self {
             text: String::with_capacity(bytes),
             ends: Vec::with_capacity(cells),
+            held: None,
         }
     }
 
@@ -53,20 +63,29 @@ impl CellRow {
             text.push_str(cell.as_ref());
             ends.push(text.len());
         }
-        Self { text, ends }
+        Self {
+            text,
+            ends,
+            held: None,
+        }
     }
 
-    /// 各セルを `write`（セル → 書き足す先）で書き替えた行（表示の文字列など）。セルごとに `String` を作らない。
+    /// 各セルを `write`（セル → 書き足す先）で書き替えた行（表示の文字列など）。セルごとに `String` を作らない。持っている
+    /// 列の範囲はそのまま。
     #[must_use]
     pub fn mapped<F: Fn(&str, &mut String)>(&self, write: F) -> Self {
         let mut text = String::with_capacity(self.text.len());
         let mut ends = Vec::with_capacity(self.ends.len());
-        for cell in self.iter() {
+        for cell in self.held_cells() {
             write(cell, &mut text);
             ends.push(text.len());
         }
         text.shrink_to_fit();
-        Self { text, ends }
+        Self {
+            text,
+            ends,
+            held: self.held.clone(),
+        }
     }
 
     /// セルの文字列を順に出す `cells` から作る（借りた `&str` でも、復号したての `String` でもよい）。
@@ -80,35 +99,105 @@ impl CellRow {
         }
         text.shrink_to_fit();
         ends.shrink_to_fit();
-        Self { text, ends }
+        Self {
+            text,
+            ends,
+            held: None,
+        }
     }
 
-    /// セルの数。
+    /// 一部の列だけを持つ行にする：足したセルは、行の列の数 `total` のうちの列の範囲 `spans`（左から・重ならない）を順に
+    /// 埋めたもの（範囲は列の数で切る・ADR 0033 の決定 1）。足したセルの数が範囲の列の数と合わなければ、全部の列を持つ
+    /// 行のまま返す（`spans` の範囲のセルだけを順に足す呼び手の約束）。
+    #[must_use]
+    pub fn holding(mut self, total: usize, spans: &[Range<usize>]) -> Self {
+        let spans: Vec<Range<usize>> = spans
+            .iter()
+            .map(|span| span.start.min(total)..span.end.min(total))
+            .filter(|span| !span.is_empty())
+            .collect();
+        let count: usize = spans.iter().map(ExactSizeIterator::len).sum();
+        // 範囲が列の数の全部なら、全部の列を持つ行のまま。
+        if count == self.ends.len() && count != total {
+            self.held = Some(HeldColumns::new(total, spans));
+        }
+        self
+    }
+
+    /// 行の列の数（原本のセルの数・持っていない列も数える）。
     #[must_use]
     pub fn len(&self) -> usize {
-        self.ends.len()
+        self.held
+            .as_ref()
+            .map_or(self.ends.len(), HeldColumns::total)
     }
 
     /// セルが 1 つも無いか。
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.ends.is_empty()
+        self.len() == 0
     }
 
-    /// `index` 番目のセル（無ければ `None`）。
+    /// `index` 番目の列の中身が分かるか：持っている列か、行の列の数の外（「セルが無い」と分かる）。一部の列だけを持つ行の、
+    /// 持っていない列だけ `false`（ADR 0033 の決定 1・3）。
+    #[must_use]
+    pub fn holds(&self, index: usize) -> bool {
+        self.position(index).is_some() || index >= self.len()
+    }
+
+    /// `index` 番目のセル（セルが無いか、持っていない列なら `None`・どちらかは [`Self::holds`] で分かる）。
     #[must_use]
     pub fn get(&self, index: usize) -> Option<&str> {
-        let end = *self.ends.get(index)?;
-        let start = match index.checked_sub(1) {
+        let at = self.position(index)?;
+        let end = *self.ends.get(at)?;
+        let start = match at.checked_sub(1) {
             Some(before) => *self.ends.get(before)?,
             None => 0,
         };
         self.text.get(start..end)
     }
 
-    /// 左から順のセル。
+    /// `index` 番目の列のセルが `ends` の何番目か（持っていなければ `None`）。
+    fn position(&self, index: usize) -> Option<usize> {
+        let Some(held) = &self.held else {
+            return (index < self.ends.len()).then_some(index);
+        };
+        let mut before = 0_usize;
+        for span in held.spans() {
+            if span.contains(&index) {
+                return Some(before.saturating_add(index.saturating_sub(span.start)));
+            }
+            before = before.saturating_add(span.len());
+        }
+        None
+    }
+
+    /// 持っているセルを左から順に（全部の列を持つ行なら全部のセル）。
+    fn held_cells(&self) -> impl Iterator<Item = &str> {
+        (0..self.ends.len()).filter_map(|at| {
+            let end = *self.ends.get(at)?;
+            let start = at
+                .checked_sub(1)
+                .map_or(Some(0), |before| self.ends.get(before).copied())?;
+            self.text.get(start..end)
+        })
+    }
+
+    /// 左から順のセル（持っている列だけ）。
     pub fn iter(&self) -> impl Iterator<Item = &str> {
-        (0..self.len()).filter_map(|index| self.get(index))
+        self.held_cells()
+    }
+
+    /// 一部の列だけを持つ行なら、持っている列の範囲（左から・重ならない）。全部の列を持つ行なら `None`。
+    #[must_use]
+    pub fn held_spans(&self) -> Option<&[Range<usize>]> {
+        self.held.as_ref().map(HeldColumns::spans)
+    }
+
+    /// 全部の列を持つ行か（一部の列だけを持つ行は `false`）。
+    #[must_use]
+    pub fn is_whole(&self) -> bool {
+        self.held.is_none()
     }
 
     /// セルごとの `String` の写し（保存の計画や見出しの元の値など、持ち主の要る所へ渡すとき）。
@@ -151,6 +240,33 @@ mod tests {
         row.shrink_to_fit();
         assert_eq!(row, CellRow::new(&cells));
         assert_eq!(CellRow::with_capacity(9, 9), CellRow::empty());
+    }
+
+    /// 一部の列だけを持つ行は、持っている列だけを引け、持っていない列は「セルが無い」と取り違えない（ADR 0033 の決定 1）。
+    #[test]
+    fn a_row_holding_some_columns_knows_which_it_lacks() {
+        let mut row = CellRow::empty();
+        for cell in ["c2", "c3", "", "c8"] {
+            row.push_with(|text| text.push_str(cell));
+        }
+        let row = row.holding(10, &[2..4, 7..9]);
+        assert_eq!(row.len(), 10);
+        assert_eq!(
+            (row.get(2), row.get(3), row.get(7), row.get(8)),
+            (Some("c2"), Some("c3"), Some(""), Some("c8"))
+        );
+        assert!(row.holds(3) && !row.holds(0) && !row.holds(5) && row.holds(10));
+        assert_eq!(row.get(5), None);
+        assert_eq!(row.held_spans(), Some(&[2..4, 7..9][..]));
+        // 範囲が列の数の外にはみ出しても、列の数で切る。行の全部の列なら、全部の列を持つ行。
+        let mut short = CellRow::empty();
+        short.push_with(|text| text.push('z'));
+        let short = short.holding(1, &[0..5, 9..9]);
+        assert!(short.is_whole() && short.holds(4));
+        // 表示の写しも、持っている列の範囲を保つ。
+        let shown = row.mapped(|cell, text| text.push_str(cell));
+        assert_eq!(shown.held_spans(), row.held_spans());
+        assert_eq!(shown.get(8), Some("c8"));
     }
 
     /// セルの無い行と、空のセル 1 つの行は違う。

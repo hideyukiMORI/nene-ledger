@@ -266,6 +266,9 @@ impl<'view> FramePainter<'view> {
                 self.paint_cell(rect, Some(shown.as_str()), (mark, &found));
             }
             Some(CellValue::Absent) => self.paint_cell(rect, None, (mark, &[])),
+            // 窓の行がまだ読んでいない列（横に動いて読み直す前）は、「セルが無い」色でなく空のセルとして描く（ADR 0033 の
+            // 決定 1・読み直したら描き直す）。
+            None if !row.values().holds(source) => self.paint_cell(rect, Some(""), (mark, &[])),
             None => {
                 let found = row
                     .values()
