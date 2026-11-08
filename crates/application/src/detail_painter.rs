@@ -223,6 +223,10 @@ fn body_lines(
             Vec::new(),
             Some(String::from("〈この行にはこの列のセルが無い〉")),
         ),
+        DetailContent::NoRows => (
+            Vec::new(),
+            Some(String::from("〈表に行が無い（見出しの行だけ）〉")),
+        ),
         DetailContent::Value("") | DetailContent::Cut { value: "", .. } => {
             (Vec::new(), Some(String::from("〈空のセル〉")))
         }
@@ -230,9 +234,10 @@ fn body_lines(
             // JSON のオブジェクトか配列のセルは整形して見せる（値は変えない・切り詰めた値は整形しない・VIEW-07）。
             let pretty = match content {
                 DetailContent::Value(_) => pretty_json(value),
-                DetailContent::Cut { .. } | DetailContent::OutOfView | DetailContent::Missing => {
-                    None
-                }
+                DetailContent::Cut { .. }
+                | DetailContent::OutOfView
+                | DetailContent::Missing
+                | DetailContent::NoRows => None,
             };
             let wrapped = wrap(pretty.as_deref().unwrap_or(value), columns, limit);
             if wrapped.hidden() == 0 {
@@ -286,6 +291,11 @@ fn aux_text(
         // 切り詰めた行の値は先頭の部分だけなので、文字数とバイト数の代わりに切り詰めたことと全体の大きさを出す（GitHub Issue #36）。
         DetailContent::Cut { cut, .. } => format!("{position}　{}", cut.describe()),
         DetailContent::OutOfView | DetailContent::Missing => position,
+        // 本体の行が無いので、行の番号は言わない（列の名前だけ・GitHub Issue #256）。
+        DetailContent::NoRows => match place.name() {
+            Some(_) => String::from(column),
+            None => String::new(),
+        },
     }
 }
 

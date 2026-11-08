@@ -7,6 +7,8 @@ use crate::cut_record::CutRecord;
 pub enum DetailContent<'row> {
     /// カーソルの行が見えている範囲の外（読んでいない）。
     OutOfView,
+    /// 表に本体の行が無い（見出しの行だけ・空のファイル・GitHub Issue #256）。
+    NoRows,
     /// カーソルの行にその列のセルが無い。
     Missing,
     /// セルの値（復号したまま。空のこともある）。
