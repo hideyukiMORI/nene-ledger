@@ -8,6 +8,7 @@ use nene_ledger_core::dialect_candidate::DialectCandidate;
 use nene_ledger_core::theme_catalog::SEEDS;
 
 use crate::command_id::CommandId;
+use crate::detail_pane::DetailPane;
 use crate::key_guide::KeyGuide;
 use crate::palette_item::PaletteItem;
 use crate::reading_aspect::ReadingAspect;
@@ -38,6 +39,10 @@ fn command_rank(command: CommandId, raw: &str, folded: &str) -> Option<u8> {
     if raw.is_empty() {
         return Some(0);
     }
+    // 英字の無い問い（IME で打った漢字とかな）は、名前・読み・日本語の言い換えで照らす（GitHub Issue #303）。
+    if !raw.is_ascii() && folded.is_empty() {
+        return japanese_rank(command, raw);
+    }
     let reading = fold(&romanize(command.reading()));
     let keywords = command.keywords();
     if !folded.is_empty() && reading.starts_with(folded) {
@@ -51,6 +56,46 @@ fn command_rank(command: CommandId, raw: &str, folded: &str) -> Option<u8> {
     } else {
         None
     }
+}
+
+/// 漢字とかなの問い `raw` に操作 `command` が合う度合い（小さいほど上）。名前か読みか言い換えの頭なら 0、どこかに含めば 2。
+/// カタカナはひらがなに寄せて比べる（「サガス」でも「さがす」でも当たる）。
+fn japanese_rank(command: CommandId, raw: &str) -> Option<u8> {
+    let query = hiragana(raw.trim());
+    let names = [
+        command.name(DetailPane::Open),
+        command.name(DetailPane::Closed),
+        command.reading(),
+    ];
+    let words = names
+        .into_iter()
+        .chain(command.japanese_aliases().iter().copied())
+        .map(hiragana);
+    let mut best: Option<u8> = None;
+    for word in words {
+        let rank = if word.starts_with(&query) {
+            0
+        } else if word.contains(&query) {
+            2
+        } else {
+            continue;
+        };
+        best = Some(best.map_or(rank, |seen| seen.min(rank)));
+    }
+    best
+}
+
+/// カタカナをひらがなに寄せる（ほかの字はそのまま）。
+fn hiragana(text: &str) -> String {
+    text.chars()
+        .map(|character| {
+            if ('ァ'..='ヶ').contains(&character) {
+                char::from_u32(u32::from(character).saturating_sub(0x60)).unwrap_or(character)
+            } else {
+                character
+            }
+        })
+        .collect()
 }
 
 /// キーの一覧の候補（Issue #63）。キーのあるパレットの操作（固定の順）の後に、パレットに無いキーの操作。打てば、キーの
@@ -288,5 +333,41 @@ mod tests {
             vec![PaletteItem::Candidate(comma)]
         );
         assert!(candidates(&list, "xyz").is_empty());
+    }
+
+    /// IME で打った漢字とかなでも操作が引ける。名前・読み・言い換え（名前に無い語）で当て、カタカナはひらがなに寄せる
+    /// （GitHub Issue #303・専門家ペルソナの指摘 #285）。
+    #[test]
+    fn japanese_queries_find_commands_by_name_reading_and_alias() {
+        let first = |query: &str| ids(&commands(query)).first().copied();
+        for (query, wanted) in [
+            ("置換", CommandId::Replace),
+            ("検索", CommandId::Find),
+            ("さがす", CommandId::Find),
+            ("サガス", CommandId::Find),
+            ("保存", CommandId::Save),
+            ("文字コード", CommandId::ChooseEncoding),
+            ("テーマ", CommandId::ChooseTheme),
+            // 英字の問いは今までどおり（ローマ字と英語の検索語）。
+            ("kensaku", CommandId::Find),
+        ] {
+            assert_eq!(first(query), Some(wanted), "{query}");
+        }
+        assert!(ids(&commands("検索")).contains(&CommandId::Replace));
+        assert!(commands("ほげ").is_empty());
+    }
+
+    /// 言い換えは名前と重ならず、ひらがなに寄せても空でない。
+    #[test]
+    fn aliases_are_not_already_in_the_name() {
+        for command in CommandId::ALL {
+            for alias in command.japanese_aliases() {
+                assert!(!hiragana(alias).is_empty());
+                assert!(
+                    !command.name(DetailPane::Closed).contains(alias),
+                    "{command:?} {alias}"
+                );
+            }
+        }
     }
 }
