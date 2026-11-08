@@ -20,7 +20,7 @@ use nene_ledger_core::row_id::RowId;
 use nene_ledger_core::table_layout::TableLayout;
 use nene_ledger_core::text_role::TextRole;
 
-use crate::cell_display::{fitted, fitted_spans, shown_spans, single_line};
+use crate::cell_display::{fitted, fitted_spans, mark_spans, shown_spans, single_line};
 use crate::cell_mark::CellMark;
 use crate::editing_cell::EditingCell;
 use crate::ranges::Ranges;
@@ -263,19 +263,22 @@ impl<'view> FramePainter<'view> {
             Some(CellValue::Text(value)) => {
                 let shown = single_line(value);
                 let found = self.found_in(style, value);
-                self.paint_cell(rect, Some(shown.as_str()), (mark, &found));
+                let marks = marks_in(value);
+                self.paint_cell(rect, Some(shown.as_str()), (mark, &found, &marks));
             }
-            Some(CellValue::Absent) => self.paint_cell(rect, None, (mark, &[])),
+            Some(CellValue::Absent) => self.paint_cell(rect, None, (mark, &[], &[])),
             // 窓の行がまだ読んでいない列（横に動いて読み直す前）は、「セルが無い」色でなく空のセルとして描く（ADR 0033 の
             // 決定 1・読み直したら描き直す）。
-            None if !row.values().holds(source) => self.paint_cell(rect, Some(""), (mark, &[])),
+            None if !row.values().holds(source) => {
+                self.paint_cell(rect, Some(""), (mark, &[], &[]));
+            }
             None => {
-                let found = row
-                    .values()
-                    .get(source)
+                let value = row.values().get(source);
+                let found = value
                     .map(|value| self.found_in(style, value))
                     .unwrap_or_default();
-                self.paint_cell(rect, row.cells().get(source), (mark, &found));
+                let marks = value.map(marks_in).unwrap_or_default();
+                self.paint_cell(rect, row.cells().get(source), (mark, &found, &marks));
             }
         }
     }
@@ -519,7 +522,7 @@ impl<'view> FramePainter<'view> {
         &mut self,
         rect: PixelRect,
         cell: Option<&str>,
-        (mark, found): (CellMark, &[Range<usize>]),
+        (mark, found, marks): (CellMark, &[Range<usize>], &[Range<usize>]),
     ) {
         let (background, missing) = match mark {
             CellMark::Header => (self.palette.gutter(), self.palette.gutter()),
@@ -548,7 +551,18 @@ impl<'view> FramePainter<'view> {
         if !text.is_empty() {
             // 収めた文字列と基準線は 1 度だけ決め、字と印の両方に使う。
             let (shown, baseline) = self.placed(rect, text);
-            let marks = self.found_marks(rect, (text, &shown, baseline), found);
+            // 見えない字の印は控えめな色で（背景はセルのまま・VIEW-05）。`…` で切った後ろの印は描かない。当たった字の
+            // 印はその後に重ねる（当たりが優先）。
+            let invisible = self.span_marks(
+                (rect, &shown, baseline),
+                &visible_marks(text, &shown, marks),
+                (background, self.palette.gutter_text()),
+            );
+            let found = self.span_marks(
+                (rect, &shown, baseline),
+                &fitted_spans(text, &shown, found),
+                (self.palette.found_text(), self.palette.found_ink()),
+            );
             self.commands.push(DrawCommand::Text {
                 baseline,
                 text: shown,
@@ -556,19 +570,20 @@ impl<'view> FramePainter<'view> {
                 clip: rect,
                 role: TextRole::Content,
             });
-            self.commands.extend(marks);
+            self.commands.extend(invisible);
+            self.commands.extend(found);
         }
     }
 
-    /// `rect` に、基準線 `baseline` から収めた文字列 `shown` として書く値 `text` の、当たった字の範囲 `found` の印（明るい
-    /// 背景と濃い字）の命令。字の命令の後に置く。`…` で切った後ろの当たりは `…` に付ける。
-    fn found_marks(
+    /// 矩形 `rect` に基準線 `baseline` から書いた文字列 `shown` の、範囲 `spans`（`shown` の中）の字を、背景 `color`・字 `ink` で
+    /// 書き直す命令（検索で当たった字・見えない字の印）。字の命令の後に置く。
+    fn span_marks(
         &self,
-        rect: PixelRect,
-        (text, shown, baseline): (&str, &str, PixelPoint),
-        found: &[Range<usize>],
+        (rect, shown, baseline): (PixelRect, &str, PixelPoint),
+        spans: &[Range<usize>],
+        (color, ink): (Color, Color),
     ) -> Vec<DrawCommand> {
-        if found.is_empty() {
+        if spans.is_empty() {
             return Vec::new();
         }
         let spare = rect
@@ -585,16 +600,16 @@ impl<'view> FramePainter<'view> {
                 self.metrics.line_height().min(rect.size().height()),
             ),
         );
-        fitted_spans(text, shown, found)
-            .into_iter()
+        spans
+            .iter()
             .map(|span| DrawCommand::TextSpan {
                 baseline,
                 text: String::from(shown),
                 start: span.start,
                 end: span.end,
                 band,
-                color: self.palette.found_text(),
-                ink: self.palette.found_ink(),
+                color,
+                ink,
                 role: TextRole::Content,
             })
             .collect()
@@ -653,6 +668,28 @@ fn scrolled_to_caret(text: &str, caret: u32, room: u32) -> (String, u32) {
         skipped = skipped.saturating_add(char_columns(character));
     }
     (characters.collect(), skipped)
+}
+
+/// 元の値 `value` を表示の 1 行にしたときの、見えない字の印の範囲（長い値は数えない・当たった字と同じ約束）。
+fn marks_in(value: &str) -> Vec<Range<usize>> {
+    if value.len() > FOUND_LIMIT {
+        return Vec::new();
+    }
+    mark_spans(value)
+}
+
+/// 表示の 1 行 `text` を幅に収めた `fitted` の中で、見えている印の範囲（`…` で切った後ろの印は落とす）。
+fn visible_marks(text: &str, fitted: &str, marks: &[Range<usize>]) -> Vec<Range<usize>> {
+    let head = if fitted == text {
+        fitted.len()
+    } else {
+        fitted.len().saturating_sub('…'.len_utf8())
+    };
+    marks
+        .iter()
+        .filter(|span| span.end <= head)
+        .cloned()
+        .collect()
 }
 
 #[cfg(test)]
@@ -1092,5 +1129,37 @@ mod tests {
         };
         assert!(text.ends_with('…'), "{text}");
         assert_eq!((*start, *end), (text.len() - '…'.len_utf8(), text.len()));
+    }
+
+    /// 見えない字の印は、背景はセルのまま、字は控えめな色（行番号の字の色）で書き直す。本物の `→` は書き直さない
+    /// （VIEW-05・GitHub Issue #261）。
+    #[test]
+    fn invisible_character_marks_are_muted() {
+        let rows = [row(1, &["a\tb", "x→y"])];
+        let widths =
+            ColumnWidths::fit(&[&[String::from("wide-wide"), String::from("wide-wide")][..]]);
+        let layout = TableLayout::new(&widths, 0, 10, metrics());
+        let commands = FramePainter::new(&layout, metrics(), palette(), PixelSize::new(800, 600))
+            .with_selection(Selection::at(crate::cell_position::CellPosition::new(5, 5)))
+            // 元の値（タブ）を持った行のまま（`view` は表示の文字列から作り直すので使わない）。
+            .paint(None, None, &TableView::from_rows(1, rows.to_vec(), None));
+        let muted: Vec<(&str, usize, usize, Color)> = commands
+            .iter()
+            .filter_map(|command| match command {
+                DrawCommand::TextSpan {
+                    text,
+                    start,
+                    end,
+                    color,
+                    ink,
+                    ..
+                } if *ink == palette().gutter_text() => Some((text.as_str(), *start, *end, *color)),
+                DrawCommand::Fill { .. }
+                | DrawCommand::Text { .. }
+                | DrawCommand::Line { .. }
+                | DrawCommand::TextSpan { .. } => None,
+            })
+            .collect();
+        assert_eq!(muted, [("a→b", 1, 4, palette().background())]);
     }
 }
