@@ -254,8 +254,9 @@ impl CommandPalette {
             Intent::Erase => self.erase_query(),
             Intent::Move { step, .. } => self.step(step),
             Intent::Confirm => self.confirmed(current_theme),
-            Intent::Cancel | Intent::OpenPalette | Intent::OpenGoTo | Intent::OpenFind { .. } => {
-                self.cancelled()
+            Intent::Cancel => self.cancelled(),
+            Intent::OpenPalette | Intent::OpenGoTo | Intent::OpenFind { .. } => {
+                self.switched(intent)
             }
             Intent::Scroll(_)
             | Intent::Point { .. }
@@ -561,6 +562,30 @@ impl CommandPalette {
         }
     }
 
+    /// パレットを開くキー（Ctrl+Shift+P・Ctrl+G・Ctrl+F・Ctrl+H）。今の段を開くキーなら閉じ、ほかの段のキーなら閉じずに
+    /// その段で開き直す（GitHub Issue #290・Superhuman の「同じキーでもう一度押すと閉じる」）。閉じると、続けて打った字が
+    /// 表のセルに入ってしまう。配色・読み方・判別の候補・保存先の段は、今までどおり戻して閉じる（試しを元に戻す）。
+    /// 検索と置換の行き来（Ctrl+F・Ctrl+H）は `mode_intent` が打った文字を引き継いで先に扱う。
+    fn switched(&self, intent: Intent) -> PaletteOutcome {
+        let same = match self.mode {
+            PaletteMode::Commands | PaletteMode::Keys | PaletteMode::About => {
+                intent == Intent::OpenPalette
+            }
+            PaletteMode::GoTo => intent == Intent::OpenGoTo,
+            PaletteMode::Find => intent == (Intent::OpenFind { replace: false }),
+            PaletteMode::Replace { .. } => intent == (Intent::OpenFind { replace: true }),
+            PaletteMode::Themes { .. }
+            | PaletteMode::Reading { .. }
+            | PaletteMode::Candidates { .. }
+            | PaletteMode::SaveAs { .. } => true,
+        };
+        if same {
+            self.cancelled()
+        } else {
+            PaletteOutcome::Run(intent)
+        }
+    }
+
     /// 道筋を打ち直したので、上書きを尋ねるのをやめる。
     fn stop_asking(&mut self) {
         if let PaletteMode::SaveAs { overwrite: true } = self.mode {
@@ -793,6 +818,52 @@ mod tests {
         );
         // 開いている間の他のキーは表に届かない。
         assert_eq!(palette.handle(Intent::Copy, 0), PaletteOutcome::Stay);
+    }
+
+    /// 今の段を開くキーは閉じ、ほかの段のキーは閉じずにその段で開き直す（GitHub Issue #290）。
+    #[test]
+    fn another_step_key_switches_and_the_same_key_closes() {
+        let find = Intent::OpenFind { replace: false };
+        let replace = Intent::OpenFind { replace: true };
+        let cases = [
+            (
+                CommandPalette::open(),
+                Intent::OpenPalette,
+                [Intent::OpenGoTo, find, replace],
+            ),
+            (
+                CommandPalette::open_go_to(),
+                Intent::OpenGoTo,
+                [Intent::OpenPalette, find, replace],
+            ),
+            (
+                CommandPalette::open_find("", FindOptions::standard()),
+                find,
+                [Intent::OpenPalette, Intent::OpenGoTo, Intent::OpenGoTo],
+            ),
+            (
+                CommandPalette::open_replace("a", "b", FindOptions::standard()),
+                replace,
+                [Intent::OpenPalette, Intent::OpenGoTo, Intent::OpenGoTo],
+            ),
+        ];
+        for (palette, same, others) in cases {
+            let mut closing = palette.clone();
+            assert_eq!(closing.handle(same, 0), PaletteOutcome::Close);
+            for other in others {
+                let mut switching = palette.clone();
+                assert_eq!(switching.handle(other, 0), PaletteOutcome::Run(other));
+            }
+        }
+        // 配色の段は、どのキーでも試しを戻して閉じる。
+        let mut themes = CommandPalette::open();
+        typed(&mut themes, "theme");
+        let _entered = themes.handle(Intent::Confirm, 3);
+        assert!(matches!(themes.mode(), PaletteMode::Themes { .. }));
+        assert_eq!(
+            themes.handle(Intent::OpenGoTo, 3),
+            PaletteOutcome::Revert(3)
+        );
     }
 
     #[test]
