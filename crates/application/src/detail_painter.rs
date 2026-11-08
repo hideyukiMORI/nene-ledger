@@ -8,6 +8,7 @@ use nene_ledger_core::color::Color;
 use nene_ledger_core::display_width::display_columns;
 use nene_ledger_core::draw_command::DrawCommand;
 use nene_ledger_core::glyph_metrics::GlyphMetrics;
+use nene_ledger_core::json_layout::pretty_json;
 use nene_ledger_core::palette::Palette;
 use nene_ledger_core::pixel_point::PixelPoint;
 use nene_ledger_core::pixel_rect::PixelRect;
@@ -226,7 +227,14 @@ fn body_lines(
             (Vec::new(), Some(String::from("〈空のセル〉")))
         }
         DetailContent::Value(value) | DetailContent::Cut { value, .. } => {
-            let wrapped = wrap(value, columns, limit);
+            // JSON のオブジェクトか配列のセルは整形して見せる（値は変えない・切り詰めた値は整形しない・VIEW-07）。
+            let pretty = match content {
+                DetailContent::Value(_) => pretty_json(value),
+                DetailContent::Cut { .. } | DetailContent::OutOfView | DetailContent::Missing => {
+                    None
+                }
+            };
+            let wrapped = wrap(pretty.as_deref().unwrap_or(value), columns, limit);
             if wrapped.hidden() == 0 {
                 return (wrapped.lines().to_vec(), None);
             }
@@ -262,8 +270,14 @@ fn aux_text(
     match content {
         DetailContent::Value(value) => {
             let characters = u64::try_from(value.chars().count()).unwrap_or(u64::MAX);
+            // 整形して見せている JSON には印を添える（数は元の値のもの・VIEW-07）。
+            let json = if pretty_json(value).is_some() {
+                "　JSON（整形して表示）"
+            } else {
+                ""
+            };
             format!(
-                "{position}　{} 文字　{} で {} バイト",
+                "{position}　{} 文字　{} で {} バイト{json}",
                 group_digits(characters),
                 byte_encoding_name(encoding),
                 group_digits(encoding.encoded_length(value))
