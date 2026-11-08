@@ -311,6 +311,49 @@ impl CommandId {
         }
     }
 
+    /// 日本語の言い換え（名前に無い語で引く・IME で打った漢字とかなで当てる・GitHub Issue #303）。名前と読みは別に照らす
+    /// ので、ここには名前に無い語だけを置く。
+    #[must_use]
+    pub fn japanese_aliases(self) -> &'static [&'static str] {
+        match self {
+            Self::Top | Self::Bottom | Self::GoTo => &["移動", "ジャンプ"],
+            Self::SelectAll | Self::SelectRows | Self::SelectColumns => &["選択"],
+            Self::ToggleDetail => &["インスペクタ", "プロパティ"],
+            Self::ToggleReadOnly => &["ロック", "保護", "閲覧"],
+            Self::ZoomIn => &["拡大", "ズーム"],
+            Self::ZoomOut => &["縮小", "ズーム"],
+            Self::ZoomReset => &["ズーム", "等倍"],
+            Self::ChooseTheme => &["テーマ", "カラー", "ダーク", "ライト"],
+            Self::ChooseDialect => &["判定", "自動"],
+            Self::ChooseEncoding => &["エンコード", "文字化け", "シフトJIS", "ユニコード"],
+            Self::ChooseDelimiter => &["区切り文字", "カンマ", "タブ", "セパレータ"],
+            Self::ChooseQuoting => &["ダブルクォート", "クォート", "エスケープ"],
+            Self::ChooseHeader => &["ヘッダー", "列名"],
+            Self::MoveColumnsLeft | Self::MoveColumnsRight | Self::ResetColumns => {
+                &["列の移動", "並べ替え"]
+            }
+            Self::ResetWidths => &["列幅", "自動調整"],
+            Self::FreezeColumns | Self::UnfreezeColumns => &["ウィンドウ枠", "ピン留め"],
+            Self::Copy => &["複写"],
+            Self::Cut => &["カット"],
+            Self::Find | Self::FindNext | Self::FindPrevious => &["検索", "サーチ"],
+            Self::Replace => &["置換", "検索", "書き換え"],
+            Self::Save => &["上書き保存", "書き出し"],
+            Self::SaveAs => &["別名", "エクスポート", "書き出し"],
+            Self::NewTable => &["新規", "作成"],
+            Self::Undo => &["取り消し", "アンドゥ"],
+            Self::Redo => &["リドゥ"],
+            Self::InsertRowsAbove | Self::InsertRowsBelow | Self::AppendRow => {
+                &["行の挿入", "追加"]
+            }
+            Self::RemoveRows => &["行の削除", "削除"],
+            Self::InsertColumnsLeft | Self::InsertColumnsRight => &["列の挿入", "追加"],
+            Self::RemoveColumns => &["列の削除", "削除"],
+            Self::ShowKeys => &["ショートカット", "キーボード", "ヘルプ"],
+            Self::ShowAbout => &["バージョン", "ライセンス", "版"],
+        }
+    }
+
     /// キーの案内（半角・キーの名前は訳さない・`+` が続くと読み違えるので `Plus` と書く）。
     #[must_use]
     pub fn keys(self) -> Option<&'static str> {

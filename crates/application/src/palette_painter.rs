@@ -791,7 +791,7 @@ fn bottom(rect: PixelRect) -> u32 {
 /// 段 `mode` の欄が空のときの案内。
 fn placeholder(mode: PaletteMode) -> &'static str {
     match mode {
-        PaletteMode::Commands => "操作の名前を英字かローマ字で（例: theme, haishoku）",
+        PaletteMode::Commands => "操作の名前で絞る（例: 置換・haishoku・theme）",
         PaletteMode::GoTo => "行の番号（例: 1200、列も選ぶなら 1200,3）",
         PaletteMode::Find => "探す文字（Enter で次・Shift+Enter で前）",
         PaletteMode::Replace { .. } => "探す文字",
@@ -875,7 +875,7 @@ mod tests {
         let palette = CommandPalette::open();
         let commands = palette.paint(view(), colors(), DetailPane::Open);
         let shown = texts(&commands);
-        assert!(shown.contains(&"操作の名前を英字かローマ字で（例: theme, haishoku）"));
+        assert!(shown.contains(&"操作の名前で絞る（例: 置換・haishoku・theme）"));
         assert!(shown.contains(&"43 / 43"));
         assert!(shown.contains(&"詳細ペインを閉じる") && shown.contains(&"Ctrl+Shift+U"));
         assert!(shown.contains(&"文字を大きくする") && shown.contains(&"Ctrl+0"));
