@@ -60,8 +60,8 @@ pub(crate) struct FramePainter<'view> {
 
 /// カーソルの枠の太さ（画素・100% のとき）。
 const CURSOR_LINE: u32 = 2;
-/// 書き換えたセルの右上の印の大きさ（画素・100% のとき・GitHub Issue #323）。
-const EDITED_MARK: u32 = 5;
+/// 書き換えたセルの左の端の帯の幅（画素・100% のとき・GitHub Issue #323・#331）。
+const EDITED_MARK: u32 = 3;
 /// 列の数が見出しと違う行の番号の左の帯の幅（画素・100% のとき・GitHub Issue #317）。
 const RAGGED_BAR: u32 = 3;
 /// 選んだ範囲の外周の枠の太さ（画素・100% のとき）。
@@ -321,7 +321,7 @@ impl<'view> FramePainter<'view> {
             return;
         }
         let edited = self.edited(style, row.row(), source);
-        // 原本の行の書き換えたセルは、保存するまで右上に小さな印を付ける（足した行は行の番号の色で分かる・GitHub Issue #323）。
+        // 原本の行の書き換えたセルは、保存するまで左の端に帯を付ける（足した行は行の番号の色で分かる・GitHub Issue #323）。
         if edited.is_some() && matches!(row.row(), RowId::Source(_)) {
             self.edited_mark(rect);
         }
@@ -376,24 +376,13 @@ impl<'view> FramePainter<'view> {
         }
     }
 
-    /// 書き換えたセルの右上の小さな四角の印（強調の色・セルを塗った後に重ねる・GitHub Issue #323）。
+    /// 書き換えたセルの左の端の縦の帯（済んだの色＝緑・カーソルの橙と分ける・VS Code の変更の帯と同じ考え方・セルを
+    /// 塗った後に重ねる・GitHub Issue #323・#331）。
     fn edited_mark(&mut self, rect: PixelRect) {
-        let size = self
-            .metrics
-            .px(EDITED_MARK)
-            .min(rect.size().width())
-            .min(rect.size().height());
-        let left = rect
-            .origin()
-            .x()
-            .saturating_add(rect.size().width())
-            .saturating_sub(size);
+        let width = self.metrics.px(EDITED_MARK).min(rect.size().width());
         self.overlays.push(DrawCommand::Fill {
-            rect: PixelRect::new(
-                PixelPoint::new(left, rect.origin().y()),
-                PixelSize::new(size, size),
-            ),
-            color: self.palette.cursor(),
+            rect: PixelRect::new(rect.origin(), PixelSize::new(width, rect.size().height())),
+            color: self.palette.success(),
         });
     }
 
@@ -406,7 +395,20 @@ impl<'view> FramePainter<'view> {
             .saturating_mul(half)
             .saturating_add(self.layout.padding().saturating_mul(2));
         let room = self.size.width().saturating_sub(rect.origin().x());
-        let width = needed.min(room).max(rect.size().width());
+        // 隣の値の端がのぞかないよう、広げた右端は列の境（その列の右の罫線）にそろえる（GitHub Issue #331）。
+        let target = rect.origin().x().saturating_add(needed.min(room));
+        let boundary = self
+            .layout
+            .visible_columns()
+            .filter_map(|column| self.layout.cell_rect(0, column))
+            .map(|cell| cell.origin().x().saturating_add(cell.size().width()))
+            .filter(|&right| right >= target)
+            .min()
+            .unwrap_or(target);
+        let width = boundary
+            .saturating_sub(rect.origin().x())
+            .min(room)
+            .max(rect.size().width());
         if width == rect.size().width() {
             self.paint_editing(rect, editing);
             return;
@@ -966,6 +968,34 @@ mod tests {
             .max()
             .unwrap();
         assert!(outline <= cell.size().width() + 1);
+    }
+
+    /// 広げた編集の欄の右端は列の境にそろえる（隣の値の端がのぞかない・GitHub Issue #331）。
+    #[test]
+    fn a_widened_edit_ends_on_a_column_boundary() {
+        let rows = [row(1, &["ab", "cdefgh", "ijklmnop", "q"])];
+        let owned: Vec<Vec<String>> = rows.iter().map(|row| row.cells().to_strings()).collect();
+        let cells: Vec<&[String]> = owned.iter().map(Vec::as_slice).collect();
+        let layout = TableLayout::new(&ColumnWidths::fit(&cells), 0, 2, metrics());
+        let editing = EditingCell::new(String::from("abcdefghij"), 0, None);
+        let commands = FramePainter::new(&layout, metrics(), palette(), PixelSize::new(800, 600))
+            .with_selection(Selection::at(crate::cell_position::CellPosition::new(1, 0)))
+            .with_editing(Some(&editing))
+            .paint(&[], None, &view(&rows));
+        let rights: Vec<u32> = (0..4)
+            .filter_map(|column| layout.cell_rect(0, column))
+            .map(|cell| cell.origin().x() + cell.size().width())
+            .collect();
+        let outline_right = fills_of(&commands, palette().cursor())
+            .into_iter()
+            .map(|rect| rect.origin().x() + rect.size().width())
+            .max()
+            .unwrap();
+        assert!(
+            rights.contains(&outline_right),
+            "{outline_right} {rights:?}"
+        );
+        assert!(outline_right > rights[0]);
     }
 
     /// 列の数が見出しと違う本体の行は、番号を注意の色にし、左に注意の色の帯を置く。見出しのセルの数を知らなければ印は無い
