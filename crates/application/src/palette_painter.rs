@@ -48,6 +48,7 @@ pub(crate) struct PalettePainter<'state> {
     metrics: GlyphMetrics,
     colors: Palette,
     note: Option<&'state str>,
+    lines: &'state [(String, bool)],
     commands: Vec<DrawCommand>,
 }
 
@@ -64,6 +65,7 @@ impl<'state> PalettePainter<'state> {
             metrics,
             colors,
             note: None,
+            lines: &[],
             commands: Vec::new(),
         }
     }
@@ -71,6 +73,11 @@ impl<'state> PalettePainter<'state> {
     /// 置換の段の 1 行目のキーの案内の代わりに出す、全部の置換の短い 1 行（件数と確かめ・GitHub Issue #189）。
     pub(crate) fn with_note(self, note: Option<&'state str>) -> Self {
         Self { note, ..self }
+    }
+
+    /// 置換の段の条件の札の代わりに出す、全部の置換の内訳の行（注意は `true`・GitHub Issue #289）。
+    pub(crate) fn with_lines(self, lines: &'state [(String, bool)]) -> Self {
+        Self { lines, ..self }
     }
 
     /// 面・検索欄・試しの案内・候補の行の命令。`detail` は詳細ペインの開閉（開閉の操作の名前が変わる）。
@@ -355,11 +362,32 @@ impl<'state> PalettePainter<'state> {
             let left = row.origin().x().saturating_add(self.px(TEXT_INSET));
             self.text_at(from_left(row, left), text, color);
         }
+        // 全部の置換の件数を見せている間は、札の行に内訳を出す（札を替えれば確かめはやめる・GitHub Issue #289）。
+        if !self.lines.is_empty() {
+            self.breakdown();
+            return;
+        }
         let Some(chips) = self.layout.chips() else {
             return;
         };
         for (chip, (name, key, toggle)) in chips.into_iter().zip(FIND_CHIPS) {
             self.chip(chip, (name, key), toggle_is_on(options, toggle));
+        }
+    }
+
+    /// 全部の置換の内訳の行（2 行目から・注意は強調の色）。1 行目はキーの案内（件数と確かめ）。
+    fn breakdown(&mut self) {
+        let lines = self.lines;
+        let room = self.layout.visible().saturating_sub(1);
+        for (slot, (text, strong)) in lines.iter().enumerate().take(room) {
+            let row = self.layout.row(slot.saturating_add(1));
+            let left = row.origin().x().saturating_add(self.px(TEXT_INSET));
+            let color = if *strong {
+                self.colors.cursor()
+            } else {
+                self.colors.text()
+            };
+            self.text_at(from_left(row, left), text.clone(), color);
         }
     }
 
@@ -805,6 +833,35 @@ mod tests {
             shown.contains(&"大小を区別") && shown.contains(&"Alt+C"),
             "{shown:?}"
         );
+    }
+
+    /// 全部の置換の件数を見せている間は、条件の札の行に内訳を出し、注意は強調の色（GitHub Issue #289）。
+    #[test]
+    fn the_breakdown_takes_the_place_of_the_chips() {
+        let palette = CommandPalette::open_replace("980", "990", FindOptions::standard());
+        let lines = [
+            (String::from("“980”→“990” 3 セル"), false),
+            (String::from("一部だけ変わるセルあり"), true),
+        ];
+        let commands = palette.paint_replacing(
+            view(),
+            (colors(), DetailPane::Closed),
+            (Some("4 セルを置き換えます"), &lines),
+        );
+        let shown = texts(&commands);
+        assert!(shown.contains(&"“980”→“990” 3 セル") && shown.contains(&"一部だけ変わるセルあり"));
+        assert!(!shown.contains(&"大小を区別"), "{shown:?}");
+        let colored = |wanted: &str| {
+            commands.iter().find_map(|command| match command {
+                DrawCommand::Text { text, color, .. } if text == wanted => Some(*color),
+                DrawCommand::Text { .. }
+                | DrawCommand::Fill { .. }
+                | DrawCommand::Line { .. }
+                | DrawCommand::TextSpan { .. } => None,
+            })
+        };
+        assert_eq!(colored("一部だけ変わるセルあり"), Some(colors().cursor()));
+        assert_eq!(colored("“980”→“990” 3 セル"), Some(colors().text()));
     }
 
     /// 打っている欄だけ下辺を強調の色にして入力の印を置き、全部選んだ字の後ろは選択の色。Tab と欄を押すことで替わる

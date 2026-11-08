@@ -6,6 +6,7 @@ use alloc::vec::Vec;
 use nene_ledger_core::cell_change::CellChange;
 
 use crate::find_scope::FindScope;
+use crate::replace_breakdown::ReplaceBreakdown;
 
 /// 進んでいる全部の置換。探す問い（`scope`）と置き換える文字、数え始めたときの表の版、裏で数える仕事を合成ルートが
 /// 取ったか、進み具合、数え終えた書き換え（セルの書き換えと、そのセルのファイルの今の値）と飛ばしたレコードの数。
@@ -17,6 +18,8 @@ pub(crate) struct ReplaceRun {
     taken: bool,
     progress: Option<(u64, u64)>,
     counted: Option<(Vec<(CellChange, String)>, u64)>,
+    /// 数え終えた書き換えの内訳（確かめの行に出す・GitHub Issue #289）。
+    breakdown: Option<ReplaceBreakdown>,
 }
 
 impl ReplaceRun {
@@ -29,6 +32,7 @@ impl ReplaceRun {
             taken: false,
             progress: None,
             counted: None,
+            breakdown: None,
         }
     }
 
@@ -65,11 +69,19 @@ impl ReplaceRun {
     }
 
     pub(crate) fn set_counted(&mut self, changes: Vec<(CellChange, String)>, skipped: u64) {
+        let literal = !self.scope.query().options().regex();
+        self.breakdown = Some(ReplaceBreakdown::of(&changes, &self.replacement, literal));
         self.counted = Some((changes, skipped));
+    }
+
+    /// 数え終えた書き換えの内訳（件数を見せている間）。
+    pub(crate) const fn breakdown(&self) -> Option<&ReplaceBreakdown> {
+        self.breakdown.as_ref()
     }
 
     /// 数え終えた書き換えを取り出す（置き換えるとき）。
     pub(crate) fn take_counted(&mut self) -> Option<(Vec<(CellChange, String)>, u64)> {
+        self.breakdown = None;
         self.counted.take()
     }
 }
