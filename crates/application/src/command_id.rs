@@ -74,6 +74,8 @@ pub enum CommandId {
     Replace,
     /// 列の数が見出しと違う次の行へ（GitHub Issue #338）。
     NextRaggedRow,
+    /// 列の数が見出しと違う前の行へ（GitHub Issue #340）。
+    PreviousRaggedRow,
     /// 書き換えを保存する（ADR 0026 の決定 6）。
     Save,
     /// 名前を付けて保存する。
@@ -106,7 +108,7 @@ pub enum CommandId {
 
 impl CommandId {
     /// すべての操作（何も打たないときの順）。
-    pub const ALL: [Self; 44] = [
+    pub const ALL: [Self; 45] = [
         Self::Top,
         Self::Bottom,
         Self::GoTo,
@@ -136,6 +138,7 @@ impl CommandId {
         Self::FindPrevious,
         Self::Replace,
         Self::NextRaggedRow,
+        Self::PreviousRaggedRow,
         Self::Save,
         Self::SaveAs,
         Self::NewTable,
@@ -190,6 +193,7 @@ impl CommandId {
             Self::FindNext => "次を探す",
             Self::FindPrevious => "前を探す",
             Self::NextRaggedRow => "列の数が見出しと違う次の行へ",
+            Self::PreviousRaggedRow => "列の数が見出しと違う前の行へ",
             Self::Replace => "置き換える（探して）",
             Self::Save => "変えた所を保存する",
             Self::SaveAs => "名前を付けて保存する",
@@ -241,6 +245,7 @@ impl CommandId {
             Self::FindNext => "つぎをさがす",
             Self::FindPrevious => "まえをさがす",
             Self::NextRaggedRow => "れつのかずがみだしとちがうつぎのぎょうへ",
+            Self::PreviousRaggedRow => "れつのかずがみだしとちがうまえのぎょうへ",
             Self::Replace => "おきかえる",
             Self::Save => "かえたところをほぞんする",
             Self::SaveAs => "なまえをつけてほぞんする",
@@ -299,6 +304,7 @@ impl CommandId {
             Self::FindNext => &["find", "next", "search"],
             Self::FindPrevious => &["find", "previous", "back", "search"],
             Self::NextRaggedRow => &["ragged", "broken", "columns", "malformed", "next"],
+            Self::PreviousRaggedRow => &["ragged", "broken", "columns", "malformed", "previous"],
             Self::Replace => &["replace", "find", "okikae", "chikan"],
             Self::Save => &["save", "write"],
             Self::SaveAs => &["saveas", "save as", "export"],
@@ -343,7 +349,7 @@ impl CommandId {
             Self::Copy => &["複写"],
             Self::Cut => &["カット"],
             Self::Find | Self::FindNext | Self::FindPrevious => &["検索", "サーチ"],
-            Self::NextRaggedRow => &["壊れた行", "ずれ", "列数"],
+            Self::NextRaggedRow | Self::PreviousRaggedRow => &["壊れた行", "ずれ", "列数"],
             Self::Replace => &["置換", "検索", "書き換え"],
             Self::Save => &["上書き保存", "書き出し"],
             Self::SaveAs => &["別名", "エクスポート", "書き出し"],
@@ -392,6 +398,7 @@ impl CommandId {
             | Self::ShowKeys
             | Self::ShowAbout
             | Self::NextRaggedRow
+            | Self::PreviousRaggedRow
             | Self::InsertRowsBelow
             | Self::AppendRow
             | Self::InsertColumnsRight => None,
@@ -446,6 +453,7 @@ impl CommandId {
             | Self::FindPrevious
             | Self::Replace
             | Self::NextRaggedRow
+            | Self::PreviousRaggedRow
             | Self::Save
             | Self::SaveAs
             | Self::NewTable
@@ -491,7 +499,8 @@ impl CommandId {
             | Self::ShowKeys
             | Self::ShowAbout
             // 意図ではなく、パレットの結果 `FindRagged` で合成ルートが探す（GitHub Issue #338）。
-            | Self::NextRaggedRow => None,
+            | Self::NextRaggedRow
+            | Self::PreviousRaggedRow => None,
             Self::MoveColumnsLeft => Some(Intent::MoveColumns(ColumnShift::Left)),
             Self::MoveColumnsRight => Some(Intent::MoveColumns(ColumnShift::Right)),
             Self::ResetColumns => Some(Intent::ResetColumns),
@@ -539,7 +548,9 @@ mod tests {
             // 列の数が違う次の行へは、意図ではなくパレットの結果で探す（GitHub Issue #338）。
             assert_eq!(
                 command.intent().is_none(),
-                opens_a_list || command == CommandId::NextRaggedRow
+                opens_a_list
+                    || command == CommandId::NextRaggedRow
+                    || command == CommandId::PreviousRaggedRow
             );
             assert!(!opens_a_list || command.keys().is_none());
             // 「…」は次に選ぶか打つものがある操作。行へ飛ぶは入力欄を開く意図を持つ。

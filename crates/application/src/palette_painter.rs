@@ -876,7 +876,7 @@ mod tests {
         let commands = palette.paint(view(), colors(), DetailPane::Open);
         let shown = texts(&commands);
         assert!(shown.contains(&"操作の名前で絞る（例: 置換・haishoku・theme）"));
-        assert!(shown.contains(&"44 / 44"));
+        assert!(shown.contains(&"45 / 45"));
         assert!(shown.contains(&"詳細ペインを閉じる") && shown.contains(&"Ctrl+Shift+U"));
         assert!(shown.contains(&"文字を大きくする") && shown.contains(&"Ctrl+0"));
         // 選んでいる最初の行は選択の色で塗り、左に強調の色の 3px の帯。
@@ -928,7 +928,7 @@ mod tests {
         let commands = palette.paint(view(), colors(), DetailPane::Closed);
         let shown = texts(&commands);
         assert!(shown.contains(&"“xyz” に合う操作は無い"));
-        assert!(shown.contains(&"0 / 44") && shown.contains(&"xyz"));
+        assert!(shown.contains(&"0 / 45") && shown.contains(&"xyz"));
         assert!(fills(&commands, colors().selection()).is_empty());
     }
 
