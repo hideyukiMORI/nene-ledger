@@ -57,6 +57,7 @@ use crate::job_progress::JobProgress;
 use crate::job_report::JobReport;
 use crate::job_state::JobState;
 use crate::line_hit::LineHit;
+use crate::note_tone::NoteTone;
 use crate::notice::Notice;
 use crate::paste_notice::PasteNotice;
 use crate::paste_request::PasteRequest;
@@ -2192,6 +2193,20 @@ impl Document {
                     .map(|breakdown| breakdown.lines(run.replacement()))
             })
             .unwrap_or_default()
+    }
+
+    /// [`Self::replace_guide`] の知らせの種類（色・GitHub Issue #305）。数えている間と件数を見せている間・端から続けた
+    /// ことは確かめ（強調）、置き換えたことは済んだ（緑）、見つからない・置き換えなかった・止めた・読めないは注意（赤）。
+    #[must_use]
+    pub fn replace_guide_tone(&self) -> NoteTone {
+        if self.replacing.is_some() {
+            return NoteTone::Prompt;
+        }
+        match self.notice {
+            Some(Notice::Replace(ReplaceNotice::Replaced { .. })) => NoteTone::Done,
+            Some(Notice::Find(FindNotice::Wrapped)) | None => NoteTone::Prompt,
+            Some(_) => NoteTone::Problem,
+        }
     }
 
     /// 見つからなかったときの短い知らせ `head` に、絞り込む条件のうちオンのものを添える（GitHub Issue #291）。かなの区別は
@@ -9416,6 +9431,19 @@ mod tests {
             &document.frame(normal(), palette()),
             "Ctrl+Shift+P でコマンド",
         );
+    }
+
+    /// 欄の知らせの種類：数えている間と確かめは強調、置き換えたは緑、見つからない・置き換えなかったは赤（GitHub Issue #305）。
+    #[test]
+    fn the_guide_tone_tells_prompts_results_and_problems_apart() {
+        let mut document = indexed_editable();
+        assert_eq!(document.replace_guide_tone(), NoteTone::Prompt);
+        replacing_all(&mut document, "1", "#");
+        assert_eq!(document.replace_guide_tone(), NoteTone::Prompt);
+        document.apply(Intent::Confirm, normal());
+        assert_eq!(document.replace_guide_tone(), NoteTone::Done);
+        finding(&mut document, "zzz", true);
+        assert_eq!(document.replace_guide_tone(), NoteTone::Problem);
     }
 
     /// 件数を見せている間は、何が何に変わるかの内訳と、部分一致の注意を出す。置き換えれば消える（GitHub Issue #289）。

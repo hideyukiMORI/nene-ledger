@@ -66,6 +66,7 @@ pub mod job_state;
 pub mod key_guide;
 pub mod line_hit;
 pub mod located_record;
+pub mod note_tone;
 pub mod notice;
 pub mod palette_item;
 pub mod palette_layout;

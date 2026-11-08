@@ -14,6 +14,7 @@ use crate::detail_pane::DetailPane;
 use crate::find_toggle::FindToggle;
 use crate::go_to_target::GoToTarget;
 use crate::intent::Intent;
+use crate::note_tone::{GuideNote, NoteTone};
 use crate::palette_item::PaletteItem;
 use crate::palette_layout::PaletteLayout;
 use crate::palette_mode::PaletteMode;
@@ -491,21 +492,30 @@ impl CommandPalette {
         (colors, detail): (Palette, DetailPane),
         note: Option<&str>,
     ) -> Vec<DrawCommand> {
-        self.paint_replacing(view, (colors, detail), (note, &[]))
+        self.paint_replacing(
+            view,
+            (colors, detail),
+            GuideNote {
+                text: note,
+                tone: NoteTone::Prompt,
+                lines: &[],
+            },
+        )
     }
 
-    /// [`Self::paint_noted`] に、全部の置換の内訳の行 `lines`（条件の札の代わり・注意は `true`・GitHub Issue #289）を
-    /// 出した命令。
+    /// [`Self::paint_noted`] に、知らせの種類（色・GitHub Issue #305）と、全部の置換の内訳の行 `lines`（条件の札の代わり・
+    /// 注意は `true`・GitHub Issue #289）を足した命令。
     #[must_use]
     pub fn paint_replacing(
         &self,
         view: WindowView,
         (colors, detail): (Palette, DetailPane),
-        (note, lines): (Option<&str>, &[(String, bool)]),
+        note: GuideNote<'_>,
     ) -> Vec<DrawCommand> {
         PalettePainter::new(self, PaletteLayout::new(view, self), view.metrics(), colors)
-            .with_note(note)
-            .with_lines(lines)
+            .with_note(note.text)
+            .with_tone(note.tone)
+            .with_lines(note.lines)
             .paint(detail)
     }
 

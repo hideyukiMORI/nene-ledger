@@ -155,6 +155,14 @@ M2 は「探して置き換え、壊れた行を直す」束を含む（ROADMAP�
 - 見つからないときは、絞り込む条件のうちオンのもの（大小を区別・セル全体・正規表現・全角半角を区別。既定でオンのかなの区別は除く）を添える：「見つかりません（オン: 大小を区別・セル全体）」
 - パレットを開き直せば（Ctrl+F・Ctrl+H・Ctrl+G・Ctrl+Shift+P）、前の検索と置換の知らせを消す（前は行へ飛ぶ段にも「見つかりませんでした」が状態の行に残った）。長い知らせは今までどおり状態の行にも出す
 
+### 13. 欄の知らせは色で種類を分ける：確かめは強調、済んだは緑、注意と誤りは赤（2026-11-09 追記・GitHub Issue #305）
+
+> 専門家ペルソナ（見た目とアクセシビリティ）が 1 巡目・2 巡目とも「橙が確かめ・注意・完了・0 件のすべてに使われている」と指摘。施主の確認を待つ。
+
+- 配色の役割を 2 つ足す（ADR 0012 の導出・第 7 節の当たりの印と同じ作り）：**済んだ**（緑）と**注意**（赤）。配色の強調の色に依らない元の色（明るい配色は濃い緑と赤・暗い配色は明るい緑と赤）を、パレットの面と背景の上で 4.5 の比で読めるまで明暗の端へ寄せる
+- 強調の色（橙）はフォーカス・確かめ・進み具合だけ。「n セルを置き換えました」は緑、「見つかりません」「当たるセルがありません」「置き換えをやめました」、内訳の「一部だけ変わる」「消します」は赤
+- 色だけに頼らない：どの知らせも文で種類が分かる（「…ました」「…ません」）
+
 ## 強制
 
 - **active**（GitHub Issue #151 で入れた）:
@@ -199,6 +207,9 @@ M2 は「探して置き換え、壊れた行を直す」束を含む（ROADMAP�
   - 一部だけ変わる組は、少なくても必ず強調の行に出る。同じ数の組は前の値の順、答えは並びに依らない。いちばん長い行も案内の幅に収まる（application のテスト `partial_pairs_are_always_shown_apart_from_whole_cell_pairs`・`an_empty_replacement_warns_and_ties_are_stable`・`long_values_are_clipped_to_fit_the_guide`）。確かめの間の条件の切り替えでの数え直しは合成ルート（Xvfb で確かめた・自動の試験は無い）
 - **active**（GitHub Issue #300 で入れた）:
   - 箱を開いたとき、箱の下のカーソルを箱の外へ送り、下でなければ動かさない（application のテスト `opening_the_cover_reveals_the_cursor`）。下へ寄せた箱は状態の行の上（`a_lowered_panel_sits_at_the_bottom_with_the_same_rows`）
+- **active**（GitHub Issue #305 で入れた）:
+  - 125 配色すべてで、済んだと注意の字がパレットの面と背景の上で読め、互いに・本文の字から離れ、緑と赤の向きを保つ（core のテスト `every_builtin_theme_tells_success_and_danger_apart`）
+  - 知らせの種類（`the_guide_tone_tells_prompts_results_and_problems_apart`）と色（`notes_are_colored_by_their_tone`・`the_breakdown_takes_the_place_of_the_chips`）
 - **planned（実装の Issue で active にする）**:
   - 正規表現の逆戻りで止まらない（病的な式と入力の時間を測る・gate-proofs）
   - 1 GB の表で、最後の行にだけある値を見つける時間を DuckDB / qsv / EmEditor と同じファイルで記録（QLT-014。`grep` と `rg` との比べは benchmarks 第 8 節）

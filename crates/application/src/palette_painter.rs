@@ -23,6 +23,9 @@ use crate::command_palette::CommandPalette;
 use crate::detail_pane::DetailPane;
 use crate::find_toggle::FindToggle;
 use crate::go_to_target::GoToTarget;
+#[cfg(test)]
+use crate::note_tone::GuideNote;
+use crate::note_tone::NoteTone;
 use crate::palette_item::PaletteItem;
 use crate::palette_layout::{CHIP_MARK_COLUMNS, CHIP_PAD, FIND_CHIPS, PaletteLayout};
 use crate::palette_mode::PaletteMode;
@@ -48,6 +51,7 @@ pub(crate) struct PalettePainter<'state> {
     metrics: GlyphMetrics,
     colors: Palette,
     note: Option<&'state str>,
+    tone: NoteTone,
     lines: &'state [(String, bool)],
     commands: Vec<DrawCommand>,
 }
@@ -65,6 +69,7 @@ impl<'state> PalettePainter<'state> {
             metrics,
             colors,
             note: None,
+            tone: NoteTone::Prompt,
             lines: &[],
             commands: Vec::new(),
         }
@@ -73,6 +78,20 @@ impl<'state> PalettePainter<'state> {
     /// 置換の段の 1 行目のキーの案内の代わりに出す、全部の置換の短い 1 行（件数と確かめ・GitHub Issue #189）。
     pub(crate) fn with_note(self, note: Option<&'state str>) -> Self {
         Self { note, ..self }
+    }
+
+    /// 知らせの種類（色・GitHub Issue #305）。
+    pub(crate) fn with_tone(self, tone: NoteTone) -> Self {
+        Self { tone, ..self }
+    }
+
+    /// 知らせの種類の色：確かめは強調、済んだは緑、注意は赤。
+    fn tone_color(&self, tone: NoteTone) -> Color {
+        match tone {
+            NoteTone::Prompt => self.colors.cursor(),
+            NoteTone::Done => self.colors.success(),
+            NoteTone::Problem => self.colors.danger(),
+        }
     }
 
     /// 置換の段の条件の札の代わりに出す、全部の置換の内訳の行（注意は `true`・GitHub Issue #289）。
@@ -357,11 +376,8 @@ impl<'state> PalettePainter<'state> {
                 .saturating_add(field.size().width())
                 .saturating_sub(self.px(TEXT_INSET));
             let left = right.saturating_sub(self.width_of(note));
-            self.text_at(
-                from_left(field, left),
-                String::from(note),
-                self.colors.cursor(),
-            );
+            let color = self.tone_color(self.tone);
+            self.text_at(from_left(field, left), String::from(note), color);
         }
         if let PaletteMode::Replace { .. } = self.palette.mode() {
             let (text, color) = self.note.map_or_else(
@@ -371,7 +387,7 @@ impl<'state> PalettePainter<'state> {
                         self.colors.gutter_text(),
                     )
                 },
-                |note| (String::from(note), self.colors.cursor()),
+                |note| (String::from(note), self.tone_color(self.tone)),
             );
             let row = self.layout.row(0);
             let left = row.origin().x().saturating_add(self.px(TEXT_INSET));
@@ -398,7 +414,7 @@ impl<'state> PalettePainter<'state> {
             let row = self.layout.row(slot.saturating_add(1));
             let left = row.origin().x().saturating_add(self.px(TEXT_INSET));
             let color = if *strong {
-                self.colors.cursor()
+                self.colors.danger()
             } else {
                 self.colors.text()
             };
@@ -850,6 +866,31 @@ mod tests {
         );
     }
 
+    /// 欄の知らせは種類で色を分ける：確かめは強調、済んだは緑、注意は赤（GitHub Issue #305）。
+    #[test]
+    fn notes_are_colored_by_their_tone() {
+        let replace = CommandPalette::open_replace("b", "x", FindOptions::standard());
+        for (tone, wanted) in [
+            (NoteTone::Prompt, colors().cursor()),
+            (NoteTone::Done, colors().success()),
+            (NoteTone::Problem, colors().danger()),
+        ] {
+            let commands = replace.paint_replacing(
+                view(),
+                (colors(), DetailPane::Closed),
+                GuideNote {
+                    text: Some("知らせ"),
+                    tone,
+                    lines: &[],
+                },
+            );
+            assert!(commands.iter().any(|command| matches!(
+                command,
+                DrawCommand::Text { text, color, .. } if text == "知らせ" && *color == wanted
+            )));
+        }
+    }
+
     /// 全部の置換の件数を見せている間は、条件の札の行に内訳を出し、注意は強調の色（GitHub Issue #289）。
     #[test]
     fn the_breakdown_takes_the_place_of_the_chips() {
@@ -861,7 +902,11 @@ mod tests {
         let commands = palette.paint_replacing(
             view(),
             (colors(), DetailPane::Closed),
-            (Some("4 セルを置き換えます"), &lines),
+            GuideNote {
+                text: Some("4 セルを置き換えます"),
+                tone: NoteTone::Prompt,
+                lines: &lines,
+            },
         );
         let shown = texts(&commands);
         assert!(shown.contains(&"“980”→“990” 3 セル") && shown.contains(&"一部だけ変わるセルあり"));
@@ -875,7 +920,7 @@ mod tests {
                 | DrawCommand::TextSpan { .. } => None,
             })
         };
-        assert_eq!(colored("一部だけ変わるセルあり"), Some(colors().cursor()));
+        assert_eq!(colored("一部だけ変わるセルあり"), Some(colors().danger()));
         assert_eq!(colored("“980”→“990” 3 セル"), Some(colors().text()));
     }
 
