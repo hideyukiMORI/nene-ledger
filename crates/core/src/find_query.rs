@@ -10,8 +10,11 @@ use regex_automata::util::interpolate;
 use regex_automata::util::primitives::PatternID;
 use regex_automata::util::syntax;
 
+use crate::dialect::Dialect;
 use crate::find_folding::{fold_for_find, fold_with_origins};
 use crate::find_options::FindOptions;
+use crate::quoting::Quoting;
+use crate::text_units::TextUnits;
 
 /// 探す文字列と条件。セルの値（見えている値の文字列）が当たるかを決める。値は文字列のまま比べる（数や日付として
 /// 比べない・KEEP-01）。正規表現の条件なら式を組み立てて持つ（ADR 0031）。読めない式はどのセルにも当たらない。
@@ -171,12 +174,12 @@ impl FindQuery {
         has_long_match(regex, &fold_for_find(cell, self.options))
     }
 
-    /// ASCII だけの原本のレコードのバイト列 `raw`（区切りと引用を含む）のどのセルにも当たらないと言えるか。復号せずに
-    /// 照らす速い道（ADR 0030 の決定 4）。ASCII のセルを畳んでも ASCII のままなので、問いが ASCII でなければ当たらない。
-    /// ASCII の問いは、セルに当たればレコードのバイト列にも同じ字の並びがある（引用の中の `"` は二重になるので、`"` を
-    /// 含む問いでは言えない）。
+    /// 方言 `dialect` で書いた、ASCII だけの原本のレコードのバイト列 `raw`（区切りと引用を含む）のどのセルにも当たらないと
+    /// 言えるか。復号せずに照らす速い道（ADR 0030 の決定 4）。ASCII のセルを畳んでも ASCII のままなので、問いが ASCII で
+    /// なければ当たらない。ASCII の問いは、セルに当たれば、そのセルの値の字の並びがレコードに残っているかを方言で確かめる
+    /// （`record_lacks`・GitHub Issue #226）。
     #[must_use]
-    pub fn rules_out_ascii(&self, raw: &[u8]) -> bool {
+    pub fn rules_out_ascii(&self, raw: &[u8], dialect: &Dialect) -> bool {
         if self.options.regex() {
             // 式の字の並びがレコードに無いとは言えない（読めない式はどこにも当たらない）。
             return self.regex.is_none();
@@ -184,30 +187,12 @@ impl FindQuery {
         if self.folded.is_empty() || !self.folded.is_ascii() {
             return true;
         }
-        if self.folded.contains('"') {
-            return false;
-        }
-        let wanted = self.folded.as_bytes();
-        let Some(&first) = wanted.first() else {
-            return true;
-        };
-        let case = self.options.match_case();
-        let same = |left: u8, right: u8| {
-            if case {
-                left == right
-            } else {
-                left.eq_ignore_ascii_case(&right)
-            }
-        };
-        !raw.iter().enumerate().any(|(at, &byte)| {
-            same(byte, first)
-                && raw
-                    .get(at..at.saturating_add(wanted.len()))
-                    .is_some_and(|part| {
-                        part.len() == wanted.len()
-                            && part.iter().zip(wanted).all(|(&a, &b)| same(a, b))
-                    })
-        })
+        record_lacks(
+            raw,
+            *dialect,
+            self.folded.as_bytes(),
+            self.options.match_case(),
+        )
     }
 
     /// ASCII だけのセル `cell` が当たるか（問いも ASCII）。
@@ -243,6 +228,55 @@ fn compiled(text: &str, options: FindOptions) -> Option<Regex> {
         .syntax(syntax::Config::new().case_insensitive(!options.match_case()))
         .build(&pattern)
         .ok()
+}
+
+/// 方言 `dialect` で書いた ASCII だけのレコードのバイト列 `raw` の、どのセルの値にも ASCII の字の並び `wanted`（空でない）が
+/// 無いと言えるか（`match_case` が偽なら ASCII の大文字小文字を区別しない）。GitHub Issue #226。
+///
+/// 言えるのは、セルの値が「バイト列から引用符をいくつか抜いた字の並び」になるときだけ。
+/// - バックスラッシュで逃がす流儀で `\` があれば、逃がした字（`\,`・`\t`）が値では別の字になるので言えない
+/// - 引用符を使う流儀でバイト列に引用符があれば、引用符を含む問いは言えない（`""` は値で 1 つになる）。引用符を含まない
+///   問いは、バイト列から引用符を**すべて**抜いた並びで探す（閉じた引用符の後ろに字が続くと、値では前の字とつながる）。
+///   セルの値に問いがあれば、問いに引用符が無いので、引用符を抜いた並びにも同じ字の並びがある
+/// - 文字の単位が 2 バイトの文字コード（UTF-16）は ASCII のバイトが字を表さないので言えない（呼び手も除いている）
+fn record_lacks(raw: &[u8], dialect: Dialect, wanted: &[u8], match_case: bool) -> bool {
+    match dialect.units() {
+        TextUnits::SingleByte | TextUnits::ShiftJis => {}
+        TextUnits::Utf16Le | TextUnits::Utf16Be => return false,
+    }
+    let (escapes, quotes) = match dialect.quoting() {
+        Quoting::Doubled => (false, true),
+        Quoting::QuotedBackslash => (true, true),
+        Quoting::Backslash => (true, false),
+        Quoting::Plain => (false, false),
+    };
+    if escapes && raw.contains(&b'\\') {
+        return false;
+    }
+    let quote = dialect.quote();
+    if !quotes || !raw.contains(&quote) {
+        return !contains_ascii(raw, wanted, match_case);
+    }
+    if wanted.contains(&quote) {
+        return false;
+    }
+    let unquoted: Vec<u8> = raw.iter().copied().filter(|&byte| byte != quote).collect();
+    !contains_ascii(&unquoted, wanted, match_case)
+}
+
+/// バイト列 `haystack` に字の並び `wanted` があるか（`match_case` が偽なら ASCII の大文字小文字を区別しない）。空の並びは
+/// どこにでもある。
+fn contains_ascii(haystack: &[u8], wanted: &[u8], match_case: bool) -> bool {
+    if wanted.is_empty() {
+        return true;
+    }
+    haystack.windows(wanted.len()).any(|part| {
+        if match_case {
+            part == wanted
+        } else {
+            part.eq_ignore_ascii_case(wanted)
+        }
+    })
 }
 
 /// `haystack` に長さのある当たりがあるか（長さ 0 の当たりは当たりにしない・空の式がどのセルにも当たらないように）。
@@ -331,6 +365,7 @@ fn regex_replaced(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::delimiter::Delimiter;
 
     fn query(text: &str) -> FindQuery {
         FindQuery::new(text, FindOptions::standard())
@@ -364,14 +399,115 @@ mod tests {
     /// レコードのバイト列で除けるのは、どのセルにも当たらないときだけ（引用の `"` を含む問いは除かない）。
     #[test]
     fn a_record_is_ruled_out_only_when_no_cell_can_match() {
+        let csv = Dialect::rfc4180();
         let find = query("tokyo");
-        assert!(!find.rules_out_ascii(b"1,TOKYO,x"));
-        assert!(!find.rules_out_ascii(b"1,\"tokyo, jp\",x"));
-        assert!(find.rules_out_ascii(b"1,osaka,x"));
-        assert!(query("東京").rules_out_ascii(b"1,tokyo"));
-        assert!(!query("a\"b").rules_out_ascii(b"1,\"a\"\"b\""));
+        assert!(!find.rules_out_ascii(b"1,TOKYO,x", &csv));
+        assert!(!find.rules_out_ascii(b"1,\"tokyo, jp\",x", &csv));
+        assert!(find.rules_out_ascii(b"1,osaka,x", &csv));
+        assert!(query("東京").rules_out_ascii(b"1,tokyo", &csv));
+        assert!(!query("a\"b").rules_out_ascii(b"1,\"a\"\"b\"", &csv));
         let case = FindQuery::new("Tok", FindOptions::standard().toggled_case());
-        assert!(case.rules_out_ascii(b"tokyo") && !case.rules_out_ascii(b"Tokyo"));
+        assert!(case.rules_out_ascii(b"tokyo", &csv) && !case.rules_out_ascii(b"Tokyo", &csv));
+    }
+
+    /// セルの値がバイト列と違う字の並びになる方言では、その字の並びの問いでレコードを除かない（GitHub Issue #226）。
+    #[test]
+    fn a_record_is_not_ruled_out_where_the_dialect_rewrites_the_cell() {
+        let escaped = Dialect::new(Delimiter::COMMA, Quoting::Backslash, b'"').unwrap();
+        let single = Dialect::new(Delimiter::COMMA, Quoting::Doubled, b'\'').unwrap();
+        let csv = Dialect::rfc4180();
+        assert!(!query("a,b").rules_out_ascii(b"x,a\\,b,y", &escaped));
+        assert!(!query("a'b").rules_out_ascii(b"x,'a''b'", &single));
+        assert!(!query("bc").rules_out_ascii(b"x,\"ab\"cd", &csv));
+        // 引用符の無いレコードと、逃がす字の無いレコードは、今までどおり除ける。
+        assert!(query("bc").rules_out_ascii(b"x,ab,cd", &csv));
+        assert!(query("ab").rules_out_ascii(b"x,a,b", &escaped));
+        assert!(query("zz").rules_out_ascii(b"x,\"ab\"cd", &csv));
+    }
+
+    /// 種を固定した xorshift（テストは乱数の名前に頼らない・ARC-007）。
+    struct Xorshift(u64);
+
+    impl Xorshift {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13_u32;
+            self.0 ^= self.0 >> 7_u32;
+            self.0 ^= self.0 << 17_u32;
+            self.0
+        }
+
+        fn below(&mut self, bound: usize) -> usize {
+            usize::try_from(self.next() % u64::try_from(bound).unwrap()).unwrap()
+        }
+
+        fn pick<'a>(&mut self, choices: &[&'a str]) -> &'a str {
+            choices[self.below(choices.len())]
+        }
+    }
+
+    /// 無作為の字の並び（`length` 個まで）。
+    fn random_text(rng: &mut Xorshift, alphabet: &[&str], length: usize) -> String {
+        let count = rng.below(length.saturating_add(1));
+        (0..count).map(|_| rng.pick(alphabet)).collect()
+    }
+
+    /// レコードのバイト列 `raw` を方言 `dialect` で切ったセルの値（製品と同じ道：`sample_records` で切り、`value` で値に）。
+    fn cells_of(raw: &[u8], dialect: Dialect) -> Vec<String> {
+        let mut cells = Vec::new();
+        for record in crate::detecting::sample_records(raw, dialect, true) {
+            for &field in record.fields() {
+                cells.push(String::from_utf8(crate::value::value(raw, field, &dialect)).unwrap());
+            }
+        }
+        cells
+    }
+
+    /// 無作為の ASCII のレコード × 方言 × 問いで、除いたレコードのどのセルにも問いが当たらない（GitHub Issue #226）。
+    /// セルは製品と同じ道（`sample_records` で切り、`value` で値にする）で取り出す。
+    #[test]
+    fn a_ruled_out_record_has_no_matching_cell() {
+        use crate::unclosed_quote::UnclosedQuote;
+        const RAW: [&str; 10] = ["a", "b", "A", ",", "\"", "'", "\\", "t", "\t", " "];
+        const TEXT: [&str; 8] = ["a", "b", "B", ",", "\"", "'", "\\", "\t"];
+        let mut dialects = Vec::new();
+        for quoting in [
+            Quoting::Doubled,
+            Quoting::QuotedBackslash,
+            Quoting::Backslash,
+            Quoting::Plain,
+        ] {
+            for quote in *b"\"'" {
+                let dialect = Dialect::new(Delimiter::COMMA, quoting, quote).unwrap();
+                dialects.push(dialect);
+                dialects.push(dialect.with_unclosed_quote(UnclosedQuote::Literal));
+            }
+        }
+        let standard = FindOptions::standard();
+        let options = [
+            standard,
+            standard.toggled_case(),
+            standard.toggled_whole_cell(),
+        ];
+        let mut rng = Xorshift(0x2026_1108_0226);
+        let mut ruled_out = 0_usize;
+        for _ in 0..20_000_u32 {
+            let raw = random_text(&mut rng, &RAW, 12);
+            let text = random_text(&mut rng, &TEXT, 3);
+            let dialect = dialects[rng.below(dialects.len())];
+            let find = FindQuery::new(&text, options[rng.below(options.len())]);
+            if !find.rules_out_ascii(raw.as_bytes(), &dialect) {
+                continue;
+            }
+            ruled_out = ruled_out.saturating_add(1);
+            for cell in cells_of(raw.as_bytes(), dialect) {
+                assert!(
+                    !find.matches(&cell),
+                    "{raw:?} {dialect:?} {text:?} → {cell:?}"
+                );
+            }
+        }
+        // 除ける場合を十分に試している（どれも除かない実装でも通ってしまわないように）。
+        assert!(ruled_out > 5_000, "{ruled_out}");
     }
 
     /// 当たった所だけを替え、ほかの字（全角・半角カタカナ・大文字）は元のまま残す。
@@ -562,15 +698,16 @@ mod tests {
     /// 読めない式はどのセルにも当たらず、そう分かる。空の式は読めないのではなく、何も探さない。
     #[test]
     fn a_broken_regex_matches_nothing_and_says_so() {
+        let csv = Dialect::rfc4180();
         let broken = regex("(tok");
         assert!(broken.is_broken());
         assert!(!broken.matches("(tok"));
-        assert!(broken.rules_out_ascii(b"(tok"));
+        assert!(broken.rules_out_ascii(b"(tok", &csv));
         assert_eq!(broken.replaced("(tok", "x"), None);
         assert!(!regex("").is_broken() && regex("").is_empty());
         assert!(!query("(tok").is_broken() && query("(tok").matches("x(tokyo"));
         // 正規表現ではレコードのバイト列で除けない。
-        assert!(!regex("t.k").rules_out_ascii(b"1,tak,x"));
+        assert!(!regex("t.k").rules_out_ascii(b"1,tak,x", &csv));
     }
 
     /// 正規表現でも、置き換えられるのは当たるセルだけ。ASCII の速い道と畳んだ写しの道は同じ答え。
