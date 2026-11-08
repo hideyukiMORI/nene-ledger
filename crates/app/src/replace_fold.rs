@@ -81,7 +81,9 @@ impl RecordFold for ReplaceFold {
             return;
         }
         if self.format.encoding().keeps_ascii()
-            && self.scope.skips_ascii_record(row, record.bytes())
+            && self
+                .scope
+                .skips_ascii_record(row, record.bytes(), &self.format.dialect())
         {
             return;
         }

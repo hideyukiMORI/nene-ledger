@@ -8,6 +8,7 @@ use nene_ledger_core::cell_change::CellChange;
 use nene_ledger_core::cell_edits::CellEdits;
 use nene_ledger_core::cell_value::CellValue;
 use nene_ledger_core::column_id::ColumnId;
+use nene_ledger_core::dialect::Dialect;
 use nene_ledger_core::find_query::FindQuery;
 use nene_ledger_core::row_id::RowId;
 
@@ -44,10 +45,11 @@ impl FindScope {
         self.columns.len()
     }
 
-    /// 原本の行 `row` を、ASCII だけのレコードのバイト列 `raw` から照らさずに除けるか（書き換えた行は除かない）。
+    /// 原本の行 `row` を、方言 `dialect` で書いた ASCII だけのレコードのバイト列 `raw` から照らさずに除けるか（書き換えた
+    /// 行は除かない）。
     #[must_use]
-    pub fn skips_ascii_record(&self, row: RowId, raw: &[u8]) -> bool {
-        !self.edits.touches_row(row) && raw.is_ascii() && self.query.rules_out_ascii(raw)
+    pub fn skips_ascii_record(&self, row: RowId, raw: &[u8], dialect: &Dialect) -> bool {
+        !self.edits.touches_row(row) && raw.is_ascii() && self.query.rules_out_ascii(raw, dialect)
     }
 
     /// 行 `row` の表示の列 `columns` のうち、左から見て最初に当たる列。`source` は原本の `n` 列目の値（無ければ `None`）。
