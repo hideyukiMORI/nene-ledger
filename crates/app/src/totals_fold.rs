@@ -17,6 +17,8 @@ pub(crate) struct TotalsFold {
     bands: Vec<RowBand>,
     header: Option<HeaderRows>,
     format: TextFormat,
+    /// 見出しのセルの数（違う行を数える・GitHub Issue #329）。
+    expected: Option<usize>,
 }
 
 impl TotalsFold {
@@ -27,7 +29,13 @@ impl TotalsFold {
             bands,
             header,
             format,
+            expected: None,
         }
+    }
+
+    /// 列の数が見出しのセルの数 `expected` と違う行を数える（GitHub Issue #329）。
+    pub(crate) fn with_expected(self, expected: Option<usize>) -> Self {
+        Self { expected, ..self }
     }
 
     /// 数えた集計。
@@ -46,6 +54,9 @@ impl RecordFold for TotalsFold {
         };
         let dialect = self.format.dialect();
         let fields = record.record().fields();
+        if let Some(expected) = self.expected {
+            self.stats.add_shape(fields.len(), expected);
+        }
         for &field in band
             .columns()
             .iter()
@@ -137,5 +148,35 @@ mod tests {
         // 見出しの 2 行（売上・今年 / 前年）を除いた 4 つの数だけ（ADR 0034）。1 行の見出しなら 2 行目が混ざる。
         assert_eq!(count(HeaderRows::new(0, 2)), (4, 4));
         assert_eq!(count(Some(HeaderRows::single(0))), (6, 4));
+    }
+
+    /// 列の数が見出しと違う行（足りない・多い）を、裏の集計でも数える（GitHub Issue #329）。見出しのセルの数を渡さなければ
+    /// 数えない。
+    #[test]
+    fn rows_with_another_number_of_cells_are_counted() {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("fixtures")
+            .join("ragged.csv");
+        let source = Source::open(&path).unwrap();
+        let format = guess_format(&source).unwrap().format();
+        let from = IndexedSource::new(source, SparseIndex::empty(), format);
+        let range = RecordRange::new(0, 100);
+        let columns = 0..=2_usize;
+        let count = |expected| {
+            let mut fold = TotalsFold::new(
+                vec![RowBand::new(0..=u64::MAX, vec![columns.clone()])],
+                Some(HeaderRows::single(0)),
+                format,
+            )
+            .with_expected(expected);
+            let flow = fold_range(&from, range.chunks(2), &mut fold, |_| {
+                ControlFlow::Continue(())
+            });
+            assert_eq!(flow.unwrap(), ControlFlow::Continue(()));
+            fold.stats()
+        };
+        assert_eq!(count(Some(3)).ragged_rows(), 2);
+        assert_eq!(count(None).ragged_rows(), 0);
+        assert_eq!(count(Some(3)).cells(), 11);
     }
 }
