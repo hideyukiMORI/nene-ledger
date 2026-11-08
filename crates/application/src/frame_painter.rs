@@ -43,6 +43,10 @@ pub(crate) struct FramePainter<'view> {
     edits: Option<&'view CellEdits>,
     editing: Option<&'view EditingCell>,
     found: Option<&'view FindQuery>,
+    /// 固定した見出しの行の位置（これより上の本体の行は前書き・OPEN-11）。
+    header_line: Option<u64>,
+    /// 今描いている行が前書きか（字を薄くする・GitHub Issue #273）。
+    preamble: bool,
     commands: Vec<DrawCommand>,
     overlays: Vec<DrawCommand>,
 }
@@ -84,6 +88,8 @@ impl<'view> FramePainter<'view> {
             edits: None,
             editing: None,
             found: None,
+            header_line: None,
+            preamble: false,
             commands: Vec::new(),
             overlays: Vec::new(),
         }
@@ -147,6 +153,7 @@ impl<'view> FramePainter<'view> {
             PixelRect::new(PixelPoint::new(0, 0), self.size),
             self.palette.background(),
         );
+        self.header_line = header.map(ViewRow::line);
         let visible = self.layout.rows_in(self.size.height());
         let fixed = header
             .map(|row| (row, RowStyle::Header))
@@ -193,17 +200,8 @@ impl<'view> FramePainter<'view> {
         );
     }
 
-    /// 1 行。罫線の色で行の帯（表の幅まで）を塗り、その上にセルを塗って、残った 1 画素を罫線にする。
-    fn paint_row(&mut self, index: usize, row: &ViewRow, style: RowStyle) {
-        let gutter = self.layout.gutter_rect(index);
-        let band = PixelRect::new(
-            PixelPoint::new(0, gutter.origin().y()),
-            PixelSize::new(
-                self.layout.table_width().min(self.size.width()),
-                self.layout.row_height(),
-            ),
-        );
-        self.fill(band, self.palette.grid());
+    /// 行 `row`（`style`）の行番号の欄 `gutter`。選んだ行は選択の色、足した行の番号は強調の色、前書きの行の番号は薄く。
+    fn paint_gutter(&mut self, gutter: PixelRect, row: &ViewRow, style: RowStyle) {
         // 選んだ行の行番号は選択の色にする（色以外の位置の手がかり）。
         let (gutter_fill, gutter_ink) = match style {
             RowStyle::Body(body) if self.covers_row(body) => {
@@ -213,9 +211,10 @@ impl<'view> FramePainter<'view> {
                 (self.palette.gutter(), self.palette.gutter_text())
             }
         };
-        // 足した行の番号は強調の色にする（ADR 0027 の決定 1）。
+        // 足した行の番号は強調の色にする（ADR 0027 の決定 1）。前書きの行の番号は薄く。
         let gutter_ink = match row.row() {
             RowId::Added(_) => self.palette.cursor(),
+            RowId::Source(_) if self.preamble => gutter_ink.mixed(gutter_fill, MARK_FADE),
             RowId::Source(_) => gutter_ink,
         };
         self.fill(gutter, gutter_fill);
@@ -224,6 +223,23 @@ impl<'view> FramePainter<'view> {
             let shown = row.line().saturating_add(1).to_string();
             self.text(gutter, &shown, gutter_ink);
         }
+    }
+
+    /// 1 行。罫線の色で行の帯（表の幅まで）を塗り、その上にセルを塗って、残った 1 画素を罫線にする。
+    fn paint_row(&mut self, index: usize, row: &ViewRow, style: RowStyle) {
+        // 見出しの行より上の本体の行は前書き：字と行番号を薄くする（OPEN-11・GitHub Issue #273）。
+        self.preamble = matches!(style, RowStyle::Body(_))
+            && self.header_line.is_some_and(|header| row.line() < header);
+        let gutter = self.layout.gutter_rect(index);
+        let band = PixelRect::new(
+            PixelPoint::new(0, gutter.origin().y()),
+            PixelSize::new(
+                self.layout.table_width().min(self.size.width()),
+                self.layout.row_height(),
+            ),
+        );
+        self.fill(band, self.palette.grid());
+        self.paint_gutter(gutter, row, style);
         let mut cursor = None;
         for column in self.layout.visible_columns() {
             let Some(rect) = self.layout.cell_rect(index, column) else {
@@ -564,10 +580,16 @@ impl<'view> FramePainter<'view> {
                 &fitted_spans(text, &shown, found),
                 (self.palette.found_text(), self.palette.found_ink()),
             );
+            // 前書きの行の字は、字の色と背景の中間（OPEN-11・GitHub Issue #273）。
+            let ink = if self.preamble {
+                self.palette.text().mixed(background, MARK_FADE)
+            } else {
+                self.palette.text()
+            };
             self.commands.push(DrawCommand::Text {
                 baseline,
                 text: shown,
-                color: self.palette.text(),
+                color: ink,
                 clip: rect,
                 role: TextRole::Content,
             });
@@ -672,7 +694,7 @@ fn scrolled_to_caret(text: &str, caret: u32, room: u32) -> (String, u32) {
 }
 
 /// 見えない字の印の字の色を、字の色からセルの背景へ寄せる割合（百分率・GitHub Issue #269）。
-const MARK_FADE: u8 = 50;
+pub(crate) const MARK_FADE: u8 = 50;
 
 /// 元の値 `value` を表示の 1 行にしたときの、見えない字の印の範囲（長い値は数えない・当たった字と同じ約束）。
 fn marks_in(value: &str) -> Vec<Range<usize>> {

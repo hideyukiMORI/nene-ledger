@@ -269,6 +269,7 @@ impl Document {
         let mut widths = ColumnWidths::fit(&[]);
         let shown: Vec<&ViewRow> = header.iter().chain(view.rows()).collect();
         widen_to(&mut widths, &shown);
+        let first_data = header.as_ref().map_or(0, ViewRow::line);
         Self {
             title,
             format,
@@ -277,7 +278,9 @@ impl Document {
             view,
             first_column: 0,
             frozen: 0,
-            selection: Selection::at(CellPosition::new(0, 0)),
+            // 前書きの行があれば、カーソルはその後ろのデータの 1 行目（本体の「前書きの行の数」番目・OPEN-11・GitHub
+            // Issue #273）。表示の先頭は動かさない（前書きも見える）。
+            selection: Selection::at(CellPosition::new(first_data, 0)),
             detail: DetailPane::Open,
             notice: None,
             cuts: Vec::new(),
@@ -5718,6 +5721,9 @@ mod tests {
         // 前書き 1 行（レコード 0）、見出しはレコード 1。本体の 0〜1 番目はレコード 0 と 2。
         let rows = table(&[&["note"], &["id"], &["1"]]);
         let mut document = Document::open(String::from("t"), summary(), Some(1), rows.clone());
+        // 開いたときのカーソルはデータの 1 行目（GitHub Issue #273）。前書きの行へ上がってから広げる。
+        assert_eq!(document.selection().cursor(), CellPosition::new(1, 0));
+        document.apply(moving(CursorStep::Up), normal());
         document.apply(
             Intent::Move {
                 step: CursorStep::Down,
@@ -9781,5 +9787,30 @@ mod tests {
         let width = document.bars(middle).body().size().width();
         assert!(layout.column_right(5).is_some_and(|right| right <= width));
         assert!(document.first_column > frozen && document.first_column < far);
+    }
+
+    /// 前書きの行（見出しの行より上）は字と行番号を薄く描き、データの行はふつう。開いたときのカーソルはデータの 1 行目
+    /// （OPEN-11・GitHub Issue #273）。
+    #[test]
+    fn preamble_rows_are_faded_and_the_cursor_starts_on_data() {
+        let rows = table(&[&["売上集計"], &["作成日"], &["地域"], &["東京"]]);
+        let document = closed(Document::open(String::from("t"), summary(), Some(2), rows));
+        assert_eq!(document.selection().cursor(), CellPosition::new(2, 0));
+        let frame = document.frame(normal(), palette());
+        let ink_of = |wanted: &str| {
+            frame.commands().iter().find_map(|command| match command {
+                DrawCommand::Text { text, color, .. } if text == wanted => Some(*color),
+                DrawCommand::Fill { .. }
+                | DrawCommand::Text { .. }
+                | DrawCommand::Line { .. }
+                | DrawCommand::TextSpan { .. } => None,
+            })
+        };
+        // 前書きの字は、字の色をそのセルの背景（カーソルの列なら帯の色）へ寄せた色で、ふつうの字の色ではない。
+        let text = Some(palette().text());
+        assert!(ink_of("売上集計").is_some() && ink_of("売上集計") != text);
+        assert!(ink_of("作成日").is_some() && ink_of("作成日") != text);
+        assert_eq!(ink_of("東京"), Some(palette().text()));
+        assert_eq!(ink_of("地域"), Some(palette().text()));
     }
 }
