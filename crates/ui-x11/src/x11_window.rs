@@ -31,6 +31,7 @@ use crate::pointer_at::PointerAt;
 use crate::ui_failure::UiFailure;
 use crate::uri_list::file_paths;
 use crate::window_atoms::WindowAtoms;
+use crate::x_resources::text_scale;
 use crate::x11_wakeup::X11Wakeup;
 use crate::xdnd_atoms::{XDND_VERSION, XdndAtoms};
 
@@ -131,6 +132,25 @@ impl X11Window {
             pending_wake: Arc::new(AtomicBool::new(false)),
             keys,
         })
+    }
+
+    /// OS の文字の倍率（百分率）。root の `RESOURCE_MANAGER` の `Xft.dpi` から（96 で 100）。読めなければ 100
+    /// （A11Y-03・GitHub Issue #263）。
+    pub(crate) fn text_scale(&self) -> u32 {
+        let length = u32::try_from(self.connection.maximum_request_bytes() / 4).unwrap_or(u32::MAX);
+        self.connection
+            .get_property(
+                false,
+                self.root,
+                AtomEnum::RESOURCE_MANAGER,
+                AtomEnum::STRING,
+                0,
+                length,
+            )
+            .ok()
+            .and_then(|cookie| cookie.reply().ok())
+            .and_then(|reply| text_scale(&String::from_utf8_lossy(&reply.value)))
+            .unwrap_or(100)
     }
 
     /// サーバからキーの対応表を受け取る。

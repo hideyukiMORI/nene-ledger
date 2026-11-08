@@ -24,4 +24,5 @@ mod viewport;
 mod window_atoms;
 mod x11_wakeup;
 mod x11_window;
+mod x_resources;
 mod xdnd_atoms;

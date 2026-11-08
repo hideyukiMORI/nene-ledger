@@ -35,6 +35,19 @@ impl ZoomLevel {
         STEPS.get(self.step).copied().unwrap_or(100)
     }
 
+    /// この大きさに OS の文字の倍率 `percent`（百分率・100 で変えない）を掛けた、いちばん近い段（同じ近さなら小さい
+    /// 方・端で止まる・A11Y-03・GitHub Issue #263）。
+    #[must_use]
+    pub fn scaled(self, percent: u32) -> Self {
+        let wanted = u64::from(self.percent()).saturating_mul(u64::from(percent)) / 100;
+        let step = STEPS
+            .iter()
+            .enumerate()
+            .min_by_key(|&(_, &step)| u64::from(step).abs_diff(wanted))
+            .map_or(HUNDRED, |(index, _)| index);
+        Self { step }
+    }
+
     /// `step` で変えた大きさ。端では止まる。
     #[must_use]
     pub fn stepped(self, step: ZoomStep) -> Self {
@@ -78,5 +91,23 @@ mod tests {
             Some(125)
         );
         assert_eq!(ZoomLevel::from_percent(123), None);
+    }
+
+    /// OS の倍率を掛けて、いちばん近い段に寄せる。同じ近さなら小さい方。端で止まる（GitHub Issue #263）。
+    #[test]
+    fn os_text_scale_picks_the_nearest_step() {
+        let percent = |zoom: ZoomLevel, scale: u32| zoom.scaled(scale).percent();
+        let hundred = ZoomLevel::hundred();
+        assert_eq!(percent(hundred, 100), 100);
+        assert_eq!(percent(hundred, 125), 125);
+        assert_eq!(percent(hundred, 140), 150);
+        assert_eq!(percent(hundred, 225), 200);
+        // 150% × 150% = 225% は 200 と 250 のちょうど真ん中なので、小さい方。
+        assert_eq!(percent(ZoomLevel::from_percent(150).unwrap(), 150), 200);
+        assert_eq!(percent(ZoomLevel::from_percent(300).unwrap(), 225), 300);
+        assert_eq!(percent(ZoomLevel::from_percent(50).unwrap(), 100), 50);
+        assert_eq!(percent(hundred, 0), 50);
+        // 90% × 125% = 112.5% は 110 と 125 の間で 110 の方が近い。
+        assert_eq!(percent(ZoomLevel::from_percent(90).unwrap(), 125), 110);
     }
 }

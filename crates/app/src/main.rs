@@ -261,12 +261,18 @@ fn run_window(
     if let Some(message) = warning {
         report(&message);
     }
+    // OS の文字の大きさ（Windows の「テキストを大きくする」・X11 の `Xft.dpi`）を起動時に読む（A11Y-03・GitHub Issue #263）。
+    #[cfg(windows)]
+    let text_scale = nene_ledger_adapters_windows::text_scale::read();
+    #[cfg(not(windows))]
+    let text_scale = ui.text_scale();
     let mut viewer = viewer::Viewer::new(
         document,
         workers::Workers::new(job, ticker),
         reader,
         preferences,
-    );
+    )
+    .with_text_scale(text_scale);
     ui.run(&mut viewer)
         .map_err(|failure| format!("窓が止まった: {failure:?}"))
 }
