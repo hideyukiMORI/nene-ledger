@@ -348,6 +348,21 @@ impl<'state> PalettePainter<'state> {
             let left = right.saturating_sub(self.width_of(&text));
             self.text_at(from_left(field, left), text, self.colors.cursor());
         }
+        // 探す段の知らせ（見つからない・端から続けた）は欄の右端に、その場で（GitHub Issue #291）。
+        if let (PaletteMode::Find, Some(note)) = (self.palette.mode(), self.note) {
+            let field = self.layout.field();
+            let right = field
+                .origin()
+                .x()
+                .saturating_add(field.size().width())
+                .saturating_sub(self.px(TEXT_INSET));
+            let left = right.saturating_sub(self.width_of(note));
+            self.text_at(
+                from_left(field, left),
+                String::from(note),
+                self.colors.cursor(),
+            );
+        }
         if let PaletteMode::Replace { .. } = self.palette.mode() {
             let (text, color) = self.note.map_or_else(
                 || {
@@ -1043,9 +1058,13 @@ mod tests {
                 DrawCommand::Text { text, color, .. } if text == note && *color == colors().cursor()
             )));
         }
+        // 探す段の知らせは、欄の右端に強調の色で（GitHub Issue #291）。
         let find = CommandPalette::open_find("b", FindOptions::standard());
-        let commands = find.paint_noted(view(), (colors(), DetailPane::Closed), Some(notes[0]));
-        assert!(!texts(&commands).contains(&notes[0]));
+        let note = "見つかりません（オン: セル全体）";
+        let commands = find.paint_noted(view(), (colors(), DetailPane::Closed), Some(note));
+        let field = PaletteLayout::new(view(), &find).field();
+        assert!(texts_in(&commands, field).contains(&note));
+        assert!(display_columns(note) <= GUIDE_COLUMNS);
     }
 
     /// 「このアプリについて…」で版・著作権・ライセンスの行を出す。どの行もパレットの幅に収まる（ADR 0032・Issue #179）。

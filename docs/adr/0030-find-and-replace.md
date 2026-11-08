@@ -135,6 +135,14 @@ M2 は「探して置き換え、壊れた行を直す」束を含む（ROADMAP�
 - 見つけた事故：980 → 990 の部分一致の全部の置換は、1980 と 29800 も変える（#285 の f4-33count）。内訳で 29800→29900 が 2 番目に見えた
 - 選ばなかった形：「セル全体の一致 n・部分一致 m」の数だけ（操作設計の推し）。値が見える方が気づきやすい。プレビューの表（決定 6 でフェーズ 2）は残す
 
+### 12. 見つからない・置き換えなかったことは、欄の中でその場に言う（2026-11-09 追記・GitHub Issue #291）
+
+> 第 8 節と同じく、専門家ペルソナの推しで作った。施主の確認を待つ。
+
+- 探す段は欄の右端に、置換の段は 1 行目に、強調の色で短く言う：「見つかりません」「当たるセルがありません」「表の端から続けて見つけました」「置き換えをやめました」など。前は「置き換えませんでした（訳は下の状態の行）」と目を状態の行へ送っていた（GNOME HIG の「No results をその場で」）
+- 見つからないときは、絞り込む条件のうちオンのもの（大小を区別・セル全体・正規表現・全角半角を区別。既定でオンのかなの区別は除く）を添える：「見つかりません（オン: 大小を区別・セル全体）」
+- パレットを開き直せば（Ctrl+F・Ctrl+H・Ctrl+G・Ctrl+Shift+P）、前の検索と置換の知らせを消す（前は行へ飛ぶ段にも「見つかりませんでした」が状態の行に残った）。長い知らせは今までどおり状態の行にも出す
+
 ## 強制
 
 - **active**（GitHub Issue #151 で入れた）:
@@ -173,6 +181,8 @@ M2 は「探して置き換え、壊れた行を直す」束を含む（ROADMAP�
 - **active**（GitHub Issue #289 で入れた）:
   - 内訳はセルの数の多い順で、書き換えの並びに依らない。部分一致と空の置換の注意、長い値の切り詰めと行の幅（application のテスト `a_partial_match_shows_the_unintended_pair_and_a_warning`・`an_empty_replacement_warns_and_the_rest_are_counted`・`long_values_are_clipped_to_fit_the_guide`）
   - 件数を見せている間だけ内訳があり、置き換えれば消える（`replacing_all_shows_what_changes_into_what`）。札の行に出し、注意は強調の色（`the_breakdown_takes_the_place_of_the_chips`）
+- **active**（GitHub Issue #291 で入れた）:
+  - 見つからないことをオンの条件を添えて言い、開き直せば消える（application のテスト `nothing_found_is_said_in_place_with_the_narrowing_conditions`）。探す段は欄の右端に出す（`the_replace_step_shows_the_count_and_the_confirmation_in_place_of_its_keys`）
 - **planned（実装の Issue で active にする）**:
   - 正規表現の逆戻りで止まらない（病的な式と入力の時間を測る・gate-proofs）
   - 1 GB の表で、最後の行にだけある値を見つける時間を DuckDB / qsv / EmEditor と同じファイルで記録（QLT-014。`grep` と `rg` との比べは benchmarks 第 8 節）
