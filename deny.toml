@@ -26,7 +26,8 @@ version = 2
 #      （Issue #55 で windows 0.62.2 と windows-numerics 0.3.1 とそれらが連れてくる windows-core・windows-implement・
 #                         windows-interface・windows-link・windows-result・windows-strings・windows-collections・windows-future・
 #                         windows-threading・proc-macro2・quote・syn。どれも Apache-2.0 か MIT を選べる。ADR 0016）
-#      （GitHub Issue #171 で regex-automata 0.4.18 と、それが連れてくる regex-syntax 0.8.11。どちらも MIT OR Apache-2.0・ADR 0031）
+#      （GitHub Issue #171 で regex-automata 0.4.18 と、それが連れてくる regex-syntax 0.8.11。どちらも MIT OR Apache-2.0・ADR 0031。
+#                         GitHub Issue #223 で regex-syntax を core の直接の依存にも書いた・同じ版で、配るクレートは増えない）
 #      Unicode-3.0 — unicode-ident だけ（syn が引く。windows-implement / windows-interface の手続きマクロの組み立て時の依存で、
 #                         配布物には入らない・`(MIT OR Apache-2.0) AND Unicode-3.0`）
 #    🔴 配布物にはこれらの著作権表示を添える。Windows の exe に入るクレートの一覧と本文は THIRD-PARTY-NOTICES.txt
