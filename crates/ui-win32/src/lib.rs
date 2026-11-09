@@ -32,4 +32,6 @@ pub mod win32_failure;
 #[cfg(windows)]
 mod win32_wakeup;
 #[cfg(windows)]
+mod window_icon;
+#[cfg(windows)]
 mod window_state;
