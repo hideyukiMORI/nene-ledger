@@ -1,41 +1,40 @@
-//! 方言の判別に確信が無いときの、上位 2 つの点数。
+//! 方言の判別に確信が無いときの、1 位と競う相手。
 
 use nene_ledger_core::detection::Detection;
+use nene_ledger_core::dialect::Dialect;
 use nene_ledger_core::dialect_candidate::DialectCandidate;
 
-/// 方言の判別に確信が無いときの、1 位と 2 位の点数（千分率）。開いたときに状態の行で知らせ、候補から選ぶ入口を示す（FR-023・Issue #3）。
+/// 方言の判別に確信が無いときの、1 位と競う相手の読み方。開いたときに状態の行で、何と何で迷ったかを知らせ、
+/// 候補から選ぶ入口を示す（FR-023・Issue #3・GitHub Issue #381）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct DialectDoubt {
-    top: u32,
-    second: u32,
+    top: DialectCandidate,
+    rival: Option<DialectCandidate>,
 }
 
 impl DialectDoubt {
     /// 判別 `detection` に確信が無ければ、1 位と、競う候補（`Detection::rival`・引用の逃がし方だけが違う候補は除く）の
-    /// 点数。確信があれば `None`。1 位が 0 点（どの区切りでも 1 列にしか切れない・空のファイル）なら、迷う読み方が
+    /// 読み方。確信があれば `None`。1 位が 0 点（どの区切りでも 1 列にしか切れない・空のファイル）なら、迷う読み方が
     /// 無いので知らせない（GitHub Issue #24）。
     pub(crate) fn of(detection: &Detection) -> Option<Self> {
-        let top = detection
-            .candidates()
-            .first()
-            .map_or(0, |candidate| candidate.score());
-        if detection.confident() || top == 0 {
+        let top = detection.candidates().first().copied()?;
+        if detection.confident() || top.score() == 0 {
             return None;
         }
         Some(Self {
             top,
-            second: detection.rival().map_or(0, DialectCandidate::score),
+            rival: detection.rival(),
         })
     }
 
-    /// 1 位の点数（千分率）。
-    pub(crate) fn top(self) -> u32 {
-        self.top
+    /// 開いた読み方（1 位）。
+    pub(crate) fn top(self) -> Dialect {
+        self.top.dialect()
     }
 
-    /// 2 位の点数（千分率）。
-    pub(crate) fn second(self) -> u32 {
-        self.second
+    /// 1 位と競った読み方。
+    pub(crate) fn rival(self) -> Option<Dialect> {
+        self.rival.map(DialectCandidate::dialect)
     }
 }
 
@@ -51,9 +50,12 @@ mod tests {
         let tie = Detection::of(b"a,b;c\nd,e;f\ng,h;i\nj,k;l\n");
         let doubt = DialectDoubt::of(&tie).unwrap();
         assert!(!tie.confident());
-        assert_eq!(doubt.top(), tie.candidates()[0].score());
-        assert_eq!(doubt.second(), tie.candidates()[1].score());
-        assert!(doubt.top().saturating_sub(doubt.second()) < 100);
+        assert_eq!(doubt.top(), tie.candidates()[0].dialect());
+        assert_eq!(doubt.rival(), Some(tie.candidates()[1].dialect()));
+        assert_ne!(
+            doubt.top().delimiter(),
+            tie.candidates()[1].dialect().delimiter()
+        );
     }
 
     /// 空のファイルと 1 列のファイルは、迷う読み方が無いので知らせない（GitHub Issue #24）。

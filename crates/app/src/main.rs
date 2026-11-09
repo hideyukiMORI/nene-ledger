@@ -293,7 +293,7 @@ fn first_document(opened: &mut opening::Opened) -> nene_ledger_application::docu
     if let Some(doubt) = opened.doubt() {
         document.notify(Notice::DialectUnsure {
             top: doubt.top(),
-            second: doubt.second(),
+            rival: doubt.rival(),
         });
     }
     if opened.looks_binary() {
