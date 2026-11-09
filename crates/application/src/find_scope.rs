@@ -9,6 +9,7 @@ use nene_ledger_core::cell_edits::CellEdits;
 use nene_ledger_core::cell_value::CellValue;
 use nene_ledger_core::column_id::ColumnId;
 use nene_ledger_core::dialect::Dialect;
+use nene_ledger_core::find_options::FindOptions;
 use nene_ledger_core::find_query::FindQuery;
 use nene_ledger_core::row_id::RowId;
 
@@ -20,6 +21,8 @@ pub struct FindScope {
     query: FindQuery,
     columns: Vec<ColumnId>,
     edits: CellEdits,
+    /// 値の問いの代わりに、列の数がこれと違う原本の行（の 1 列目）に当たる（列の数が見出しと違う次の行へ・GitHub Issue #338）。
+    shape: Option<usize>,
 }
 
 impl FindScope {
@@ -30,7 +33,26 @@ impl FindScope {
             query,
             columns,
             edits,
+            shape: None,
         }
+    }
+
+    /// 列の数が `expected`（見出しのセルの数）と違う原本の行に当たる問い（GitHub Issue #338）。値は照らさない。足した行は
+    /// 当たらない（原本に無い）。
+    #[must_use]
+    pub fn shape(expected: usize, columns: Vec<ColumnId>) -> Self {
+        Self {
+            query: FindQuery::new("", FindOptions::standard()),
+            columns,
+            edits: CellEdits::empty(),
+            shape: Some(expected),
+        }
+    }
+
+    /// 列の数の問いなら、見出しのセルの数。
+    #[must_use]
+    pub const fn expected_cells(&self) -> Option<usize> {
+        self.shape
     }
 
     /// 問い。
@@ -49,7 +71,10 @@ impl FindScope {
     /// 行は除かない）。
     #[must_use]
     pub fn skips_ascii_record(&self, row: RowId, raw: &[u8], dialect: &Dialect) -> bool {
-        !self.edits.touches_row(row) && raw.is_ascii() && self.query.rules_out_ascii(raw, dialect)
+        self.shape.is_none()
+            && !self.edits.touches_row(row)
+            && raw.is_ascii()
+            && self.query.rules_out_ascii(raw, dialect)
     }
 
     /// 行 `row` の表示の列 `columns` のうち、左から見て最初に当たる列。`source` は原本の `n` 列目の値（無ければ `None`）。
@@ -110,6 +135,10 @@ impl FindScope {
 
     /// 行 `row` の表示の `display` 列目のセルが当たるか。
     fn hits<S: Fn(usize) -> Option<String>>(&self, row: RowId, display: usize, source: &S) -> bool {
+        // 列の数の問いは、行のレコード全体で照らす（`FindFold`）。セルごとには当たらない。
+        if self.shape.is_some() {
+            return false;
+        }
         let Some(&column) = self.columns.get(display) else {
             return false;
         };

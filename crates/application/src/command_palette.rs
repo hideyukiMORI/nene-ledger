@@ -717,6 +717,9 @@ impl CommandPalette {
         if command == CommandId::ChooseDialect {
             return PaletteOutcome::OpenCandidates;
         }
+        if command == CommandId::NextRaggedRow {
+            return PaletteOutcome::FindRagged;
+        }
         self.query.clear();
         if command == CommandId::ShowKeys {
             self.mode = PaletteMode::Keys;
@@ -940,6 +943,21 @@ mod tests {
         );
         // 開いている間の他のキーは表に届かない。
         assert_eq!(palette.handle(Intent::Copy, 0), PaletteOutcome::Stay);
+    }
+
+    /// 「列の数が見出しと違う次の行へ」は、閉じて合成ルートに探させる（GitHub Issue #338）。
+    #[test]
+    fn the_next_ragged_row_command_asks_the_root_to_search() {
+        let mut palette = CommandPalette::open();
+        typed(&mut palette, "ragged");
+        assert_eq!(
+            palette.items().first(),
+            Some(&PaletteItem::Command(CommandId::NextRaggedRow))
+        );
+        assert_eq!(
+            palette.handle(Intent::Confirm, 0),
+            PaletteOutcome::FindRagged
+        );
     }
 
     /// 決めた操作は最近使った操作の頭へ入り（同じ操作は 1 つ・多くて 5 つ）、次に開いた一覧の上に出る（GitHub Issue #309）。

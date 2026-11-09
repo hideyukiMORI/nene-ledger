@@ -827,7 +827,15 @@ impl Viewer {
                 self.open_candidates();
                 None
             }
+            PaletteOutcome::FindRagged => self.find_ragged(),
         }
+    }
+
+    /// パレットを閉じて、列の数が見出しと違う次の行へ探す（GitHub Issue #338）。
+    fn find_ragged(&mut self) -> Option<ClipboardText> {
+        self.palette = None;
+        let effect = self.document.find_ragged(true);
+        self.effect(effect)
     }
 
     /// 書き換えがある間（保存の途中も）に読み方を変えようとしたら、パレットを閉じて知らせ、`true`。

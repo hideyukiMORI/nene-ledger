@@ -1907,6 +1907,33 @@ impl Document {
     }
 
     /// 問い `query` を、表示の順の列と今の書き換えで照らす範囲。
+    /// 列の数が見出しと違う次の（`forward` でなければ前の）原本の行の 1 列目へ探す（GitHub Issue #338・専門家ペルソナの
+    /// 4・5 巡目「次の壊れた行へ」）。検索と同じ裏の仕事・端から回る・見つけたセルへ送る・知らせを使う。前に探した値の問い
+    /// （F3）は変えない。見出しが無いか列を足し消ししていれば、比べられないと知らせる。
+    pub fn find_ragged(&mut self, forward: bool) -> DocumentEffect {
+        if self.closing != CloseState::Open {
+            return DocumentEffect::Stay;
+        }
+        let Some(expected) = self.expected_columns() else {
+            self.notice = Some(Notice::Find(FindNotice::NoShape));
+            return DocumentEffect::Stay;
+        };
+        self.notice = None;
+        self.commit_edit();
+        let columns = (0..self.widths.columns().len())
+            .map(|display| self.column_id(self.source_column(display)))
+            .collect();
+        let cursor = self.selection.cursor();
+        let mut run = FindRun::new(
+            FindScope::shape(expected, columns),
+            forward,
+            (self.line_of(cursor.body()), cursor.column()),
+        );
+        run.set_pending(self.find_pass(&run));
+        self.finding = Some(run);
+        DocumentEffect::Find
+    }
+
     fn find_scope(&self, query: FindQuery) -> FindScope {
         let columns = (0..self.widths.columns().len())
             .map(|display| self.column_id(self.source_column(display)))
@@ -2177,6 +2204,8 @@ impl Document {
                 FindNotice::Failed => String::from("ファイルを読めず、探すのをやめました"),
                 FindNotice::NothingToRepeat => String::from("続けて探すものがありません"),
                 FindNotice::BrokenPattern => String::from("正規表現の式が読めません"),
+                FindNotice::NoRagged => String::from("列の数が違う行はありません"),
+                FindNotice::NoShape => String::from("見出しが無いので比べられません"),
             }),
             Some(_) | None => None,
         }
@@ -2358,7 +2387,12 @@ impl Document {
             return self.reveal_found(line, column, window);
         }
         if run.wrapped() {
-            self.notice = Some(Notice::Find(FindNotice::NotFound));
+            // 列の数の問いなら、壊れた行が無いと言う（GitHub Issue #338）。
+            self.notice = Some(Notice::Find(if run.scope().expected_cells().is_some() {
+                FindNotice::NoRagged
+            } else {
+                FindNotice::NotFound
+            }));
             return DocumentEffect::Stay;
         }
         run.wrap();
@@ -9447,6 +9481,33 @@ mod tests {
         // 面が無ければ今までどおり。
         document.set_cover(None);
         assert_eq!(document.covered_rows(0, window), (0, 0));
+    }
+
+    /// 列の数が見出しと違う次の行へは、検索と同じ裏の仕事を始める。見出しが無ければ比べられないと知らせる。前に探した値の
+    /// 問いは変えない。見つからなければ壊れた行が無いと言う（GitHub Issue #338）。
+    #[test]
+    fn the_next_ragged_row_is_searched_like_a_find() {
+        let mut document = tall();
+        assert_eq!(document.find_ragged(true), DocumentEffect::Find);
+        let (scope, _) = document.take_find_pass().unwrap();
+        assert_eq!(scope.expected_cells(), Some(2));
+        assert_eq!(document.find_query(), None);
+        // 一周して無ければ「ありません」。
+        let mut effect = document.found(None, normal());
+        while effect == DocumentEffect::Find {
+            effect = document.found(None, normal());
+        }
+        assert_eq!(
+            document.replace_guide().as_deref(),
+            Some("列の数が違う行はありません")
+        );
+        // 見出しが無ければ比べられない。
+        let mut plain = indexed_editable();
+        assert_eq!(plain.find_ragged(true), DocumentEffect::Stay);
+        assert_eq!(
+            plain.replace_guide().as_deref(),
+            Some("見出しが無いので比べられません")
+        );
     }
 
     /// 次を探し、F3 で続け、表の終わりから頭へ回って知らせる。前へも探せる（ADR 0030 の決定 1）。
