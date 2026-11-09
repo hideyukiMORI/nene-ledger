@@ -59,6 +59,7 @@ mod frame_painter;
 pub mod go_to_target;
 pub mod guide_note;
 mod held_columns;
+pub mod hover_target;
 pub mod index_summary;
 pub mod intent;
 pub mod job_progress;

@@ -51,6 +51,7 @@ use crate::fixed_parts::FixedParts;
 use crate::format_summary::FormatSummary;
 use crate::frame_painter::FramePainter;
 use crate::go_to_target::GoToTarget;
+use crate::hover_target::HoverTarget;
 use crate::index_summary::IndexSummary;
 use crate::intent::Intent;
 use crate::job_progress::JobProgress;
@@ -157,7 +158,8 @@ pub struct Document {
     order: Vec<usize>,
     counted: Option<Vec<Selection>>,
     hold: Option<PointerHold>,
-    hovered: Option<ScrollOrientation>,
+    /// 指が乗っている、見た目の変わる所（つまみ・タイトルバーの「≡ 操作」・GitHub Issue #448）。
+    hovered: Option<HoverTarget>,
     index: JobState,
     /// 利用者がドラッグで変えた幅（元の列 → 半角の字数・Issue #64）。
     custom: BTreeMap<usize, u32>,
@@ -4148,12 +4150,18 @@ impl Document {
             || self.hold.is_some_and(PointerHold::dragging_cells)
     }
 
-    /// 指が窓の中の `at` に乗った（`None` は窓の外）。つまみの上かどうかが変わったら `true`（描き直す）。
+    /// 指が窓の中の `at` に乗った（`None` は窓の外）。つまみの上か、タイトルバーの「≡ 操作」の上かが変わったら `true`
+    /// （描き直す）。
     pub fn hover(&mut self, at: Option<PixelPoint>, window: WindowView) -> bool {
-        let hovered = at.and_then(|at| match self.bars(window).hit(at)? {
-            (scrollbar, BarHit::Thumb { .. }) => Some(scrollbar.orientation()),
+        let thumb = at.and_then(|at| match self.bars(window).hit(at)? {
+            (scrollbar, BarHit::Thumb { .. }) => Some(HoverTarget::Thumb(scrollbar.orientation())),
             (_, BarHit::Track(_)) => None,
         });
+        let hovered = if view_menu_hit(window, at) {
+            Some(HoverTarget::Menu)
+        } else {
+            thumb
+        };
         let changed = hovered != self.hovered;
         self.hovered = hovered;
         self.grip = at.is_some_and(|at| self.column_grip(at, window).is_some());
@@ -4312,7 +4320,7 @@ impl Document {
             .is_some_and(|hold| hold.orientation() == Some(orientation))
         {
             ThumbState::Held
-        } else if self.hovered == Some(orientation) {
+        } else if self.hovered == Some(HoverTarget::Thumb(orientation)) {
             ThumbState::Hovered
         } else {
             ThumbState::Normal
@@ -4918,7 +4926,11 @@ impl Document {
             .into_iter()
             .map(|command| command.offset(dx, dy))
             .collect();
-        commands.extend(ChromePainter::new(view, palette).title_bar(&self.window_name()));
+        commands.extend(
+            ChromePainter::new(view, palette)
+                .with_menu_hovered(self.hovered == Some(HoverTarget::Menu))
+                .title_bar(&self.window_name()),
+        );
         commands.extend(ChromePainter::new(view, palette).border());
         if self.closing == CloseState::Asking {
             // 尋ねる画面は窓の真ん中に、表の上に重ねる（位置は窓の左上が原点・押した位置と同じ）。
@@ -5630,6 +5642,16 @@ fn flattened(steps: &[EditStep]) -> Vec<&EditStep> {
         .collect()
 }
 
+/// 窓 `window` の点 `at` が、タイトルバーの左端の「≡ 操作」の上か（GitHub Issue #446・#448）。
+fn view_menu_hit(window: WindowView, at: Option<PixelPoint>) -> bool {
+    let menu = window.chrome().menu();
+    let (left, top) = (menu.origin().x(), menu.origin().y());
+    at.is_some_and(|at| {
+        (left..left.saturating_add(menu.size().width())).contains(&at.x())
+            && (top..top.saturating_add(menu.size().height())).contains(&at.y())
+    })
+}
+
 /// 状態の行の右端の文言 `text` の幅（左右に半角 1 字ずつの余白）。
 fn right_width(text: &str, metrics: GlyphMetrics) -> u32 {
     display_columns(text)
@@ -5841,6 +5863,40 @@ mod tests {
         assert_eq!(line_colors(&frame), vec![palette().title_text(); 7]);
         assert!(fills(&frame, palette().button_hover()).is_empty());
         assert!(fills(&frame, palette().close_hover()).is_empty());
+    }
+
+    /// 指が「≡ 操作」に乗れば、ほかのボタンと同じ色で背景を塗り、離れれば塗らない。変わったときだけ描き直す
+    /// （GitHub Issue #448）。
+    #[test]
+    fn hovering_the_menu_highlights_it() {
+        let mut document = document();
+        let menu = normal().chrome().menu();
+        assert!(
+            fills(
+                &document.frame(normal(), palette()),
+                palette().button_hover()
+            )
+            .is_empty()
+        );
+        assert!(document.hover(Some(PixelPoint::new(10, 10)), normal()));
+        assert_eq!(
+            fills(
+                &document.frame(normal(), palette()),
+                palette().button_hover()
+            ),
+            vec![menu]
+        );
+        assert!(!document.hover(Some(PixelPoint::new(20, 12)), normal()));
+        assert!(document.hover(Some(PixelPoint::new(200, 12)), normal()));
+        assert!(
+            fills(
+                &document.frame(normal(), palette()),
+                palette().button_hover()
+            )
+            .is_empty()
+        );
+        assert!(document.hover(Some(PixelPoint::new(10, 10)), normal()));
+        assert!(document.hover(None, normal()));
     }
 
     #[test]
