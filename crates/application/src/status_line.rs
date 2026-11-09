@@ -215,6 +215,9 @@ const fn read_only_status(notice: ReadOnlyNotice) -> &'static str {
     }
 }
 
+/// ファイルを選ぶ画面が無いときの知らせ（X11・GitHub Issue #344）。
+const NO_FILE_CHOOSER: &str = "ここではファイルを選ぶ画面が出せません。開くファイルは窓に落とすか、起動のときに渡してください";
+
 /// 知らせの文言。
 #[must_use]
 pub fn notice_status(notice: Notice) -> String {
@@ -251,6 +254,7 @@ pub fn notice_status(notice: Notice) -> String {
         Notice::StillSaving => String::from("保存しています。終わるまで直せません"),
         Notice::SaveFailed(problem) => save_problem_status(problem),
         Notice::NewWindowFailed => String::from("新しい表の窓を開けませんでした"),
+        Notice::NoFileChooser => String::from(NO_FILE_CHOOSER),
         Notice::ReadOnly(read_only) => String::from(read_only_status(read_only)),
         Notice::Paste(paste) => paste_status(paste),
         Notice::Find(find) => find_status(find),

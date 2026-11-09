@@ -20,7 +20,7 @@ NeNe Ledger（プレビュー版）
 
 ■ 主なキー
   Ctrl+F 検索 / Ctrl+H 置換 / F3 次を探す / Ctrl+Z 元に戻す / Ctrl+Y やり直す /
-  Ctrl+S 保存 / Ctrl+Shift+S 名前を付けて保存 / Ctrl+N 新しい表 /
+  Ctrl+O ファイルを開く / Ctrl+S 保存 / Ctrl+Shift+S 名前を付けて保存 / Ctrl+N 新しい表 /
   Ctrl+C コピー / Ctrl+X 切り取り / Ctrl+V 貼り付け / F2 またはダブルクリックでセルを直す
 
 ■ ライセンス

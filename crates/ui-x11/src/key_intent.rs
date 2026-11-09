@@ -34,6 +34,7 @@ const XK_Z: u32 = 0x7a;
 const XK_K: u32 = 0x6b;
 const XK_G: u32 = 0x67;
 const XK_N: u32 = 0x6e;
+const XK_O: u32 = 0x6f;
 const XK_V: u32 = 0x76;
 const XK_X: u32 = 0x78;
 const XK_F: u32 = 0x66;
@@ -239,12 +240,14 @@ fn line_intent(keysym: u32, control: bool, shift: bool) -> Option<Intent> {
 
 /// Ctrl と組んで元に戻す・やり直すキー（Ctrl+Z・Ctrl+Y・Ctrl+Shift+Z・UNDO-01）。Shift で `Z` が大文字の keysym になる配列もある。
 /// Ctrl と組んで保存する（Ctrl+S）・名前を付けて保存する（Ctrl+Shift+S）・新しい表を作る（Ctrl+N・ADR 0028）・
+/// ファイルを開く（Ctrl+O・GitHub Issue #344）・
 /// コピーする（Ctrl+C）・切り取る（Ctrl+X・ADR 0029）・貼る（Ctrl+V・CLIP-01）キー。
 /// Shift を押した keysym は大文字（`S`・0x53）で届くこともある（Ctrl+Shift+Z と同じ）。
 fn save_intent(keysym: u32, shift: bool) -> Option<Intent> {
     match (keysym, shift) {
         (XK_S, false) => Some(Intent::Save),
         (XK_N, false) => Some(Intent::NewTable),
+        (XK_O, false) => Some(Intent::OpenFile),
         (XK_V, false) => Some(Intent::Paste),
         (XK_F, false) => Some(Intent::OpenFind { replace: false }),
         (XK_H, false) => Some(Intent::OpenFind { replace: true }),
