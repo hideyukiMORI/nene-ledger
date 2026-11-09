@@ -110,6 +110,8 @@ impl Ui {
         register_class()?;
         let window = create(title)?;
         fit_initial_size(window);
+        // タスクバーと Alt+Tab のアイコン（GitHub Issue #375）。
+        crate::window_icon::attach(window);
         decorate(window);
         dropped_files::accept(window);
         Ok(Self {
