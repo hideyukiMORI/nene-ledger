@@ -72,6 +72,23 @@ impl TextEncoding {
         }
     }
 
+    /// 値 `text` の中で、この文字コードでは**必ず**表せない最初の字。表を引かずに言い切れるものだけ：`Shift_JIS`（CP932）と
+    /// EUC-JP の、基本多言語面の外の字（絵文字・`𠮷` など。どちらの表も U+FFFF までしか持たない）。表せるか表を引かないと
+    /// 分からない字（`♥` など）は `None` のまま（保存が書く前に確かめる・SAVE-04・GitHub Issue #395）。
+    #[must_use]
+    pub fn surely_unrepresentable(self, text: &str) -> Option<char> {
+        match self {
+            Self::ShiftJis | Self::EucJp => text.chars().find(|&character| character > '\u{FFFF}'),
+            Self::Utf8
+            | Self::Utf8WithBom
+            | Self::Utf16LeWithBom
+            | Self::Utf16BeWithBom
+            | Self::Utf16Le
+            | Self::Utf16Be
+            | Self::Windows1252 => None,
+        }
+    }
+
     /// `Shift_JIS`（CP932）と EUC-JP の 1 字のバイト数。ASCII は 1、半角カナは `Shift_JIS` で 1・EUC-JP で 2
     /// （`8E` を前に置く）、ほかは 2。`Shift_JIS` の `0x80` は WHATWG の復号で `U+0080` の 1 バイト。
     fn japanese_width(self, character: char) -> u64 {
@@ -153,5 +170,25 @@ mod tests {
         assert_eq!(TextEncoding::EucJp.encoded_length("0012 ｱ山田"), 11);
         assert_eq!(TextEncoding::Windows1252.encoded_length("Müller"), 6);
         assert_eq!(TextEncoding::ShiftJis.encoded_length(""), 0);
+    }
+
+    /// 絵文字や `𠮷` は `Shift_JIS` と EUC-JP では必ず表せない。表を引かないと分からない字と Unicode の文字コードは言わない
+    /// （GitHub Issue #395）。
+    #[test]
+    fn characters_beyond_the_basic_plane_are_surely_unrepresentable_in_japanese_encodings() {
+        assert_eq!(
+            TextEncoding::ShiftJis.surely_unrepresentable("𠮷田"),
+            Some('𠮷')
+        );
+        assert_eq!(
+            TextEncoding::EucJp.surely_unrepresentable("ok 😀"),
+            Some('😀')
+        );
+        assert_eq!(
+            TextEncoding::ShiftJis.surely_unrepresentable("髙橋 ①"),
+            None
+        );
+        assert_eq!(TextEncoding::Utf8.surely_unrepresentable("😀"), None);
+        assert_eq!(TextEncoding::Windows1252.surely_unrepresentable("😀"), None);
     }
 }
