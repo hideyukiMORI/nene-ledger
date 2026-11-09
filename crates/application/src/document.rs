@@ -35,7 +35,7 @@ use crate::cursor_step::CursorStep;
 use crate::cut_mark::CutMark;
 use crate::cut_record::CutRecord;
 use crate::detail_content::DetailContent;
-use crate::detail_painter::{DetailPainter, body_extent};
+use crate::detail_painter::{DetailPainter, body_extent, pane_index_at};
 use crate::detail_pane::DetailPane;
 use crate::detail_place::DetailPlace;
 use crate::document_effect::DocumentEffect;
@@ -1044,8 +1044,8 @@ impl Document {
         if intent == Intent::Save {
             return self.save_request();
         }
-        if let Intent::DoubleClick { at } = intent {
-            return self.double_click(at, window);
+        if let Some(effect) = self.press_first(intent, window) {
+            return effect;
         }
         if intent == Intent::SaveAs {
             self.commit_edit();
@@ -3305,11 +3305,6 @@ impl Document {
             self.view.first_body(),
             self.first_column,
         );
-        // 詳細ペインの本文を押したら、そこで直す（Excel の数式バーと同じ・GitHub Issue #458）。
-        if !self.pane_grip(at, window) && self.in_pane_body(at, window) {
-            self.edit_in_pane();
-            return;
-        }
         if self.pane_grip(at, window) {
             self.hold = Some(PointerHold::PaneHeight {
                 press_y: at.y(),
@@ -3442,13 +3437,85 @@ impl Document {
         })
     }
 
-    /// 詳細ペインで直す。直していなければ、カーソルのセルを編集の状態で直し始める（カーソルは末尾）。表のセルで直して
-    /// いれば、打っている所をペインへ移す（値はそのまま）（GitHub Issue #458）。
-    fn edit_in_pane(&mut self) {
-        if (self.editor.is_some() || self.begin_edit(EditMode::Editing))
-            && let Some(editor) = self.editor.as_mut()
+    /// 直している途中の確定より先に受ける押し。ダブルクリックと、詳細ペインの本文の押し（確定せずにカーソルを置く・
+    /// GitHub Issue #460）。どちらでもなければ `None`。
+    fn press_first(&mut self, intent: Intent, window: WindowView) -> Option<DocumentEffect> {
+        if let Intent::Point { at, mode } = intent
+            && self.press_pane_text(at, mode, window)
         {
-            editor.type_in_pane();
+            return Some(DocumentEffect::Stay);
+        }
+        if let Intent::DoubleClick { at } = intent {
+            if self.press_pane_text(at, SelectionMode::Collapse, window) {
+                return Some(DocumentEffect::Stay);
+            }
+            return Some(self.double_click(at, window));
+        }
+        None
+    }
+
+    /// 詳細ペインの本文（境の線を除く）を押したら、そこで直し、押した所にカーソルの棒を置く（Shift なら選択を広げる）。
+    /// 押したまま動かせば選択を広げる（Excel の数式バーと同じ・GitHub Issue #458・#460）。本文の外なら `false`。
+    fn press_pane_text(&mut self, at: PixelPoint, mode: SelectionMode, window: WindowView) -> bool {
+        if self.pane_grip(at, window) || !self.in_pane_body(at, window) {
+            return false;
+        }
+        // 押す前に描いていた本文の見え（直していればカーソルの棒の行まで動かしてある）で探す。
+        let shown = (self.detail_offset(), self.pane_caret());
+        if self.editor.is_none() && !self.begin_edit(EditMode::Editing) {
+            return true;
+        }
+        let extend = mode == SelectionMode::Extend && shown.1.is_some();
+        self.place_in_pane(
+            (i64::from(at.x()), i64::from(at.y())),
+            shown,
+            (extend, window),
+        );
+        self.hold = Some(PointerHold::PaneText);
+        true
+    }
+
+    /// 詳細ペインで直している間の、欄のカーソルの字の番目（ペインで直していなければ `None`）。
+    fn pane_caret(&self) -> Option<usize> {
+        self.editor
+            .as_ref()
+            .filter(|editor| editor.surface() == EditSurface::Pane)
+            .map(|editor| editor.field().display().1.cursor())
+    }
+
+    /// 打っている所を詳細ペインへ移し、本文を `shown`（最初の行・カーソル）で見せているときの窓の中の `at` に近い字の
+    /// 境目へカーソルを置く（`extend` なら選択を広げる）。見せている最初の行は変えない（GitHub Issue #460）。
+    fn place_in_pane(
+        &mut self,
+        at: (i64, i64),
+        shown: (usize, Option<usize>),
+        (extend, window): (bool, WindowView),
+    ) {
+        let Some(pane) = self.pane_rect(window) else {
+            return;
+        };
+        let metrics = window.content_metrics();
+        let cursor = self.selection.cursor();
+        let Some(editor) = self.editor.as_mut() else {
+            return;
+        };
+        editor.type_in_pane();
+        let (text, _) = editor.field().display();
+        let (index, first) = pane_index_at((pane, metrics), &text, shown, at);
+        editor.place_caret(index, extend);
+        self.detail_scroll = Some((cursor, first));
+    }
+
+    /// 詳細ペインの本文を押したまま `at` へ動かした。選択をそこまで広げる（本文の上・下へ出れば 1 行ずつ動く・
+    /// GitHub Issue #460）。
+    fn drag_pane_text(&mut self, at: PointerPoint, window: WindowView) {
+        let shown = (self.detail_offset(), self.pane_caret());
+        if shown.1.is_some() {
+            self.place_in_pane(
+                (i64::from(at.x()), i64::from(at.y())),
+                shown,
+                (true, window),
+            );
         }
     }
 
@@ -3544,7 +3611,10 @@ impl Document {
             Some(PointerHold::ColumnWidth { .. }) => PointerShape::ColumnResize,
             Some(PointerHold::PaneHeight { .. }) => PointerShape::RowResize,
             Some(
-                PointerHold::Thumb { .. } | PointerHold::Track { .. } | PointerHold::Cells { .. },
+                PointerHold::Thumb { .. }
+                | PointerHold::Track { .. }
+                | PointerHold::Cells { .. }
+                | PointerHold::PaneText,
             )
             | None => {
                 if self.hovered == Some(HoverTarget::PaneGrip) {
@@ -3709,6 +3779,10 @@ impl Document {
             self.resize_pane(hold, at, window);
             return DocumentEffect::Stay;
         }
+        if hold == PointerHold::PaneText {
+            self.drag_pane_text(at, window);
+            return DocumentEffect::Stay;
+        }
         let Some(scrollbar) = hold
             .orientation()
             .and_then(|orientation| self.bars(window).bar(orientation))
@@ -3737,7 +3811,8 @@ impl Document {
             }
             PointerHold::Cells { .. }
             | PointerHold::ColumnWidth { .. }
-            | PointerHold::PaneHeight { .. } => DocumentEffect::Stay,
+            | PointerHold::PaneHeight { .. }
+            | PointerHold::PaneText => DocumentEffect::Stay,
         }
     }
 
@@ -3777,7 +3852,8 @@ impl Document {
                 PointerHold::Thumb { .. }
                 | PointerHold::Track { .. }
                 | PointerHold::ColumnWidth { .. }
-                | PointerHold::PaneHeight { .. },
+                | PointerHold::PaneHeight { .. }
+                | PointerHold::PaneText,
             )
             | None => PressKind::Cells,
         };
@@ -4384,7 +4460,8 @@ impl Document {
                 | PointerHold::Track { .. }
                 | PointerHold::Cells { .. }
                 | PointerHold::ColumnWidth { .. }
-                | PointerHold::PaneHeight { .. },
+                | PointerHold::PaneHeight { .. }
+                | PointerHold::PaneText,
             )
             | None => self.row_total(),
         };
@@ -5257,7 +5334,7 @@ impl Document {
             .with_scroll(self.detail_offset());
         match &typing {
             Some((text, caret)) => painter
-                .with_caret(Some(caret.cursor()))
+                .with_caret(Some(*caret))
                 .paint(place, DetailContent::Value(text)),
             None => painter.paint(place, self.detail_content()),
         }
@@ -5900,12 +5977,14 @@ fn fitted_status(status: &str, columns: u32) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::client_bands::DETAIL_PADDING;
     use crate::cursor_step::CursorStep;
     use crate::index_summary::IndexSummary;
     use crate::scroll::Scroll;
     use crate::selection_mode::SelectionMode;
     use nene_ledger_core::chrome_button::ChromeButton;
     use nene_ledger_core::color::Color;
+    use nene_ledger_core::text_caret::TextCaret;
     use nene_ledger_core::window_placement::WindowPlacement;
 
     /// 試しの配色（表の先頭のライト `neutral-light` を導いたもの）。
@@ -7683,6 +7762,92 @@ mod tests {
         document.apply(pointing(at.x(), at.y(), SelectionMode::Collapse), window);
         assert_eq!(document.editor().unwrap().surface(), EditSurface::Pane);
         assert_eq!(document.editor().unwrap().field().text(), "00127");
+    }
+
+    /// 詳細ペインの本文の最初の行の、`column` 桁目の左端の少し右下（窓の中）。
+    fn pane_text_at(document: &Document, window: WindowView, column: u32) -> (u32, u32) {
+        let pane = document.pane_rect(window).unwrap();
+        let metrics = window.content_metrics();
+        let left = pane.origin().x() + metrics.px(12) + column * metrics.half_width();
+        let top = pane.origin().y()
+            + metrics.px(DETAIL_RULE)
+            + TableLayout::row_height_for(metrics)
+            + metrics.px(DETAIL_PADDING);
+        (left, top + 2)
+    }
+
+    /// 詳細ペインの本文の最初の行の `column` 桁目を `mode` で押す。
+    fn press_pane(document: &mut Document, window: WindowView, column: u32, mode: SelectionMode) {
+        let (x, y) = pane_text_at(document, window, column);
+        document.apply(pointing(x, y, mode), window);
+    }
+
+    /// 選択の色で塗った、詳細ペインの本文の中の矩形。
+    fn pane_selection(document: &Document, window: WindowView) -> Vec<PixelRect> {
+        let (_, top) = pane_text_at(document, window, 0);
+        fills(&document.frame(window, palette()), palette().selection())
+            .into_iter()
+            .filter(|rect| rect.origin().y() + 2 >= top)
+            .collect()
+    }
+
+    /// 詳細ペインを押した所にカーソルの棒を置く。ペインの中で押し直しても確定しない（Esc で何も変わらない・
+    /// GitHub Issue #460）。
+    #[test]
+    fn pressing_the_pane_places_the_caret_without_committing() {
+        let window = view(400, 600, WindowPlacement::Normal);
+        let mut document = editable();
+        document.set_detail(DetailPane::Open);
+        press_pane(&mut document, window, 2, SelectionMode::Collapse);
+        assert_eq!(
+            document.editor().unwrap().field().caret(),
+            TextCaret::new(2, 2)
+        );
+        assert!(pane_selection(&document, window).is_empty());
+        document.apply(Intent::Type('x'), window);
+        document.apply(Intent::Release, window);
+        press_pane(&mut document, window, 0, SelectionMode::Collapse);
+        assert_eq!(document.editor().unwrap().field().text(), "00x12");
+        assert_eq!(
+            document.editor().unwrap().field().caret(),
+            TextCaret::new(0, 0)
+        );
+        assert!(document.edits().is_empty());
+        document.apply(Intent::Cancel, window);
+        assert!(document.editor().is_none());
+        assert!(document.edits().is_empty());
+    }
+
+    /// 詳細ペインで Shift+押す・ドラッグで選び、Ctrl+A ですべてを選ぶ。選んだ字の下を選択の色で塗る（GitHub Issue #460）。
+    #[test]
+    fn the_pane_selects_by_shift_drag_and_select_all() {
+        let window = view(400, 600, WindowPlacement::Normal);
+        let mut document = editable();
+        document.set_detail(DetailPane::Open);
+        let half = window.content_metrics().half_width();
+        let caret = |shown: &Document| shown.editor().unwrap().field().caret();
+        press_pane(&mut document, window, 1, SelectionMode::Collapse);
+        document.apply(Intent::Release, window);
+        press_pane(&mut document, window, 3, SelectionMode::Extend);
+        assert_eq!(caret(&document), TextCaret::new(3, 1));
+        assert_eq!(
+            pane_selection(&document, window)[0].size().width(),
+            2 * half
+        );
+        // 押したまま左へ動かすと、起点（最初に押した所）はそのままで広がる。
+        let (x, y) = pane_text_at(&document, window, 0);
+        document.apply(
+            dragging_to(i32::try_from(x).unwrap(), i32::try_from(y).unwrap()),
+            window,
+        );
+        assert_eq!(caret(&document), TextCaret::new(0, 1));
+        document.apply(Intent::Release, window);
+        document.apply(Intent::SelectAll, window);
+        assert_eq!(caret(&document), TextCaret::new(4, 0));
+        assert_eq!(
+            pane_selection(&document, window)[0].size().width(),
+            4 * half
+        );
     }
 
     fn dragging_to(x: i32, y: i32) -> Intent {
