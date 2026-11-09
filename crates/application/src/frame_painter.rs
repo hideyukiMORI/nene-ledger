@@ -784,27 +784,52 @@ impl<'view> FramePainter<'view> {
         let within = self.expected.is_none_or(|expected| source < expected);
         if within && matches!(mark, CellMark::Unselected | CellMark::Band) {
             let missing = self.palette.gutter();
-            self.slash(rect, self.palette.gutter_text().mixed(missing, MARK_FADE));
+            self.hatch(rect, self.palette.gutter_text().mixed(missing, HATCH_FADE));
         }
     }
 
-    /// `rect` の左下から右上へ、余白を空けた斜めの線（「セルが無い」の印）。
-    fn slash(&mut self, rect: PixelRect, color: Color) {
-        let inset = self.layout.padding();
-        let (left, top) = (rect.origin().x(), rect.origin().y());
-        let (right, bottom) = (
-            left.saturating_add(rect.size().width()),
-            top.saturating_add(rect.size().height()),
+    /// `rect` の面全体に、45° の斜線の網（「セルが無い」の印）。どの幅のセルでも同じ角度と間隔（列の幅で傾きの変わる
+    /// 1 本の斜線は描き損じに見えた・施主と /design の評価・GitHub Issue #436）。線は `rect` の中で切る。
+    fn hatch(&mut self, rect: PixelRect, color: Color) {
+        let (left, top) = (i64::from(rect.origin().x()), i64::from(rect.origin().y()));
+        let (width, height) = (
+            i64::from(rect.size().width()),
+            i64::from(rect.size().height()),
         );
-        if right.saturating_sub(left) <= inset.saturating_mul(2) {
+        if width < 2 || height < 2 {
             return;
         }
-        self.commands.push(DrawCommand::Line {
-            from: PixelPoint::new(left.saturating_add(inset), bottom.saturating_sub(inset)),
-            to: PixelPoint::new(right.saturating_sub(inset), top.saturating_add(inset)),
-            width: self.metrics.px(1),
-            color,
-        });
+        let (right, bottom) = (left + width - 1, top + height - 1);
+        let step = i64::from(self.metrics.px(HATCH_STEP).max(2));
+        let line_width = self.metrics.px(1);
+        // 「/」の向きの線は x + y が一定。左上の角から右下の角まで、間隔ごとに 1 本。
+        let mut sum = left + top + step;
+        while sum < right + bottom {
+            let (start_x, start_y) = if sum - bottom >= left {
+                (sum - bottom, bottom)
+            } else {
+                (left, sum - left)
+            };
+            let (end_x, end_y) = if sum - top <= right {
+                (sum - top, top)
+            } else {
+                (right, sum - right)
+            };
+            if let (Ok(from_x), Ok(from_y), Ok(to_x), Ok(to_y)) = (
+                u32::try_from(start_x),
+                u32::try_from(start_y),
+                u32::try_from(end_x),
+                u32::try_from(end_y),
+            ) {
+                self.commands.push(DrawCommand::Line {
+                    from: PixelPoint::new(from_x, from_y),
+                    to: PixelPoint::new(to_x, to_y),
+                    width: line_width,
+                    color,
+                });
+            }
+            sum += step;
+        }
     }
 
     /// `rect` の中に、左の余白を空けて縦の真ん中に文字を書く。左右の余白の内に収まらなければ `…` で省略し
@@ -859,6 +884,10 @@ fn scrolled_to_caret(text: &str, caret: u32, room: u32) -> (String, u32) {
 
 /// 見えない字の印の字の色を、字の色からセルの背景へ寄せる割合（百分率・GitHub Issue #269）。
 pub(crate) const MARK_FADE: u8 = 50;
+
+/// 「セルが無い」の斜線の網の間隔（論理 px）と、字の色から塗りの色へ寄せる割合（薄く・GitHub Issue #436）。
+const HATCH_STEP: u32 = 6;
+const HATCH_FADE: u8 = 72;
 
 /// 元の値 `value` を表示の 1 行にしたときの、見えない字の印の範囲（長い値は数えない・当たった字と同じ約束）。
 fn marks_in(value: &str) -> Vec<Range<usize>> {
@@ -1102,42 +1131,56 @@ mod tests {
         assert!(fills_of(&painted(None), palette().danger()).is_empty());
     }
 
-    /// 「セルが無い」所には、空のセルと見分ける斜めの線を引く。空のセルには引かない（GitHub Issue #401）。見出しの
-    /// セルの数が分かれば、それより後ろの列には引かない（GitHub Issue #405）。
+    /// 「セルが無い」所には、空のセルと見分ける 45° の斜線の網を面全体に描く。空のセルには描かない（GitHub Issue #401・
+    /// #436）。見出しのセルの数が分かれば、それより後ろの列には描かない（GitHub Issue #405）。
     #[test]
-    fn missing_cells_are_slashed_and_empty_cells_are_not() {
+    fn missing_cells_are_hatched_and_empty_cells_are_not() {
         let rows = [row(1, &["1", "", "3"]), row(2, &["1"])];
         let owned: Vec<Vec<String>> = rows.iter().map(|row| row.cells().to_strings()).collect();
         let cells: Vec<&[String]> = owned.iter().map(Vec::as_slice).collect();
         let layout = TableLayout::new(&ColumnWidths::fit(&cells), 0, 2, metrics());
-        let commands = FramePainter::new(&layout, metrics(), palette(), PixelSize::new(800, 600))
-            .paint(&[], None, &view(&rows));
-        let lines: Vec<(PixelPoint, PixelPoint)> = commands
-            .iter()
-            .filter_map(|command| match command {
-                DrawCommand::Line { from, to, .. } => Some((*from, *to)),
-                DrawCommand::Text { .. }
-                | DrawCommand::Fill { .. }
-                | DrawCommand::TextSpan { .. } => None,
-            })
-            .collect();
-        // 2 行目の 2・3 列目だけ（1 行目の空のセルには引かない）。左下から右上へ、セルの中に収まる。
-        assert_eq!(lines.len(), 2);
-        for (column, (from, to)) in (1..=2).zip(lines) {
+        let lines_in = |commands: &[DrawCommand]| -> Vec<(PixelPoint, PixelPoint)> {
+            commands
+                .iter()
+                .filter_map(|command| match command {
+                    DrawCommand::Line { from, to, .. } => Some((*from, *to)),
+                    DrawCommand::Text { .. }
+                    | DrawCommand::Fill { .. }
+                    | DrawCommand::TextSpan { .. } => None,
+                })
+                .collect()
+        };
+        let lines = lines_in(
+            &FramePainter::new(&layout, metrics(), palette(), PixelSize::new(800, 600)).paint(
+                &[],
+                None,
+                &view(&rows),
+            ),
+        );
+        // 2 行目の 2・3 列目だけ（1 行目の空のセルには描かない）。どの線もそのセルの中で、左下から右上へ 45°。
+        let in_cell = |column: usize, (from, to): (PixelPoint, PixelPoint)| {
             let cell = layout.cell_rect(1, column).unwrap();
-            assert!(
-                from.x() > cell.origin().x() && to.x() < cell.origin().x() + cell.size().width()
-            );
+            let (left, top) = (cell.origin().x(), cell.origin().y());
+            let (right, bottom) = (left + cell.size().width(), top + cell.size().height());
+            [from, to].iter().all(|point| {
+                (left..right).contains(&point.x()) && (top..bottom).contains(&point.y())
+            })
+        };
+        let (second, third): (Vec<_>, Vec<_>) =
+            lines.iter().copied().partition(|&line| in_cell(1, line));
+        assert!(second.len() > 3, "{second:?}");
+        assert!(third.iter().all(|&line| in_cell(2, line)));
+        assert!(!third.is_empty());
+        for (from, to) in &lines {
             assert!(from.y() > to.y());
+            assert_eq!(to.x() - from.x(), from.y() - to.y());
         }
-        let within = FramePainter::new(&layout, metrics(), palette(), PixelSize::new(800, 600))
-            .with_expected(Some(2))
-            .paint(&[], None, &view(&rows));
-        let slashes = within
-            .iter()
-            .filter(|command| matches!(command, DrawCommand::Line { .. }))
-            .count();
-        assert_eq!(slashes, 1);
+        let within = lines_in(
+            &FramePainter::new(&layout, metrics(), palette(), PixelSize::new(800, 600))
+                .with_expected(Some(2))
+                .paint(&[], None, &view(&rows)),
+        );
+        assert_eq!(within, second);
     }
 
     #[test]
