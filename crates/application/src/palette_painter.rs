@@ -2,13 +2,13 @@
 
 use alloc::format;
 use alloc::string::String;
-use alloc::vec;
 use alloc::vec::Vec;
 
 use nene_ledger_core::color::Color;
 use nene_ledger_core::dialect_candidate::DialectCandidate;
 use nene_ledger_core::display_width::display_columns;
 use nene_ledger_core::draw_command::DrawCommand;
+use nene_ledger_core::find_options::FindOptions;
 use nene_ledger_core::find_query::FindQuery;
 use nene_ledger_core::glyph_metrics::GlyphMetrics;
 use nene_ledger_core::palette::Palette;
@@ -21,9 +21,10 @@ use nene_ledger_core::theme_catalog::{COUNT, at};
 use crate::command_id::CommandId;
 use crate::command_palette::CommandPalette;
 use crate::detail_pane::DetailPane;
+use crate::find_toggle::FindToggle;
 use crate::go_to_target::GoToTarget;
 use crate::palette_item::PaletteItem;
-use crate::palette_layout::PaletteLayout;
+use crate::palette_layout::{CHIP_MARK_COLUMNS, CHIP_PAD, FIND_CHIPS, PaletteLayout};
 use crate::palette_mode::PaletteMode;
 use crate::palette_search::key_list;
 use crate::reading_aspect::ReadingAspect;
@@ -324,70 +325,80 @@ impl<'state> PalettePainter<'state> {
         self.text_at(from_left(row, left), text, self.colors.gutter_text());
     }
 
-    /// 探す段と置換の段の案内。今の条件と切り替えるキー（ADR 0030 の決定 3）。探す段は 2 行（大文字小文字・一致の仕方・
-    /// 正規表現の行と、全角半角・ひらがなカタカナの行）、置換の段は 1 行目に置き換え方のキー（全部の置換の件数と確かめの
-    /// 間はその 1 行・決定 6・7）を足した 3 行。正規表現の式が読めなければ、そう出す（ADR 0031）。行の数は
-    /// `palette_layout::least_rows` と同じ。
+    /// 探す段と置換の段の案内。置換の段は 1 行目に置き換え方のキー（全部の置換の件数と確かめの間はその 1 行・ADR 0030 の
+    /// 決定 6・7）。その下に条件の札（[`FIND_CHIPS`]・GitHub Issue #288）。正規表現の式が読めなければ、欄の右端に強調の色で
+    /// そう出す（ADR 0031）。行の数は `palette_layout::least_rows` と同じ。
     fn find_line(&mut self) {
         let options = self.palette.find_options();
-        let regex = if !options.regex() {
-            "文字どおり"
-        } else if FindQuery::new(self.palette.query(), options).is_broken() {
-            "読めない正規表現"
-        } else {
-            "正規表現"
-        };
-        let conditions = format!(
-            "Alt+C 大小を{} · Alt+W {} · Alt+R {regex}",
-            if options.match_case() {
-                "区別する"
-            } else {
-                "区別しない"
-            },
-            if options.whole_cell() {
-                "セル全体"
-            } else {
-                "部分一致"
-            },
-        );
-        let folding = format!(
-            "Alt+Z 全角半角を{} · Alt+K ひらがなカタカナを{}",
-            if options.match_width() {
-                "区別する"
-            } else {
-                "区別しない"
-            },
-            if options.match_kana() {
-                "区別する"
-            } else {
-                "区別しない"
-            },
-        );
-        let note = self.note.map(String::from);
-        let lines = if let PaletteMode::Replace { .. } = self.palette.mode() {
-            vec![
-                note.clone().unwrap_or_else(|| {
-                    String::from("Enter 置き換えて次へ · Alt+A 全部 · Tab 欄を替える")
-                }),
-                conditions,
-                folding,
-            ]
-        } else {
-            vec![conditions, folding]
-        };
-        // 低い窓でパレットの行が足りなければ、入る行だけを描く（パレットの面の外に描かない）。
-        for (slot, text) in lines.into_iter().enumerate().take(self.layout.visible()) {
-            let row = self.layout.row(slot);
+        if options.regex() && FindQuery::new(self.palette.query(), options).is_broken() {
+            let field = self.layout.field();
+            let text = String::from("読めない正規表現");
+            let right = field
+                .origin()
+                .x()
+                .saturating_add(field.size().width())
+                .saturating_sub(self.px(TEXT_INSET));
+            let left = right.saturating_sub(self.width_of(&text));
+            self.text_at(from_left(field, left), text, self.colors.cursor());
+        }
+        if let PaletteMode::Replace { .. } = self.palette.mode() {
+            let (text, color) = self.note.map_or_else(
+                || {
+                    (
+                        String::from("Enter 置き換えて次へ · Alt+A 全部 · Tab 欄を替える"),
+                        self.colors.gutter_text(),
+                    )
+                },
+                |note| (String::from(note), self.colors.cursor()),
+            );
+            let row = self.layout.row(0);
             let left = row.origin().x().saturating_add(self.px(TEXT_INSET));
-            // 読めない式と、全部の置換の件数と確かめは強調の色で目に付くように。
-            let color = if text.contains("読めない正規表現") || note.as_ref() == Some(&text)
-            {
-                self.colors.cursor()
-            } else {
-                self.colors.gutter_text()
-            };
             self.text_at(from_left(row, left), text, color);
         }
+        let Some(chips) = self.layout.chips() else {
+            return;
+        };
+        for (chip, (name, key, toggle)) in chips.into_iter().zip(FIND_CHIPS) {
+            self.chip(chip, (name, key), toggle_is_on(options, toggle));
+        }
+    }
+
+    /// 条件の札 1 つ。オンは強調の色の縁と選択の色の塗りに ✓ と濃い字、オフは縁の色の枠と薄い字（色だけに頼らず印でも
+    /// 見せる・GitHub Issue #288）。キーは札の右に寄せる。
+    fn chip(&mut self, chip: PixelRect, (name, key): (&str, &str), on: bool) {
+        let (edge, inside, ink) = if on {
+            (
+                self.colors.cursor(),
+                self.colors.selection(),
+                self.colors.text(),
+            )
+        } else {
+            (
+                self.colors.border(),
+                self.colors.background(),
+                self.colors.gutter_text(),
+            )
+        };
+        self.fill(chip, edge);
+        self.fill(grown_in(chip, self.px(1)), inside);
+        let left = chip.origin().x().saturating_add(self.px(CHIP_PAD));
+        if on {
+            self.text_at(from_left(chip, left), String::from("✓"), ink);
+        }
+        let name_left =
+            left.saturating_add(CHIP_MARK_COLUMNS.saturating_mul(self.metrics.half_width()));
+        self.text_at(from_left(chip, name_left), String::from(name), ink);
+        let right = chip
+            .origin()
+            .x()
+            .saturating_add(chip.size().width())
+            .saturating_sub(self.px(CHIP_PAD));
+        let key_left = right.saturating_sub(self.width_of(key));
+        self.text_at(
+            from_left(chip, key_left),
+            String::from(key),
+            self.colors.gutter_text(),
+        );
     }
 
     /// 保存先の段の 1 行。上書きを尋ねていればその問い、そうでなければ Enter で保存する案内（ADR 0028 の決定 5）。
@@ -605,6 +616,31 @@ fn from_left(row: PixelRect, left: u32) -> PixelRect {
 }
 
 /// `rect` を四方に `by` 広げた矩形。
+/// 条件 `options` で、札 `toggle` がオンか（「区別する」「セル全体」「正規表現」の側がオン）。
+fn toggle_is_on(options: FindOptions, toggle: FindToggle) -> bool {
+    match toggle {
+        FindToggle::Case => options.match_case(),
+        FindToggle::WholeCell => options.whole_cell(),
+        FindToggle::Regex => options.regex(),
+        FindToggle::Width => options.match_width(),
+        FindToggle::Kana => options.match_kana(),
+    }
+}
+
+/// `rect` を四方から `by` 縮めた矩形。
+fn grown_in(rect: PixelRect, by: u32) -> PixelRect {
+    PixelRect::new(
+        PixelPoint::new(
+            rect.origin().x().saturating_add(by),
+            rect.origin().y().saturating_add(by),
+        ),
+        PixelSize::new(
+            rect.size().width().saturating_sub(by.saturating_mul(2)),
+            rect.size().height().saturating_sub(by.saturating_mul(2)),
+        ),
+    )
+}
+
 fn grown(rect: PixelRect, by: u32) -> PixelRect {
     PixelRect::new(
         PixelPoint::new(
@@ -766,7 +802,7 @@ mod tests {
         let shown = texts(&commands);
         assert_eq!(&shown[..4], &["探す", "tok", "置換後", "東京"], "{shown:?}");
         assert!(
-            shown.contains(&"Alt+C 大小を区別しない · Alt+W 部分一致 · Alt+R 文字どおり"),
+            shown.contains(&"大小を区別") && shown.contains(&"Alt+C"),
             "{shown:?}"
         );
     }
@@ -786,30 +822,33 @@ mod tests {
         };
         let first = palette.paint(view(), colors(), DetailPane::Closed);
         assert!(accented(&first, find) && !accented(&first, second));
-        assert_eq!(fills(&first, colors().selection()).len(), 1);
+        let selected_in = |commands: &[DrawCommand], area: PixelRect| {
+            fills(commands, colors().selection())
+                .iter()
+                .filter(|&&rect| contains_point(area, rect.origin()))
+                .count()
+        };
+        assert_eq!(selected_in(&first, find), 1);
         palette.handle(Intent::Advance(CursorStep::Right), 0);
         let swapped = palette.paint(view(), colors(), DetailPane::Closed);
         assert!(accented(&swapped, second) && !accented(&swapped, find));
-        assert!(fills(&swapped, colors().selection()).is_empty());
+        assert_eq!(selected_in(&swapped, find), 0);
         assert_eq!(layout.field_at(find.origin()), Some(false));
         assert_eq!(layout.field_at(second.origin()), Some(true));
         palette.click_field(false);
         assert_eq!(palette.mode(), PaletteMode::Replace { with: false });
     }
 
-    /// 探す段の条件の行は Alt+R の状態を出し、正規表現の式が読めなければそう出す（ADR 0031）。置換の段はキーの行が増える。
+    /// 正規表現の式が読めなければ、欄の右端にそう出す（ADR 0031）。置換の段はキーの行が増える。
     #[test]
     fn the_find_line_shows_the_regex_state() {
         let regex = FindOptions::standard().toggled_regex();
         let broken = CommandPalette::open_find("(b", regex);
         let shown = broken.paint(view(), colors(), DetailPane::Closed);
-        assert!(
-            texts(&shown)
-                .contains(&"Alt+C 大小を区別しない · Alt+W 部分一致 · Alt+R 読めない正規表現")
-        );
+        assert!(texts(&shown).contains(&"読めない正規表現"));
         let fine = CommandPalette::open_find(r"b\d", regex);
         let ok = fine.paint(view(), colors(), DetailPane::Closed);
-        assert!(texts(&ok).contains(&"Alt+C 大小を区別しない · Alt+W 部分一致 · Alt+R 正規表現"));
+        assert!(!texts(&ok).contains(&"読めない正規表現"));
         let replacing = CommandPalette::open_replace("b", "x", FindOptions::standard());
         let both = replacing.paint(view(), colors(), DetailPane::Closed);
         assert!(texts(&both).contains(&"Enter 置き換えて次へ · Alt+A 全部 · Tab 欄を替える"));
@@ -836,28 +875,55 @@ mod tests {
         options
     }
 
-    /// 探す段と置換の段は、全角半角とひらがなカタカナの今の条件と切り替えるキーを 1 行で出す（GitHub Issue #199）。
+    /// 探す段と置換の段は、5 つの条件の札を出し、オンの札だけに ✓ と選択の色の塗りを付ける。名前とキーは条件に依らず同じ
+    /// （GitHub Issue #199・#288）。
     #[test]
-    fn the_find_steps_show_the_width_and_kana_conditions() {
-        let standard = FindOptions::standard();
-        for (options, wanted) in [
-            (
-                standard,
-                "Alt+Z 全角半角を区別しない · Alt+K ひらがなカタカナを区別する",
-            ),
-            (
-                standard.toggled_width().toggled_kana(),
-                "Alt+Z 全角半角を区別する · Alt+K ひらがなカタカナを区別しない",
-            ),
-        ] {
+    fn the_find_steps_mark_only_the_conditions_that_are_on() {
+        for options in every_find_option() {
             for palette in [
                 CommandPalette::open_find("b", options),
                 CommandPalette::open_replace("b", "", options),
             ] {
                 let commands = palette.paint(view(), colors(), DetailPane::Closed);
-                assert!(texts(&commands).contains(&wanted), "{:?}", palette.mode());
+                assert_marks(&palette, &commands, options);
             }
         }
+    }
+
+    /// 札ごとに、名前とキーがあり、オンの札だけ ✓ と選択の色の塗りがある。
+    fn assert_marks(palette: &CommandPalette, commands: &[DrawCommand], options: FindOptions) {
+        let chips = PaletteLayout::new(view(), palette).chips().unwrap();
+        for (chip, (name, key, toggle)) in chips.into_iter().zip(FIND_CHIPS) {
+            let inside = texts_in(commands, chip);
+            assert!(inside.contains(&name) && inside.contains(&key));
+            let on = toggle_is_on(options, toggle);
+            assert_eq!(inside.contains(&"✓"), on, "{name} {options:?}");
+            let filled = fills(commands, colors().selection())
+                .into_iter()
+                .any(|rect| contains_point(chip, rect.origin()));
+            assert_eq!(filled, on, "{name} {options:?}");
+        }
+    }
+
+    /// 矩形 `area` の中に書いた字。
+    fn texts_in(commands: &[DrawCommand], area: PixelRect) -> Vec<&str> {
+        commands
+            .iter()
+            .filter_map(|command| match command {
+                DrawCommand::Text { text, baseline, .. } if contains_point(area, *baseline) => {
+                    Some(text.as_str())
+                }
+                DrawCommand::Text { .. }
+                | DrawCommand::Fill { .. }
+                | DrawCommand::Line { .. }
+                | DrawCommand::TextSpan { .. } => None,
+            })
+            .collect()
+    }
+
+    fn contains_point(area: PixelRect, at: PixelPoint) -> bool {
+        (area.origin().x()..area.origin().x() + area.size().width()).contains(&at.x())
+            && (area.origin().y()..area.origin().y() + area.size().height()).contains(&at.y())
     }
 
     /// 探す段と置換の段の案内は、条件のどの組み合わせでもパレットの幅に収まる長さ（打った文字は除く・Issue #175）。
