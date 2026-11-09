@@ -19,6 +19,12 @@ pub struct SelectionStats {
     rewritten: u64,
     /// 範囲に入った行のうち、列の数が見出しと違う行（ずれた値を足しているかもしれない・GitHub Issue #329）。
     ragged_rows: u64,
+    /// 空のセル（セルはあるが値が空）の数。欠損に気づけるように（GitHub Issue #389）。セルが無いは数えない（RS-004）。
+    empties: u64,
+    /// 数の最小と最大（GitHub Issue #389）。比べて桁あふれしたら `None` のまま（見せない）。
+    extremes: Option<(Decimal, Decimal)>,
+    /// 最小と最大を比べられなかった（桁あふれ）。
+    extremes_lost: bool,
 }
 
 impl SelectionStats {
@@ -44,6 +50,9 @@ impl SelectionStats {
             not_numbers: 0,
             rewritten: 0,
             ragged_rows: 0,
+            empties: 0,
+            extremes: None,
+            extremes_lost: false,
         }
     }
 
@@ -64,9 +73,10 @@ impl SelectionStats {
         }
     }
 
-    /// セルの値（復号した値）`value` を 1 つ足す。空のセルは数えない。
+    /// セルの値（復号した値）`value` を 1 つ足す。空のセルは件数に入れず、空の数に数える。
     pub fn add(&mut self, value: &str) {
         if value.is_empty() {
+            self.empties = self.empties.saturating_add(1);
             return;
         }
         self.cells = self.cells.saturating_add(1);
@@ -74,12 +84,45 @@ impl SelectionStats {
             Some(number) => {
                 self.numbers = self.numbers.saturating_add(1);
                 self.sum.add(number);
+                self.widen(number);
                 if !is_plain_number(value) {
                     self.rewritten = self.rewritten.saturating_add(1);
                 }
             }
             None => self.not_numbers = self.not_numbers.saturating_add(1),
         }
+    }
+
+    /// 最小と最大に数 `number` を入れる。比べて桁あふれしたら、以後は最小と最大を見せない。
+    fn widen(&mut self, number: Decimal) {
+        if self.extremes_lost {
+            return;
+        }
+        let Some((low, high)) = self.extremes else {
+            self.extremes = Some((number, number));
+            return;
+        };
+        if let (Some(below), Some(above)) = (number.checked_cmp(low), number.checked_cmp(high)) {
+            self.extremes = Some((
+                if below.is_lt() { number } else { low },
+                if above.is_gt() { number } else { high },
+            ));
+        } else {
+            self.extremes = None;
+            self.extremes_lost = true;
+        }
+    }
+
+    /// 数の最小と最大。数が無いか、比べて桁あふれしたら `None`。
+    #[must_use]
+    pub fn extremes(self) -> Option<(Decimal, Decimal)> {
+        self.extremes
+    }
+
+    /// 空のセルの数（セルはあるが値が空）。
+    #[must_use]
+    pub fn empties(self) -> u64 {
+        self.empties
     }
 
     /// 数と読んだうち、書き方を読み替えたもの（`¥3`・`1,200`・`1.5e3` など）の数（GitHub Issue #319）。
@@ -136,6 +179,7 @@ impl SelectionStats {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::vec;
     use alloc::vec::Vec;
 
     fn table(cells: &[&[&str]]) -> Vec<Vec<String>> {
@@ -201,5 +245,25 @@ mod tests {
                 "{order:?}"
             );
         }
+    }
+
+    /// 範囲の数の最小と最大、空のセルの数を数える（アナリストのペルソナの相談・GitHub Issue #389）。セルが無いは空に数えない。
+    #[test]
+    fn extremes_and_empty_cells_are_counted() {
+        let rows: Vec<Vec<String>> = [["12.5", ""], ["-3", "x"], ["1,200", "7"]]
+            .iter()
+            .map(|row| row.iter().map(|&value| String::from(value)).collect())
+            .collect();
+        let mut short = rows.clone();
+        short.push(vec![String::from("4")]);
+        let borrowed: Vec<&[String]> = short.iter().map(Vec::as_slice).collect();
+        let stats = SelectionStats::of(&borrowed, &(0..=1));
+        assert_eq!(
+            stats.extremes(),
+            Some((Decimal::new(-3, 0), Decimal::new(1_200, 0)))
+        );
+        assert_eq!(stats.empties(), 1);
+        assert_eq!(stats.cells(), 6);
+        assert_eq!(SelectionStats::empty().extremes(), None);
     }
 }
