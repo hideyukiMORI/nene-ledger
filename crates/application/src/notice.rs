@@ -9,6 +9,7 @@ use crate::read_only_notice::ReadOnlyNotice;
 use crate::replace_notice::ReplaceNotice;
 use crate::rows_notice::RowsNotice;
 use crate::save_problem::SaveProblem;
+use crate::unrepresentable_notice::UnrepresentableNotice;
 use crate::zoom_level::ZoomLevel;
 
 /// 状態の行に一度だけ出す知らせ。次の操作で消える。
@@ -91,6 +92,8 @@ pub enum Notice {
     Columns(ColumnsNotice),
     /// このセルは差分で消した（`Absent`・KEEP-05）ので直せない。列の数が足りない行のセルは足して直せる（GitHub Issue #83）。
     EditMissingCell,
+    /// 書き換えた値に、ファイルの文字コードで表せない字があり、保存できなかった。どのセルかを言う（GitHub Issue #393）。
+    Unrepresentable(UnrepresentableNotice),
     /// 方言の判別に確信が無い（FR-023・Issue #3）。1 位で開いたことと、迷った相手の読み方を知らせ、候補から選ぶ入口を示す
     /// （点数の割合だけでは何と迷ったか分からない・GitHub Issue #381）。
     DialectUnsure {

@@ -97,6 +97,7 @@ use crate::thumb_state::ThumbState;
 use crate::totals_request::TotalsRequest;
 use crate::track_side::TrackSide;
 use crate::tsv::{parse_tsv, tsv};
+use crate::unrepresentable_notice::UnrepresentableNotice;
 use crate::view_row::ViewRow;
 use crate::window_view::WindowView;
 use nene_ledger_core::cell_change::CellChange;
@@ -593,7 +594,54 @@ impl Document {
         if self.closing == CloseState::AfterSave {
             self.closing = CloseState::Open;
         }
-        self.notice = Some(Notice::SaveFailed(problem));
+        self.notice = Some(match problem {
+            SaveProblem::Unrepresentable(character) => self
+                .unrepresentable(character)
+                .unwrap_or(Notice::SaveFailed(problem)),
+            SaveProblem::ChangedOutside
+            | SaveProblem::Locked
+            | SaveProblem::HardLinked
+            | SaveProblem::Interrupted
+            | SaveProblem::Unplannable
+            | SaveProblem::Untitled
+            | SaveProblem::Cancelled
+            | SaveProblem::Other => Notice::SaveFailed(problem),
+        });
+    }
+
+    /// 文字コードで表せない字 `character` のある、書き換えたセルの最初の位置（表示の行と列）と、そのセルの数（GitHub
+    /// Issue #393）。見つからなければ（並びに無い行や列）`None`。
+    fn unrepresentable(&self, character: char) -> Option<Notice> {
+        let found: Vec<(RowId, ColumnId)> = self
+            .edits
+            .rows()
+            .into_iter()
+            .flat_map(|(row, columns)| {
+                columns
+                    .into_iter()
+                    .filter(|(_, value)| {
+                        matches!(value, CellValue::Text(text) if text.contains(character))
+                    })
+                    .map(move |(column, _)| (row, column))
+            })
+            .collect();
+        let cells = u64::try_from(found.len()).unwrap_or(u64::MAX);
+        let first = found
+            .into_iter()
+            .filter_map(|(row, column)| {
+                self.rows
+                    .position_of(row)
+                    .zip(self.columns.position_of(column))
+            })
+            .min();
+        let (line, column) = first?;
+        Some(Notice::Unrepresentable(UnrepresentableNotice {
+            character,
+            encoding: self.format.format().encoding(),
+            line,
+            column,
+            cells,
+        }))
     }
 
     /// Ctrl+S。編集中なら確定してから、書き換えがあれば保存させる。
@@ -8388,6 +8436,24 @@ mod tests {
         let frame = document.frame(normal(), palette());
         text_at(&frame, "保存しました");
         text_at(&frame, "e.csv — NeNe Ledger");
+    }
+
+    /// 表せない字のある書き換えたセルを、いちばん上の位置とセルの数で言う（GitHub Issue #393）。
+    #[test]
+    fn an_unrepresentable_character_is_placed_in_the_edited_cells() {
+        let mut document = editable();
+        document.apply(moving(CursorStep::Down), normal());
+        typed(&mut document, "𠮷田");
+        document.apply(moving(CursorStep::Down), normal());
+        typed(&mut document, "𠮷");
+        document.apply(Intent::Save, normal());
+        document.begin_saving();
+        document.save_failed(SaveProblem::Unrepresentable('𠮷'));
+        let frame = document.frame(normal(), palette());
+        text_at(
+            &frame,
+            "2 行目 · 1 列目 の「𠮷」は UTF-8 で表せないので保存できませんでした（この字のセル 2 · 直してから Ctrl+S · 直した値は残っています）",
+        );
     }
 
     #[test]
