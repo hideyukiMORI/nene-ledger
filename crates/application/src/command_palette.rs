@@ -24,6 +24,7 @@ use crate::palette_painter::PalettePainter;
 use crate::palette_search::{self, commands_with_recent, key_list, readings, themes};
 use crate::reading_aspect::ReadingAspect;
 use crate::reading_choice::ReadingChoice;
+use crate::scroll::Scroll;
 use crate::window_view::WindowView;
 use nene_ledger_core::find_options::FindOptions;
 use nene_ledger_core::find_query::FindQuery;
@@ -348,13 +349,13 @@ impl CommandPalette {
             Intent::Type(character) => self.insert_text(character.encode_utf8(&mut [0_u8; 4])),
             Intent::Erase => self.erase_query(),
             Intent::Move { step, .. } => self.step(step),
+            Intent::Scroll(scroll) => self.wheel(scroll),
             Intent::Confirm => self.confirmed(current_theme),
             Intent::Cancel => self.cancelled(),
             Intent::OpenPalette | Intent::OpenGoTo | Intent::OpenFind { .. } => {
                 self.switched(intent)
             }
-            Intent::Scroll(_)
-            | Intent::Point { .. }
+            Intent::Point { .. }
             | Intent::DoubleClick { .. }
             | Intent::Drag { .. }
             | Intent::Release
@@ -629,10 +630,53 @@ impl CommandPalette {
             CursorStep::RowEnd | CursorStep::Bottom => last,
             CursorStep::Left | CursorStep::Right => current,
         };
-        // 見出しは飛ばす。動いた向きに候補が無ければ（いちばん上の見出し）、反対の向きの最初の候補（GitHub Issue #420）。
+        // ↑ で最初の候補から上へ、↓ で最後の候補から下へは、反対の端へ回る（GitHub Issue #432）。PageUp/Down・Home/End は回らない。
+        let first = selectable_from(&items, 0, true).unwrap_or(0);
+        let final_item = selectable_from(&items, last, false).unwrap_or(last);
+        match step {
+            CursorStep::Up if current <= first => return self.retarget(final_item),
+            CursorStep::Down if current >= final_item => return self.retarget(first),
+            CursorStep::Up
+            | CursorStep::Down
+            | CursorStep::PageUp
+            | CursorStep::PageDown
+            | CursorStep::RowStart
+            | CursorStep::Top
+            | CursorStep::RowEnd
+            | CursorStep::Bottom
+            | CursorStep::Left
+            | CursorStep::Right => {}
+        }
+        self.landed(&items, current, wanted)
+    }
+
+    /// ホイール `scroll` で選びを行の数だけ動かす（見えている所は選びに付いてくる）。端で止まり、回らない。横のホイールは
+    /// 何もしない（GitHub Issue #432）。
+    fn wheel(&mut self, scroll: Scroll) -> PaletteOutcome {
+        let (rows, down) = match scroll {
+            Scroll::Up { rows } => (rows, false),
+            Scroll::Down { rows } => (rows, true),
+            Scroll::Left { .. } | Scroll::Right { .. } => return PaletteOutcome::Stay,
+        };
+        let items = self.items();
+        let current = self.selected();
+        let rows = usize::try_from(rows).unwrap_or(usize::MAX);
+        let wanted = if down {
+            current
+                .saturating_add(rows)
+                .min(items.len().saturating_sub(1))
+        } else {
+            current.saturating_sub(rows)
+        };
+        self.landed(&items, current, wanted)
+    }
+
+    /// `current` から `wanted` へ動いた先。見出しは飛ばす。動いた向きに候補が無ければ（いちばん上の見出し）、反対の向きの
+    /// 最初の候補（GitHub Issue #420）。
+    fn landed(&mut self, items: &[PaletteItem], current: usize, wanted: usize) -> PaletteOutcome {
         let forward = wanted >= current;
-        let next = selectable_from(&items, wanted, forward)
-            .or_else(|| selectable_from(&items, wanted, !forward))
+        let next = selectable_from(items, wanted, forward)
+            .or_else(|| selectable_from(items, wanted, !forward))
             .unwrap_or(current);
         self.retarget(next)
     }
@@ -1215,10 +1259,42 @@ mod tests {
         assert_eq!(chosen(&palette), PaletteItem::Command(CommandId::ShowAbout));
         palette.handle(moving(CursorStep::Top), 0);
         assert_eq!(palette.selected(), 1);
+        // ↑ で最初から最後へ、↓ で最後から最初へ回る。PageUp と Home は回らない（GitHub Issue #432）。
         palette.handle(moving(CursorStep::Up), 0);
+        assert_eq!(palette.selected(), items.len() - 1);
+        palette.handle(moving(CursorStep::Down), 0);
+        assert_eq!(palette.selected(), 1);
+        palette.handle(moving(CursorStep::PageUp), 0);
         assert_eq!(palette.selected(), 1);
         // 押した見出しは何もしない。
         assert_eq!(palette.click(0, 0), PaletteOutcome::Stay);
+    }
+
+    /// ホイールは選びを行の数だけ動かし、見出しを飛ばし、端で止まって回らない（GitHub Issue #432）。
+    #[test]
+    fn the_wheel_moves_the_selection_and_stops_at_the_ends() {
+        let mut palette = CommandPalette::open();
+        let last = palette.items().len() - 1;
+        palette.handle(Intent::Scroll(Scroll::Down { rows: 3 }), 0);
+        assert_eq!(palette.selected(), 4);
+        palette.handle(Intent::Scroll(Scroll::Down { rows: 2 }), 0);
+        // 6 番目は「ファイル」の見出しなので、その下の 7 番目へ。
+        assert_eq!(
+            palette.items()[6],
+            PaletteItem::Heading(PaletteHeading::File)
+        );
+        assert_eq!(palette.selected(), 7);
+        // 横のホイールは何もしない。
+        palette.handle(Intent::Scroll(Scroll::Right { columns: 3 }), 0);
+        assert_eq!(palette.selected(), 7);
+        palette.handle(Intent::Scroll(Scroll::Down { rows: 1_000 }), 0);
+        assert_eq!(palette.selected(), last);
+        palette.handle(Intent::Scroll(Scroll::Down { rows: 3 }), 0);
+        assert_eq!(palette.selected(), last);
+        palette.handle(Intent::Scroll(Scroll::Up { rows: 1_000 }), 0);
+        assert_eq!(palette.selected(), 1);
+        palette.handle(Intent::Scroll(Scroll::Up { rows: 3 }), 0);
+        assert_eq!(palette.selected(), 1);
     }
 
     /// どのキーで動いても、見出しを選ぶことは無い（GitHub Issue #420）。
