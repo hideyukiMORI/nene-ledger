@@ -33,7 +33,7 @@ use crate::cursor_step::CursorStep;
 use crate::cut_mark::CutMark;
 use crate::cut_record::CutRecord;
 use crate::detail_content::DetailContent;
-use crate::detail_painter::DetailPainter;
+use crate::detail_painter::{DetailPainter, body_extent};
 use crate::detail_pane::DetailPane;
 use crate::detail_place::DetailPlace;
 use crate::document_effect::DocumentEffect;
@@ -167,6 +167,8 @@ pub struct Document {
     grip: bool,
     /// 詳細ペインの本文の行の数（境の線で変える・設定に覚える・GitHub Issue #452）。
     detail_lines: u32,
+    /// 詳細ペインの本文を見せる最初の行と、そのときのカーソルのセル（カーソルが動けば先頭に戻る・GitHub Issue #454）。
+    detail_scroll: Option<(CellPosition, usize)>,
     /// 行の並び（ADR 0024 の層 1・ADR 0027）。
     rows: RowOrder,
     /// 列の並び（ADR 0024 の層 1・ADR 0027）。表の列は、この並びの順（`t`）で数える。
@@ -317,6 +319,7 @@ impl Document {
             custom: BTreeMap::new(),
             grip: false,
             detail_lines: DETAIL_LINES,
+            detail_scroll: None,
             rows: RowOrder::whole(),
             columns: ColumnOrder::whole(),
             source_width,
@@ -902,6 +905,13 @@ impl Document {
     pub fn apply(&mut self, intent: Intent, window: WindowView) -> DocumentEffect {
         self.window = Some(window);
         let effect = self.apply_intent(intent, window);
+        // カーソルが別のセルへ動いたら、詳細ペインの本文は先頭から（GitHub Issue #454）。
+        if self
+            .detail_scroll
+            .is_some_and(|(cell, _)| cell != self.selection.cursor())
+        {
+            self.detail_scroll = None;
+        }
         // 横に動いて、見えている列を窓の行が持っていなければ、今の位置から読み直させる（ADR 0033 の決定 1）。
         if effect == DocumentEffect::Stay && !self.holds_shown_columns(window) {
             return DocumentEffect::Read {
@@ -3211,6 +3221,11 @@ impl Document {
 
     /// ホイール。横はその場で動かし、縦は動いた先の本体の先頭を返す。ドラッグ中なら、動いた後の指の下まで選択を広げる。
     fn wheel(&mut self, scroll: Scroll, current: u64, window: WindowView) -> u64 {
+        // 指が詳細ペインの上なら、表でなくペインの本文を動かす（GitHub Issue #454）。
+        if self.hovered == Some(HoverTarget::Pane) {
+            self.scroll_pane(scroll, window);
+            return current;
+        }
         let target = self.scroll(scroll, current);
         self.follow_wheel(target, self.page_rows(window), window);
         target
@@ -3357,6 +3372,54 @@ impl Document {
     /// 詳細ペインの本文の行の数を `lines` にする（設定から・`MIN_DETAIL_LINES`〜`MAX_DETAIL_LINES` に収める）。
     pub fn set_detail_lines(&mut self, lines: u32) {
         self.detail_lines = lines.clamp(MIN_DETAIL_LINES, MAX_DETAIL_LINES);
+    }
+
+    /// 詳細ペインの本文を見せる最初の行（カーソルのセルが前に動かしたときと同じ間だけ・GitHub Issue #454）。
+    fn detail_offset(&self) -> usize {
+        self.detail_scroll
+            .filter(|&(cell, _)| cell == self.selection.cursor())
+            .map_or(0, |(_, first)| first)
+    }
+
+    /// 窓 `window` の中の詳細ペインの矩形（開いていなければ `None`）。
+    fn pane_rect(&self, window: WindowView) -> Option<PixelRect> {
+        if self.detail != DetailPane::Open {
+            return None;
+        }
+        let client = window.chrome().client();
+        let bands = ClientBands::split(
+            client.size().height(),
+            window,
+            self.detail,
+            self.detail_lines,
+        );
+        Some(PixelRect::new(
+            PixelPoint::new(
+                client.origin().x(),
+                client.origin().y().saturating_add(bands.table()),
+            ),
+            PixelSize::new(client.size().width(), bands.detail()),
+        ))
+    }
+
+    /// ホイール `scroll` で詳細ペインの本文を動かす。先頭と、最後の行が見える所で止まる（GitHub Issue #454）。
+    fn scroll_pane(&mut self, scroll: Scroll, window: WindowView) {
+        let Some(pane) = self.pane_rect(window) else {
+            return;
+        };
+        let (total, room) = body_extent(pane, window.content_metrics(), self.detail_content());
+        let most = total.saturating_sub(room);
+        let first = self.detail_offset();
+        let moved = match scroll {
+            Scroll::Up { rows } => {
+                first.saturating_sub(usize::try_from(rows).unwrap_or(usize::MAX))
+            }
+            Scroll::Down { rows } => {
+                first.saturating_add(usize::try_from(rows).unwrap_or(usize::MAX))
+            }
+            Scroll::Left { .. } | Scroll::Right { .. } => first,
+        };
+        self.detail_scroll = Some((self.selection.cursor(), moved.min(most)));
     }
 
     /// `at` が、開いている詳細ペインと表の境の線の上（上下に `PANE_GRIP` の幅）か（GitHub Issue #452）。
@@ -4254,6 +4317,11 @@ impl Document {
             Some(HoverTarget::Menu)
         } else if at.is_some_and(|at| self.pane_grip(at, window)) {
             Some(HoverTarget::PaneGrip)
+        } else if at.is_some_and(|at| {
+            self.pane_rect(window)
+                .is_some_and(|pane| contains_point(pane, at))
+        }) {
+            Some(HoverTarget::Pane)
         } else {
             thumb
         };
@@ -5150,6 +5218,7 @@ impl Document {
         )
         .with_shape(shape);
         DetailPainter::new(pane, metrics, palette, self.format.format().encoding())
+            .with_scroll(self.detail_offset())
             .paint(place, self.detail_content())
     }
 
@@ -5746,6 +5815,13 @@ fn flattened(steps: &[EditStep]) -> Vec<&EditStep> {
             }
         })
         .collect()
+}
+
+/// 矩形 `rect` が点 `at` を含むか（右と下の端は含まない）。
+fn contains_point(rect: PixelRect, at: PixelPoint) -> bool {
+    let (left, top) = (rect.origin().x(), rect.origin().y());
+    (left..left.saturating_add(rect.size().width())).contains(&at.x())
+        && (top..top.saturating_add(rect.size().height())).contains(&at.y())
 }
 
 /// 窓 `window` の点 `at` が、タイトルバーの左端の「≡ 操作」の上か（GitHub Issue #446・#448）。
@@ -7454,6 +7530,48 @@ mod tests {
         document.apply(Intent::ToggleDetail, window);
         document.hover(Some(PixelPoint::new(100, border)), window);
         assert_eq!(document.pointer_shape(), PointerShape::Arrow);
+    }
+
+    /// 指が詳細ペインの上なら、ホイールで表でなくペインの本文が動き、最後の行が見える所で止まる。カーソルが別のセルへ
+    /// 動けば先頭に戻る（GitHub Issue #454）。
+    #[test]
+    fn the_wheel_over_the_pane_scrolls_the_long_value() {
+        let window = view(400, 600, WindowPlacement::Normal);
+        let long = (1..=30_u32)
+            .map(|n| format!("line {n}"))
+            .collect::<Vec<String>>()
+            .join("\n");
+        let mut document = opened_with(&table(&[&["note"], &[long.as_str()], &["short"]]));
+        let pane = document.pane_rect(window).unwrap();
+        let inside = PixelPoint::new(
+            pane.origin().x() + 50,
+            pane.origin().y() + pane.size().height() / 2,
+        );
+        let first_line = |shown: &Document| {
+            let frame = shown.frame(window, palette());
+            all_texts(&frame)
+                .iter()
+                .find(|text| text.starts_with("line ") && !text.contains('¶'))
+                .map(|text| String::from(*text))
+                .unwrap()
+        };
+        assert_eq!(first_line(&document), "line 1");
+        document.hover(Some(inside), window);
+        let top = document.view.first_body();
+        document.apply(Intent::Scroll(Scroll::Down { rows: 3 }), window);
+        assert_eq!(first_line(&document), "line 4");
+        assert_eq!(document.view.first_body(), top);
+        document.apply(Intent::Scroll(Scroll::Down { rows: 1_000 }), window);
+        let (total, room) = body_extent(pane, window.content_metrics(), document.detail_content());
+        assert_eq!(document.detail_offset(), total - room);
+        let bottom = document.frame(window, palette());
+        assert!(all_texts(&bottom).contains(&"line 30"));
+        document.apply(Intent::Scroll(Scroll::Up { rows: 1_000 }), window);
+        assert_eq!(first_line(&document), "line 1");
+        document.apply(Intent::Scroll(Scroll::Down { rows: 3 }), window);
+        document.apply(moving(CursorStep::Down), window);
+        document.apply(moving(CursorStep::Up), window);
+        assert_eq!(first_line(&document), "line 1");
     }
 
     fn dragging_to(x: i32, y: i32) -> Intent {
