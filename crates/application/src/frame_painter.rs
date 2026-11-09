@@ -332,7 +332,10 @@ impl<'view> FramePainter<'view> {
                 let marks = marks_in(value);
                 self.paint_cell(rect, Some(shown.as_str()), (mark, &found, &marks));
             }
-            Some(CellValue::Absent) => self.paint_cell(rect, None, (mark, &[], &[])),
+            Some(CellValue::Absent) => {
+                self.paint_cell(rect, None, (mark, &[], &[]));
+                self.missing_mark(rect, mark, source);
+            }
             // 窓の行がまだ読んでいない列（横に動いて読み直す前）は、「セルが無い」色でなく空のセルとして描く（ADR 0033 の
             // 決定 1・読み直したら描き直す）。
             None if !row.values().holds(source) => {
@@ -344,7 +347,11 @@ impl<'view> FramePainter<'view> {
                     .map(|value| self.found_in(style, value))
                     .unwrap_or_default();
                 let marks = value.map(marks_in).unwrap_or_default();
-                self.paint_cell(rect, row.cells().get(source), (mark, &found, &marks));
+                let cell = row.cells().get(source);
+                self.paint_cell(rect, cell, (mark, &found, &marks));
+                if cell.is_none() {
+                    self.missing_mark(rect, mark, source);
+                }
             }
         }
     }
@@ -651,11 +658,6 @@ impl<'view> FramePainter<'view> {
         };
         let Some(text) = cell else {
             self.fill(rect, missing);
-            // 本体の「セルが無い」所は、空のセルと見分けられるよう斜めの線を 1 本引く（色だけに頼らない・RS-004・
-            // データエンジニアのペルソナの相談・GitHub Issue #401）。
-            if matches!(mark, CellMark::Unselected | CellMark::Band) {
-                self.slash(rect, self.palette.gutter_text().mixed(missing, MARK_FADE));
-            }
             return;
         };
         let background = match mark {
@@ -745,6 +747,17 @@ impl<'view> FramePainter<'view> {
     /// 矩形を塗る。
     fn fill(&mut self, rect: PixelRect, color: Color) {
         self.commands.push(DrawCommand::Fill { rect, color });
+    }
+
+    /// 本体の「セルが無い」所（元の列 `source`）に、空のセルと見分けられるよう斜めの線を 1 本引く（色だけに頼らない・
+    /// RS-004・GitHub Issue #401）。見出しより後ろの列（ほかの行が長くて増えた列）には引かない。そこはどの行にも無いのが
+    /// 普通で、線を並べると本当に欠けたセルが埋もれる（データエンジニアのペルソナの 2 巡目・GitHub Issue #405）。
+    fn missing_mark(&mut self, rect: PixelRect, mark: CellMark, source: usize) {
+        let within = self.expected.is_none_or(|expected| source < expected);
+        if within && matches!(mark, CellMark::Unselected | CellMark::Band) {
+            let missing = self.palette.gutter();
+            self.slash(rect, self.palette.gutter_text().mixed(missing, MARK_FADE));
+        }
     }
 
     /// `rect` の左下から右上へ、余白を空けた斜めの線（「セルが無い」の印）。
@@ -1061,7 +1074,8 @@ mod tests {
         assert!(fills_of(&painted(None), palette().danger()).is_empty());
     }
 
-    /// 「セルが無い」所には、空のセルと見分ける斜めの線を引く。空のセルには引かない（GitHub Issue #401）。
+    /// 「セルが無い」所には、空のセルと見分ける斜めの線を引く。空のセルには引かない（GitHub Issue #401）。見出しの
+    /// セルの数が分かれば、それより後ろの列には引かない（GitHub Issue #405）。
     #[test]
     fn missing_cells_are_slashed_and_empty_cells_are_not() {
         let rows = [row(1, &["1", "", "3"]), row(2, &["1"])];
@@ -1088,6 +1102,14 @@ mod tests {
             );
             assert!(from.y() > to.y());
         }
+        let within = FramePainter::new(&layout, metrics(), palette(), PixelSize::new(800, 600))
+            .with_expected(Some(2))
+            .paint(&[], None, &view(&rows));
+        let slashes = within
+            .iter()
+            .filter(|command| matches!(command, DrawCommand::Line { .. }))
+            .count();
+        assert_eq!(slashes, 1);
     }
 
     #[test]
