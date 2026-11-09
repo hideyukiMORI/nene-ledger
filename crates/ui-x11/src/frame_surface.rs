@@ -2,7 +2,7 @@
 
 use cairo::{Context, FontSlant, FontWeight, Format, ImageSurface, LineCap};
 use nene_ledger_application::zoom_level::ZoomLevel;
-use nene_ledger_core::char_advances::{ASCII_PRINTABLE, CharAdvances, SUBPIXELS};
+use nene_ledger_core::char_advances::{CharAdvances, SUBPIXELS};
 use nene_ledger_core::color::Color;
 use nene_ledger_core::draw_command::DrawCommand;
 use nene_ledger_core::frame::Frame;
@@ -57,22 +57,21 @@ pub(crate) fn measure(zoom: ZoomLevel) -> Result<GlyphMetrics, UiFailure> {
     ))
 }
 
-/// 字体から、拡大 `zoom` の中身の字の送り幅を測る（ASCII の印字できる字は 1 字ずつ、全角は「国」・詳細ペインの押した所と
+/// 字体から、拡大 `zoom` の中身の字の送り幅を測る（ASCII・かなと約物・全角と半角の形は 1 字ずつ、ほかの全角は「国」・詳細ペインの押した所と
 /// カーソルの棒を実際の字に合わせる・GitHub Issue #462）。
 pub(crate) fn measure_advances(zoom: ZoomLevel) -> Result<CharAdvances, UiFailure> {
     let surface = ImageSurface::create(Format::Rgb24, 1_i32, 1_i32)?;
     let context = Context::new(&surface)?;
     set_font(&context, content_size(zoom));
-    let mut ascii = [0_u32; ASCII_PRINTABLE];
-    for (slot, character) in ascii.iter_mut().zip(' '..='~') {
-        *slot = subpixels(
-            context
-                .text_extents(character.encode_utf8(&mut [0_u8; 4]))?
-                .x_advance(),
-        );
+    let mut advances = CharAdvances::uniform(to_pixels(context.text_extents("0")?.x_advance()));
+    for character in CharAdvances::measured_characters() {
+        let advance = context
+            .text_extents(character.encode_utf8(&mut [0_u8; 4]))?
+            .x_advance();
+        advances.set(character, subpixels(advance));
     }
-    let wide = subpixels(context.text_extents("国")?.x_advance());
-    Ok(CharAdvances::measured(ascii, wide))
+    advances.set_wide(subpixels(context.text_extents("国")?.x_advance()));
+    Ok(advances)
 }
 
 /// 画素を `SUBPIXELS` 分の 1 の細かさで。

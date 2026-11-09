@@ -4,7 +4,7 @@
 //! 命令の順と意味は X11 版の `frame_surface` と同じ。
 
 use nene_ledger_application::zoom_level::ZoomLevel;
-use nene_ledger_core::char_advances::{ASCII_PRINTABLE, CharAdvances, SUBPIXELS};
+use nene_ledger_core::char_advances::{CharAdvances, SUBPIXELS};
 use nene_ledger_core::color::Color;
 use nene_ledger_core::display_scale::DisplayScale;
 use nene_ledger_core::draw_command::DrawCommand;
@@ -118,7 +118,7 @@ impl Pen {
         .with_scale(scale))
     }
 
-    /// 画面の倍率 `scale` での、拡大 `zoom` の中身の字の送り幅（ASCII の印字できる字は 1 字ずつ、全角は「国」・
+    /// 画面の倍率 `scale` での、拡大 `zoom` の中身の字の送り幅（ASCII・かなと約物・全角と半角の形は 1 字ずつ、ほかの全角は「国」・
     /// 詳細ペインの押した所とカーソルの棒を実際の字に合わせる・GitHub Issue #462）。
     pub(crate) fn measure_advances(
         &self,
@@ -126,14 +126,16 @@ impl Pen {
         scale: DisplayScale,
     ) -> Result<CharAdvances, Win32Failure> {
         let format = self.format(content_size(zoom, scale))?;
-        let mut ascii = [0_u32; ASCII_PRINTABLE];
-        for (slot, character) in ascii.iter_mut().zip(' '..='~') {
+        let (zero, _, _) = self.line_metrics(&format, "0")?;
+        let mut advances = CharAdvances::uniform(to_pixels(f64::from(zero)));
+        for character in CharAdvances::measured_characters() {
             let (width, _, _) =
                 self.line_metrics(&format, character.encode_utf8(&mut [0_u8; 4]))?;
-            *slot = subpixels(width);
+            advances.set(character, subpixels(width));
         }
         let (wide, _, _) = self.line_metrics(&format, "国")?;
-        Ok(CharAdvances::measured(ascii, subpixels(wide)))
+        advances.set_wide(subpixels(wide));
+        Ok(advances)
     }
 
     /// フレームを描き切って窓に出す。字は画面の倍率 `scale` を掛け、中身の字はさらに拡大 `zoom` の大きさ（ADR 0020）。
