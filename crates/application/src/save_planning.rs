@@ -16,7 +16,7 @@ use nene_ledger_core::record::Record;
 use nene_ledger_core::row_id::RowId;
 use nene_ledger_core::row_piece::RowPiece;
 use nene_ledger_core::row_write_failure::RowWriteFailure;
-use nene_ledger_core::row_writing::{edited_row, restructured_row};
+use nene_ledger_core::row_writing::{edited_row, restructured_row, trimmed_row};
 use nene_ledger_core::save_plan::SavePlan;
 
 use crate::added_row_shape::AddedRowShape;
@@ -398,9 +398,15 @@ fn row_pieces<F>(
     cells: &[(ColumnId, &CellValue)],
     dialect: Dialect,
 ) -> Result<Vec<RowPiece>, SavePlanFailure<F>> {
+    // 後ろの余計なセルを消した行（「セルが無い」にしたのが行の終わりまで続く原本のセル・GitHub Issue #413）。
+    let kept = trimmed_from(record, cells)?;
     let mut written: Vec<(usize, String)> = Vec::with_capacity(cells.len());
     for &(column, value) in cells {
         let (ColumnId::Source(column), CellValue::Text(text)) = (column, value) else {
+            if matches!((column, value), (ColumnId::Source(_), CellValue::Absent)) && kept.is_some()
+            {
+                continue;
+            }
             return Err(SavePlanFailure::Unsupported);
         };
         // 原本の行に無いセルは足す（間は空のセル・ADR 0024 の施主の判断 4・5）。引用は要るときだけ。
@@ -424,12 +430,47 @@ fn row_pieces<F>(
         written.push((column, cell));
     }
     let delimiter = char::from(dialect.delimiter().byte());
-    edited_row(record, written, delimiter).map_err(|failure| match failure {
+    let pieces = match kept {
+        Some(kept) => trimmed_row(record, written, delimiter, kept),
+        None => edited_row(record, written, delimiter),
+    };
+    pieces.map_err(|failure| match failure {
         RowWriteFailure::Unordered(column) => SavePlanFailure::Unordered {
             row: number,
             column,
         },
     })
+}
+
+/// 行の書き換え `cells` のうち「セルが無い」にした原本のセルが、ある列から行の終わりまで続いていれば、その列（残す
+/// セルの数・1 以上）。無ければ `None`。続いていない・1 列目から消している・消した所より右を書き換えているなら書けない
+/// （GitHub Issue #413）。
+fn trimmed_from<F>(
+    record: &Record,
+    cells: &[(ColumnId, &CellValue)],
+) -> Result<Option<usize>, SavePlanFailure<F>> {
+    let absent: Vec<usize> = cells
+        .iter()
+        .filter_map(|&(column, value)| match (column, value) {
+            (ColumnId::Source(index), CellValue::Absent) => Some(index),
+            (ColumnId::Source(_) | ColumnId::Added(_), CellValue::Text(_) | CellValue::Absent) => {
+                None
+            }
+        })
+        .collect();
+    let Some(&from) = absent.first() else {
+        return Ok(None);
+    };
+    let whole_tail = from >= 1
+        && absent.iter().copied().eq(from..record.fields().len())
+        && cells.iter().all(|&(column, value)| {
+            !matches!((column, value), (ColumnId::Source(index), CellValue::Text(_)) if index >= from)
+        });
+    if whole_tail {
+        Ok(Some(from))
+    } else {
+        Err(SavePlanFailure::Unsupported)
+    }
 }
 
 /// レコードの終わり（終わり方を含む）の、レコードの頭からの位置。
@@ -584,6 +625,29 @@ mod tests {
         let mut edits = CellEdits::empty();
         edits.set(RowId::Source(1), ColumnId::Source(0), text(""));
         assert_eq!(saved(input, &edits), b"a\r\"\"\nc");
+    }
+
+    /// 行の後ろの余計なセルを「セルが無い」にしたら、残すセルまでを原本のまま写し、終わり方を残す。ほかの行はそのまま。
+    /// 消す所が行の終わりまで続かない・消した所より右を書き換えているなら書けない（GitHub Issue #413）。
+    #[test]
+    fn extra_cells_at_the_end_of_a_row_are_trimmed() {
+        let input = b"id,name\r\n1,\"a\",x,y\r\n2,b\r\n";
+        let mut trim = CellEdits::empty();
+        trim.set(RowId::Source(1), ColumnId::Source(2), CellValue::Absent);
+        trim.set(RowId::Source(1), ColumnId::Source(3), CellValue::Absent);
+        assert_eq!(saved(input, &trim), b"id,name\r\n1,\"a\"\r\n2,b\r\n");
+        let mut both = trim.clone();
+        both.set(RowId::Source(1), ColumnId::Source(1), text("A"));
+        // 書き換えたセルは元の引用のまま（KEEP-03）。
+        assert_eq!(saved(input, &both), b"id,name\r\n1,\"A\"\r\n2,b\r\n");
+        let plan = |edits: &CellEdits| plan_of(input, (&RowOrder::whole(), edits, shape()));
+        let mut gap = CellEdits::empty();
+        gap.set(RowId::Source(1), ColumnId::Source(2), CellValue::Absent);
+        assert_eq!(plan(&gap), Err(SavePlanFailure::Unsupported));
+        let mut beyond = trim;
+        beyond.set(RowId::Source(1), ColumnId::Source(3), text("z"));
+        beyond.set(RowId::Source(1), ColumnId::Source(2), CellValue::Absent);
+        assert_eq!(plan(&beyond), Err(SavePlanFailure::Unsupported));
     }
 
     #[test]

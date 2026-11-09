@@ -104,6 +104,9 @@ pub enum Notice {
     EditMissingCell,
     /// 書き換えた値に、ファイルの文字コードで表せない字があり、保存できなかった。どのセルかを言う（GitHub Issue #393）。
     Unrepresentable(UnrepresentableNotice),
+    /// 行の後ろの余計なセルを消した数（GitHub Issue #413）。`Some(0)` は消すセルが無い、`None` は見出しが無いか列を
+    /// 足し消ししたので比べられない。
+    Trim(Option<usize>),
     /// 方言の判別に確信が無い（FR-023・Issue #3）。1 位で開いたことと、迷った相手の読み方を知らせ、候補から選ぶ入口を示す
     /// （点数の割合だけでは何と迷ったか分からない・GitHub Issue #381）。
     DialectUnsure {

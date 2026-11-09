@@ -140,4 +140,6 @@ pub enum Intent {
     InsertHere,
     /// Ctrl+-。列全体を選んでいれば列を、そうでなければ選んだ範囲にかかる行を消す。
     RemoveHere,
+    /// カーソルの行の、見出しより後ろの余計なセルを消す（列の数が多い壊れた行を直す・GitHub Issue #413）。
+    TrimExtraCells,
 }
