@@ -1,11 +1,11 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
   <title>NeNe Ledger application icon</title>
-  <desc>NeNe Ledger application icon: a table with a header band, a column rule, a row rule and one selected amber cell, on a cream rounded tile with a charcoal outline. Colors are the NeNe Clock palette (charcoal #1A1917, cream #F5F2EB, amber #D08C3F). Corners outside rx=24 are fully transparent.</desc>
+  <desc>NeNe Ledger application icon: a charcoal value block followed by a large amber comma (the CSV delimiter: "value,"), on a cream rounded tile with a charcoal outline. Colors are the NeNe Clock palette (charcoal #1A1917, cream #F5F2EB, amber #D08C3F). Corners outside rx=24 are fully transparent.</desc>
   <rect width="256" height="256" rx="24" fill="#F5F2EB"/>
   <rect x="1.5" y="1.5" width="253" height="253" rx="22.5" fill="none" stroke="#1A1917" stroke-width="3"/>
-  <rect x="48" y="52" width="160" height="152" rx="12" fill="none" stroke="#1A1917" stroke-width="12"/>
-  <path d="M60 52 H196 A12 12 0 0 1 208 64 V96 H48 V64 A12 12 0 0 1 60 52 Z" fill="#1A1917"/>
-  <rect x="122" y="96" width="12" height="108" fill="#1A1917"/>
-  <rect x="48" y="144" width="160" height="12" fill="#1A1917"/>
-  <rect x="134" y="156" width="68" height="42" fill="#D08C3F"/>
+  <rect x="48" y="50" width="84" height="104" rx="12" fill="#1A1917"/>
+  <g transform="translate(176 134) scale(1.5)" fill="#D08C3F">
+    <circle cx="0" cy="0" r="20"/>
+    <path d="M18 8 C19 32 8 50 -14 60 L-20 50 C-6 42 0 30 -2 16 Z"/>
+  </g>
 </svg>
