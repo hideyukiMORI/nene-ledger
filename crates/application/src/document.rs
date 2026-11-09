@@ -215,7 +215,7 @@ pub struct Document {
 pub const FIRST_HELD_COLUMNS: usize = 1_024;
 
 /// 状態の行の右端に出すパレットの案内。
-const PALETTE_HINT: &str = "Ctrl+Shift+P でコマンド";
+const PALETTE_HINT: &str = "F1 · Ctrl+Shift+P で操作の一覧";
 
 /// 入力の状態の案内（ADR 0026 の決定 2）。
 const EDITING_HINT_ENTERING: &str = "入力中 · Enter 確定 · Esc やめる · F2 編集へ";
@@ -5090,9 +5090,7 @@ impl Document {
             .saturating_add(metrics.ascent());
         // 右端に選んだ範囲の集計、無ければパレットの案内（Issue #41・#43）。左の文言はその手前で切る。
         let right = self.right_status();
-        let hint_width = display_columns(&right)
-            .saturating_mul(metrics.half_width())
-            .saturating_add(metrics.half_width().saturating_mul(2));
+        let hint_width = right_width(&right, metrics);
         let hint_left = width.saturating_sub(hint_width);
         // 左の文言は右端の文言の全角 1 字ぶん手前で切る（続けて読み違えないよう）。
         let left_width = hint_left.saturating_sub(metrics.half_width().saturating_mul(2));
@@ -5128,8 +5126,11 @@ impl Document {
             DrawCommand::Text {
                 baseline: PixelPoint::new(hint_left, baseline_y),
                 // 範囲に列の数が違う行があれば、集計は注意の色（GitHub Issue #329）。
+                // 操作の一覧の案内は、見落とされないよう本文の字の色（押せる・GitHub Issue #422）。
                 color: if right.starts_with(RAGGED_TOTALS) {
                     palette.danger()
+                } else if right == PALETTE_HINT {
+                    palette.text()
                 } else {
                     palette.gutter_text()
                 },
@@ -5138,6 +5139,26 @@ impl Document {
                 role: TextRole::Chrome,
             },
         ]
+    }
+
+    /// 窓 `window` の点 `at` が、状態の行の右端の操作の一覧の案内の上か（押せば一覧を開く・GitHub Issue #422）。集計や
+    /// 知らせを出している間は案内が無いので `false`。
+    #[must_use]
+    pub fn palette_hint_hit(&self, at: PixelPoint, window: WindowView) -> bool {
+        if self.right_status() != PALETTE_HINT {
+            return false;
+        }
+        let client = window.chrome().client();
+        let bands = ClientBands::split(client.size().height(), window, self.detail);
+        let top = client
+            .origin()
+            .y()
+            .saturating_add(bands.table())
+            .saturating_add(bands.detail());
+        let right = client.origin().x().saturating_add(client.size().width());
+        let left = right.saturating_sub(right_width(PALETTE_HINT, window.metrics()));
+        (left..right).contains(&at.x())
+            && (top..top.saturating_add(bands.status())).contains(&at.y())
     }
 
     /// 状態の行の右端の文言。ドラッグ中は選んでいる行と列の数（Excel の「5R x 3C」）。一度だけの知らせがあればそれ
@@ -5609,6 +5630,13 @@ fn flattened(steps: &[EditStep]) -> Vec<&EditStep> {
         .collect()
 }
 
+/// 状態の行の右端の文言 `text` の幅（左右に半角 1 字ずつの余白）。
+fn right_width(text: &str, metrics: GlyphMetrics) -> u32 {
+    display_columns(text)
+        .saturating_mul(metrics.half_width())
+        .saturating_add(metrics.half_width().saturating_mul(2))
+}
+
 /// 状態の行の左の文言 `status`（` · ` で区切った項目）を、表示の桁 `columns` に収める。収まらなければ後ろの項目から
 /// 落として ` · …` を付ける（字の途中で切らない・GitHub Issue #409）。最初の項目も収まらなければそのまま（描く側が切る）。
 fn fitted_status(status: &str, columns: u32) -> String {
@@ -5761,19 +5789,23 @@ mod tests {
             &frame,
             &fitted_status(
                 "1 行 · UTF-8 · カンマ区切り · LF · 1 列 · 1 行目 · 1 列目",
-                22,
+                15,
             ),
         );
-        // 右端に「Ctrl+Shift+P でコマンド」（23 字 × 8 ＋ 16 = 200）。左の文言はその手前（398 − 200 = 198）から、
+        // 右端に「F1 · Ctrl+Shift+P で操作の一覧」（30 桁 × 8 ＋ 16 = 256）。左の文言はその手前（398 − 256 = 142）から、
         // さらに全角 1 字ぶん（16）手前で切る。
         assert_eq!(
             clip,
-            PixelRect::new(PixelPoint::new(1, 274), PixelSize::new(182, 25))
+            PixelRect::new(PixelPoint::new(1, 274), PixelSize::new(126, 25))
         );
         assert_eq!(baseline, PixelPoint::new(1 + 8, 274 + 4 + 12));
         let (hint, hint_clip) = text_at(&frame, PALETTE_HINT);
-        assert_eq!(hint, PixelPoint::new(1 + 198, 274 + 4 + 12));
-        assert_eq!(hint_clip.size(), PixelSize::new(200, 25));
+        assert_eq!(hint, PixelPoint::new(1 + 142, 274 + 4 + 12));
+        assert_eq!(hint_clip.size(), PixelSize::new(256, 25));
+        // 案内を押せば操作の一覧を開く（合成ルートが開く・GitHub Issue #422）。案内の外は押しても開かない。
+        assert!(document.palette_hint_hit(PixelPoint::new(1 + 150, 274 + 10), normal()));
+        assert!(!document.palette_hint_hit(PixelPoint::new(1 + 100, 274 + 10), normal()));
+        assert!(!document.palette_hint_hit(PixelPoint::new(1 + 150, 200), normal()));
         assert_eq!(document.view().rows().len(), 1);
     }
 
@@ -10011,10 +10043,7 @@ mod tests {
         );
         document.end_replace_note();
         assert_eq!(document.replace_guide(), None);
-        text_at(
-            &document.frame(normal(), palette()),
-            "Ctrl+Shift+P でコマンド",
-        );
+        text_at(&document.frame(normal(), palette()), PALETTE_HINT);
     }
 
     /// 行へ飛ぶ段は、打つ前に表の行と列の範囲と書き方を、範囲の外の番号にはどこまでかを言う（GitHub Issue #307）。
