@@ -63,6 +63,47 @@ const fn mark_of(character: char) -> Option<char> {
     }
 }
 
+/// 値 `value` の中の、印に替える字の凡例（印の名前と数・最初に出た順）。表の印 `□` が字の無い豆腐に見えて驚かないよう、
+/// 詳細ペインで言葉にする（業界のペルソナの相談・GitHub Issue #387）。印の表は [`mark_of`] と同じ。
+#[must_use]
+pub fn mark_legend(value: &str) -> String {
+    let mut counts: Vec<(char, usize)> = Vec::new();
+    for (at, shown) in shown_characters(value) {
+        // 元の値にある本物の `□` などは数えない（印かどうかは元の字で決める・`mark_spans` と同じ）。
+        let replaced = value
+            .get(at..)
+            .and_then(|rest| rest.chars().next())
+            .is_some_and(|original| mark_of(original).is_some());
+        if !replaced {
+            continue;
+        }
+        match counts.iter_mut().find(|(mark, _)| *mark == shown) {
+            Some((_, count)) => *count = count.saturating_add(1),
+            None => counts.push((shown, 1)),
+        }
+    }
+    counts
+        .into_iter()
+        .filter_map(|(mark, count)| {
+            mark_name(mark).map(|name| alloc::format!("{mark} {name} {count}"))
+        })
+        .collect::<Vec<String>>()
+        .join("・")
+}
+
+/// 印 `mark` の名前（印でなければ `None`）。
+const fn mark_name(mark: char) -> Option<&'static str> {
+    match mark {
+        LINE_BREAK => Some("改行"),
+        TAB => Some("タブ"),
+        IDEOGRAPHIC_SPACE => Some("全角の空白"),
+        NO_BREAK_SPACE => Some("詰めない空白"),
+        ZERO_WIDTH => Some("幅の無い字"),
+        CONTROL => Some("制御文字"),
+        _ => None,
+    }
+}
+
 /// `value` が表示の 1 行そのものか（`single_line(value) == value`・印に替える字が無い）。写しを作らずに確かめる
 /// （窓の行は、表示の文字列が元の値と同じなら写しを持たない・GitHub Issue #22）。
 #[must_use]
@@ -309,5 +350,22 @@ mod tests {
         assert_eq!(shown, "a→b¶c¶→d□e␣·");
         assert!(mark_spans("plain ¶→·").is_empty());
         assert!(mark_spans("").is_empty());
+    }
+
+    /// 印の凡例は、元の値で替えた字だけを、最初に出た順に名前と数で言う（GitHub Issue #387）。
+    #[test]
+    fn the_legend_names_the_marks_in_a_value() {
+        assert_eq!(mark_legend("山田\u{3000}太郎"), "□ 全角の空白 1");
+        assert_eq!(
+            mark_legend("a\tb\r\nc\u{3000}d\u{3000}\n"),
+            "→ タブ 1・¶ 改行 2・□ 全角の空白 2"
+        );
+        // 元の値にある本物の □ と ¶ は印でないので数えない。
+        assert_eq!(mark_legend("□ と ¶"), "");
+        assert_eq!(mark_legend("plain"), "");
+        assert_eq!(
+            mark_legend("\u{a0}\u{200b}\u{7}"),
+            "␣ 詰めない空白 1・¦ 幅の無い字 1・· 制御文字 1"
+        );
     }
 }
