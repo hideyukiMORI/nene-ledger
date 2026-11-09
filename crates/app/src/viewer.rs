@@ -37,6 +37,7 @@ use nene_ledger_application::ticker::Ticker;
 use nene_ledger_application::totals_request::TotalsRequest;
 use nene_ledger_application::window_view::WindowView;
 use nene_ledger_application::zoom_level::ZoomLevel;
+use nene_ledger_core::char_advances::CharAdvances;
 use nene_ledger_core::find_query::FindQuery;
 use std::path::PathBuf;
 
@@ -1148,6 +1149,10 @@ impl Session for Viewer {
             },
         ));
         Frame::new(view.size(), commands)
+    }
+
+    fn measured(&mut self, advances: &CharAdvances) {
+        self.document.set_advances(advances);
     }
 
     fn zoom(&self) -> ZoomLevel {

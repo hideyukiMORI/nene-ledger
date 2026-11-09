@@ -3,7 +3,6 @@
 use nene_ledger_application::clipboard_text::ClipboardText;
 use nene_ledger_application::window_view::WindowView;
 use nene_ledger_application::zoom_level::ZoomLevel;
-use nene_ledger_core::char_advances::CharAdvances;
 use nene_ledger_core::glyph_metrics::GlyphMetrics;
 
 use crate::cursor_shape::CursorShape;
@@ -20,8 +19,6 @@ pub(crate) struct Screen {
     clipboard: Option<ClipboardText>,
     zoom: ZoomLevel,
     content: GlyphMetrics,
-    /// 中身の字の送り幅（GitHub Issue #462）。
-    advances: CharAdvances,
     holding: bool,
     /// 分けて受け取っている途中の貼り付け（`INCR`）。
     incoming: Option<IncomingPaste>,
@@ -34,8 +31,8 @@ pub(crate) struct Screen {
 }
 
 impl Screen {
-    /// 窓を開いたときの状態。マウスは何も押しておらず、カーソルは矢印。中身の字の送り幅は `advances`。
-    pub(crate) fn new(viewport: Viewport, advances: CharAdvances) -> Self {
+    /// 窓を開いたときの状態。マウスは何も押しておらず、カーソルは矢印。
+    pub(crate) fn new(viewport: Viewport) -> Self {
         Self {
             viewport,
             pointer: Pointer::new(),
@@ -43,7 +40,6 @@ impl Screen {
             clipboard: None,
             zoom: ZoomLevel::hundred(),
             content: viewport.metrics(),
-            advances,
             holding: false,
             incoming: None,
             paste_slot: 0,
@@ -66,15 +62,10 @@ impl Screen {
         self.zoom
     }
 
-    /// 拡大 `zoom` で測り直した中身の字の寸法 `content` と送り幅 `advances` に替える。
-    pub(crate) fn set_zoom(
-        &mut self,
-        zoom: ZoomLevel,
-        (content, advances): (GlyphMetrics, CharAdvances),
-    ) {
+    /// 拡大 `zoom` で測り直した中身の字の寸法 `content` に替える。
+    pub(crate) fn set_zoom(&mut self, zoom: ZoomLevel, content: GlyphMetrics) {
         self.zoom = zoom;
         self.content = content;
-        self.advances = advances;
     }
 
     /// 今の貼り付けの求めに使う属性の番。
@@ -150,6 +141,5 @@ impl Screen {
             self.pointer.hovered(),
         )
         .with_content_metrics(self.content)
-        .with_advances(self.advances)
     }
 }

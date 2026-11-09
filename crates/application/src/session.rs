@@ -2,6 +2,7 @@
 
 use alloc::string::String;
 
+use nene_ledger_core::char_advances::CharAdvances;
 use nene_ledger_core::frame::Frame;
 use nene_ledger_core::pixel_point::PixelPoint;
 use nene_ledger_core::pixel_rect::PixelRect;
@@ -26,6 +27,10 @@ pub trait Session {
 
     /// 窓の名前（OS の窓の名前に付ける・未保存なら頭に印）。UI は描くたびに問い合わせ、変わっていれば付け直す。
     fn window_name(&self) -> String;
+
+    /// UI が中身の字体から字の送り幅 `advances` を測った（窓を開いたとき・拡大と画面の倍率が変わったとき）。詳細ペインの
+    /// 押した所・カーソルの棒・選択を実際の字に合わせる（GitHub Issue #462・#464）。
+    fn measured(&mut self, advances: &CharAdvances);
 
     /// 今の表と詳細ペインの文字の大きさ。UI はこれが変わったら中身の字を測り直す（ADR 0020）。
     fn zoom(&self) -> ZoomLevel;

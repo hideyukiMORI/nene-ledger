@@ -8,7 +8,6 @@ use nene_ledger_application::pointer_shape::PointerShape;
 use nene_ledger_application::session::Session;
 use nene_ledger_application::window_view::WindowView;
 use nene_ledger_application::zoom_level::ZoomLevel;
-use nene_ledger_core::char_advances::CharAdvances;
 use nene_ledger_core::chrome_button::ChromeButton;
 use nene_ledger_core::chrome_hit::ChromeHit;
 use nene_ledger_core::display_scale::DisplayScale;
@@ -44,8 +43,6 @@ pub(crate) struct WindowState<'session> {
     zoom: ZoomLevel,
     scale: DisplayScale,
     metrics: (GlyphMetrics, GlyphMetrics),
-    /// 中身の字の送り幅（GitHub Issue #462）。
-    advances: CharAdvances,
     ticks: Arc<AtomicU64>,
     /// OS に付けてある窓の名前（変わったときだけ付け直す・GitHub Issue #167）。
     name: String,
@@ -75,7 +72,10 @@ impl<'session> WindowState<'session> {
         let zoom = session.zoom();
         let chrome = pen.measure(ZoomLevel::hundred(), scale).ok();
         let content = pen.measure(zoom, scale).ok();
-        let advances = pen.measure_advances(zoom, scale).ok();
+        // 中身の字の送り幅を測って渡す（測れなければ等幅とみなしたまま・GitHub Issue #464）。
+        if let Ok(advances) = pen.measure_advances(zoom, scale) {
+            session.measured(&advances);
+        }
         let fallback = GlyphMetrics::new(
             scale.px(FALLBACK.0),
             scale.px(FALLBACK.1),
@@ -94,8 +94,6 @@ impl<'session> WindowState<'session> {
             zoom,
             scale,
             metrics: (chrome.unwrap_or(fallback), content.unwrap_or(fallback)),
-            advances: advances
-                .unwrap_or_else(|| CharAdvances::uniform(content.unwrap_or(fallback).half_width())),
             ticks,
             name: String::new(),
         }
@@ -105,7 +103,6 @@ impl<'session> WindowState<'session> {
     fn view(&self) -> WindowView {
         WindowView::new(self.size, self.metrics.0, self.placement, self.hovered)
             .with_content_metrics(self.metrics.1)
-            .with_advances(self.advances)
     }
 
     /// 窓の中の位置 `(x, y)` の当たり判定（窓の部品か中身か）。
@@ -161,7 +158,7 @@ impl<'session> WindowState<'session> {
         ) {
             self.zoom = zoom;
             self.metrics = (chrome, content);
-            self.advances = advances;
+            self.session.measured(&advances);
         }
     }
 

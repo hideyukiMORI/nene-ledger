@@ -67,14 +67,12 @@ impl Ui {
     ///
     /// 接続が切れた・描けないとき。
     pub fn run<S: Session>(self, session: &mut S) -> Result<(), UiFailure> {
-        let mut screen = Screen::new(
-            Viewport::new(
-                INITIAL_SIZE,
-                measure(ZoomLevel::hundred())?,
-                self.window.placement()?,
-            ),
-            measure_advances(ZoomLevel::hundred())?,
-        );
+        let mut screen = Screen::new(Viewport::new(
+            INITIAL_SIZE,
+            measure(ZoomLevel::hundred())?,
+            self.window.placement()?,
+        ));
+        session.measured(&measure_advances(ZoomLevel::hundred())?);
         loop {
             let event = self.window.next_event()?;
             match self.respond(session, &event, &mut screen)? {
@@ -91,10 +89,12 @@ impl Ui {
     }
 
     /// 描き直す。拡大が変わっていたら中身の字を測り直す（段階は application が決める・ADR 0020）。
-    fn redraw<S: Session>(&self, session: &S, screen: &mut Screen) -> Result<(), UiFailure> {
+    fn redraw<S: Session>(&self, session: &mut S, screen: &mut Screen) -> Result<(), UiFailure> {
         let zoom = session.zoom();
         if zoom != screen.zoom() {
-            screen.set_zoom(zoom, (measure(zoom)?, measure_advances(zoom)?));
+            screen.set_zoom(zoom, measure(zoom)?);
+            // 送り幅も測り直して渡す（GitHub Issue #464）。
+            session.measured(&measure_advances(zoom)?);
         }
         let name = session.window_name();
         if screen.rename(&name) {

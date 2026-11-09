@@ -1,5 +1,6 @@
 //! 開いたファイルの画面の状態。
 
+use alloc::boxed::Box;
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::format;
 use alloc::string::String;
@@ -108,6 +109,7 @@ use crate::window_view::WindowView;
 use nene_ledger_core::cell_change::CellChange;
 use nene_ledger_core::cell_edits::CellEdits;
 use nene_ledger_core::cell_value::CellValue;
+use nene_ledger_core::char_advances::CharAdvances;
 use nene_ledger_core::column_id::ColumnId;
 use nene_ledger_core::column_order::ColumnOrder;
 use nene_ledger_core::column_widths::{ColumnWidths, MAX_RESIZED_COLUMNS, MIN_COLUMN_COLUMNS};
@@ -172,6 +174,8 @@ pub struct Document {
     detail_lines: u32,
     /// 詳細ペインの本文を見せる最初の行と、そのときのカーソルのセル（カーソルが動けば先頭に戻る・GitHub Issue #454）。
     detail_scroll: Option<(CellPosition, usize)>,
+    /// UI が測った中身の字の送り幅（測る前は `None`・半角は `0` の幅・全角はその 2 倍とみなす・GitHub Issue #464）。
+    advances: Option<Box<CharAdvances>>,
     /// 行の並び（ADR 0024 の層 1・ADR 0027）。
     rows: RowOrder,
     /// 列の並び（ADR 0024 の層 1・ADR 0027）。表の列は、この並びの順（`t`）で数える。
@@ -323,6 +327,7 @@ impl Document {
             grip: false,
             detail_lines: DETAIL_LINES,
             detail_scroll: None,
+            advances: None,
             rows: RowOrder::whole(),
             columns: ColumnOrder::whole(),
             source_width,
@@ -333,10 +338,7 @@ impl Document {
             saving: false,
             closing: CloseState::Open,
             history: EditHistory::empty(),
-            baseline: (
-                RowOrder::whole().runs().to_vec(),
-                ColumnOrder::whole().runs().to_vec(),
-            ),
+            baseline: whole_orders(),
             untitled: false,
             save_progress: None,
             pasting: None,
@@ -3385,6 +3387,19 @@ impl Document {
             .map_or(0, |(_, first)| first)
     }
 
+    /// UI が中身の字体から測った字の送り幅にする（GitHub Issue #464）。
+    pub fn set_advances(&mut self, advances: &CharAdvances) {
+        self.advances = Some(Box::new(advances.clone()));
+    }
+
+    /// 中身の字の送り幅（測る前は、字の寸法 `metrics` の半角の幅から等幅とみなした値）。
+    fn advances_for(&self, metrics: GlyphMetrics) -> CharAdvances {
+        self.advances.as_deref().map_or_else(
+            || CharAdvances::uniform(metrics.half_width()),
+            CharAdvances::clone,
+        )
+    }
+
     /// 窓 `window` の中の詳細ペインの矩形（開いていなければ `None`）。
     fn pane_rect(&self, window: WindowView) -> Option<PixelRect> {
         if self.detail != DetailPane::Open {
@@ -3495,13 +3510,13 @@ impl Document {
             return;
         };
         let metrics = window.content_metrics();
+        let advances = self.advances_for(metrics);
         let cursor = self.selection.cursor();
         let Some(editor) = self.editor.as_mut() else {
             return;
         };
         editor.type_in_pane();
         let (text, _) = editor.field().display();
-        let advances = window.advances();
         let (index, first) = pane_index_at((pane, metrics, &advances), &text, shown, at);
         editor.place_caret(index, extend);
         self.detail_scroll = Some((cursor, first));
@@ -5338,7 +5353,7 @@ impl Document {
             self.format.format().encoding(),
         )
         .with_scroll(self.detail_offset())
-        .with_advances(view.advances());
+        .with_advances(self.advances_for(view.content_metrics()));
         match &typing {
             Some((text, caret)) => painter
                 .with_caret(Some(*caret))
@@ -5981,6 +5996,14 @@ fn fitted_status(status: &str, columns: u32) -> String {
         .unwrap_or_else(|| String::from(status))
 }
 
+/// 並べ替えていない行と列の並び（開いたときの、未保存かの基準・ADR 0028 の決定 2）。
+fn whole_orders() -> (Vec<OrderRun>, Vec<OrderRun>) {
+    (
+        RowOrder::whole().runs().to_vec(),
+        ColumnOrder::whole().runs().to_vec(),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5989,7 +6012,7 @@ mod tests {
     use crate::index_summary::IndexSummary;
     use crate::scroll::Scroll;
     use crate::selection_mode::SelectionMode;
-    use nene_ledger_core::char_advances::{ASCII_PRINTABLE, CharAdvances, SUBPIXELS};
+    use nene_ledger_core::char_advances::SUBPIXELS;
     use nene_ledger_core::chrome_button::ChromeButton;
     use nene_ledger_core::color::Color;
     use nene_ledger_core::text_caret::TextCaret;
@@ -7861,12 +7884,11 @@ mod tests {
     /// UI が測った送り幅（全角が数字 2 つより狭い字体）で、押した所とカーソルの棒が実際の字に合う（GitHub Issue #462）。
     #[test]
     fn the_pane_uses_the_measured_advances() {
-        let half = 8 * SUBPIXELS;
-        let window = view(400, 600, WindowPlacement::Normal).with_advances(CharAdvances::measured(
-            [half; ASCII_PRINTABLE],
-            12 * SUBPIXELS,
-        ));
+        let window = view(400, 600, WindowPlacement::Normal);
+        let mut advances = CharAdvances::uniform(8);
+        advances.set_wide(12 * SUBPIXELS);
         let mut document = editable();
+        document.set_advances(&advances);
         document.set_detail(DetailPane::Open);
         document.apply(moving(CursorStep::Right), window);
         let (left, top) = pane_text_at(&document, window, 0);
