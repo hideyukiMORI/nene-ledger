@@ -5,6 +5,7 @@ use crate::column_shift::ColumnShift;
 use crate::cursor_step::CursorStep;
 use crate::detail_pane::DetailPane;
 use crate::intent::Intent;
+use crate::palette_heading::PaletteHeading;
 use crate::reading_aspect::ReadingAspect;
 use crate::root_command::RootCommand;
 use crate::row_place::RowPlace;
@@ -162,6 +163,63 @@ impl CommandId {
         Self::ShowKeys,
         Self::ShowAbout,
     ];
+
+    /// 何も打っていない一覧の上に、最近使った操作の次に出す、よく使う操作（固定・GitHub Issue #420）。
+    pub const FREQUENT: [Self; 5] = [
+        Self::OpenFile,
+        Self::Save,
+        Self::Find,
+        Self::Replace,
+        Self::Undo,
+    ];
+
+    /// 何も打っていない一覧での分類（GitHub Issue #420）。
+    #[must_use]
+    pub const fn section(self) -> PaletteHeading {
+        match self {
+            Self::OpenFile | Self::Save | Self::SaveAs | Self::NewTable => PaletteHeading::File,
+            Self::Find
+            | Self::FindNext
+            | Self::FindPrevious
+            | Self::Replace
+            | Self::NextRaggedRow
+            | Self::PreviousRaggedRow => PaletteHeading::Find,
+            Self::Undo | Self::Redo | Self::Copy | Self::Cut | Self::ToggleReadOnly => {
+                PaletteHeading::Edit
+            }
+            Self::InsertRowsAbove
+            | Self::InsertRowsBelow
+            | Self::AppendRow
+            | Self::RemoveRows
+            | Self::InsertColumnsLeft
+            | Self::InsertColumnsRight
+            | Self::RemoveColumns
+            | Self::TrimExtraCells
+            | Self::MoveColumnsLeft
+            | Self::MoveColumnsRight
+            | Self::ResetColumns
+            | Self::ResetWidths
+            | Self::FreezeColumns
+            | Self::UnfreezeColumns => PaletteHeading::RowsColumns,
+            Self::Top
+            | Self::Bottom
+            | Self::GoTo
+            | Self::SelectAll
+            | Self::SelectRows
+            | Self::SelectColumns => PaletteHeading::MoveSelect,
+            Self::ChooseEncoding
+            | Self::ChooseDelimiter
+            | Self::ChooseQuoting
+            | Self::ChooseHeader
+            | Self::ChooseDialect => PaletteHeading::Reading,
+            Self::ToggleDetail
+            | Self::ZoomIn
+            | Self::ZoomOut
+            | Self::ZoomReset
+            | Self::ChooseTheme => PaletteHeading::View,
+            Self::ShowKeys | Self::ShowAbout => PaletteHeading::Help,
+        }
+    }
 
     /// 表示名（「対象を＋動詞」の言い切り。次に選ぶものがあれば「…」）。開閉は今の状態で名前が変わる。
     /// 🔴 表示言語の文言の表（ADR 0011）を入れるまでの仮の日本語。

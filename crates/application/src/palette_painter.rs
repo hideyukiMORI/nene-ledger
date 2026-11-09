@@ -24,9 +24,15 @@ use crate::command_palette::CommandPalette;
 use crate::detail_pane::DetailPane;
 use crate::find_toggle::FindToggle;
 use crate::go_to_target::GoToTarget;
+/// 操作の行の右の字：キー（最近使った操作は見出しで分かるので印を付けない・GitHub Issue #420）。
+fn command_aside(command: CommandId) -> String {
+    String::from(command.keys().unwrap_or(""))
+}
+
 #[cfg(test)]
 use crate::guide_note::GuideNote;
 use crate::note_tone::NoteTone;
+use crate::palette_heading::PaletteHeading;
 use crate::palette_item::PaletteItem;
 use crate::palette_layout::{CHIP_MARK_COLUMNS, CHIP_PAD, FIND_CHIPS, PaletteLayout};
 use crate::palette_mode::PaletteMode;
@@ -146,7 +152,15 @@ impl<'state> PalettePainter<'state> {
             let Some(total) = self.total() else {
                 return;
             };
-            let count = format!("{} / {total}", self.palette.items().len());
+            // 見出しと、見出しの下に重ねて出す操作（最近・よく使う）は数えない（GitHub Issue #420）。
+            let shown = if self.palette.mode() == PaletteMode::Commands
+                && self.palette.query().trim().is_empty()
+            {
+                total
+            } else {
+                self.palette.items().len()
+            };
+            let count = format!("{shown} / {total}");
             self.right_text(self.layout.field(), count);
             return;
         };
@@ -295,7 +309,12 @@ impl<'state> PalettePainter<'state> {
                 "Enter で開き直す · Esc で戻す · 試し中: {}",
                 ReadingChoice::dialect(candidate.dialect()).name()
             ),
-            Some(&PaletteItem::Command(_) | &PaletteItem::Key(_) | &PaletteItem::About(_))
+            Some(
+                &PaletteItem::Command(_)
+                | &PaletteItem::Key(_)
+                | &PaletteItem::About(_)
+                | &PaletteItem::Heading(_),
+            )
             | None => String::new(),
         };
         // 候補の行と同じ左の余白（GitHub Issue #312・前は 12 px 左にずれていた）。
@@ -534,21 +553,23 @@ impl<'state> PalettePainter<'state> {
         }
     }
 
-    /// 操作の行の右の字：キー。何も打っていない一覧の上の最近使った操作には「最近」を添える（GitHub Issue #309）。
-    fn command_aside(&self, command: CommandId) -> String {
-        let keys = command.keys().unwrap_or("");
-        let recent =
-            self.palette.query().trim().is_empty() && self.palette.recent().contains(&command);
-        match (recent, keys.is_empty()) {
-            (true, true) => String::from("最近"),
-            (true, false) => format!("最近 · {keys}"),
-            (false, _) => String::from(keys),
-        }
+    /// 見出しの行：選べないので塗らず、強調の色の字を左の余白をそろえて書く（GitHub Issue #420）。
+    fn heading_row(&mut self, row: PixelRect, heading: PaletteHeading) {
+        let left = row.origin().x().saturating_add(self.px(TEXT_INSET));
+        self.text_at(
+            from_left(row, left),
+            String::from(heading.name()),
+            self.colors.cursor(),
+        );
     }
 
     /// 候補の 1 行。選んでいれば選択の色で塗り、左に強調の色の帯（色だけに頼らない）。
     fn row(&mut self, slot: usize, item: PaletteItem, detail: DetailPane) {
         let row = self.layout.row(slot);
+        if let PaletteItem::Heading(heading) = item {
+            self.heading_row(row, heading);
+            return;
+        }
         // このアプリについては読むだけなので、選んだ色を付けない（GitHub Issue #312）。
         if self.layout.first().saturating_add(slot) == self.palette.selected()
             && self.palette.mode() != PaletteMode::About
@@ -564,10 +585,9 @@ impl<'state> PalettePainter<'state> {
         }
         let mut left = row.origin().x().saturating_add(self.px(TEXT_INSET));
         let (name, aside) = match item {
-            PaletteItem::Command(command) => (
-                String::from(command.name(detail)),
-                self.command_aside(command),
-            ),
+            PaletteItem::Command(command) => {
+                (String::from(command.name(detail)), command_aside(command))
+            }
             PaletteItem::Reading(choice) => (choice.name(), self.reading_aside(choice)),
             PaletteItem::Candidate(candidate) => {
                 let choice = ReadingChoice::dialect(candidate.dialect());
@@ -576,6 +596,8 @@ impl<'state> PalettePainter<'state> {
             }
             PaletteItem::Key(guide) => (String::from(guide.name()), String::from(guide.keys())),
             PaletteItem::About(line) => (line.text(), String::new()),
+            // 上で描いて戻っている。
+            PaletteItem::Heading(heading) => (String::from(heading.name()), String::new()),
             PaletteItem::Theme(position) => {
                 left = self.swatches(row, left, position);
                 (
@@ -884,10 +906,12 @@ mod tests {
         let shown = texts(&commands);
         assert!(shown.contains(&"操作の名前で絞る（例: 置換・haishoku・theme）"));
         assert!(shown.contains(&"47 / 47"));
-        assert!(shown.contains(&"詳細ペインを閉じる") && shown.contains(&"Ctrl+Shift+U"));
-        assert!(shown.contains(&"文字を大きくする") && shown.contains(&"Ctrl+0"));
-        // 選んでいる最初の行は選択の色で塗り、左に強調の色の 3px の帯。
-        let first_row = PaletteLayout::new(view(), &palette).row(0);
+        // 空の一覧は見出しから：よく使う（開く・保存・探す・置換・元に戻す）と、その下の分類（GitHub Issue #420）。
+        assert!(shown.contains(&"よく使う") && shown.contains(&"ファイル"));
+        assert!(shown.contains(&"ファイルを開く…") && shown.contains(&"Ctrl+O"));
+        assert!(shown.contains(&"変えた所を保存する") && shown.contains(&"Ctrl+S"));
+        // 選んでいる最初の行（見出しの下）は選択の色で塗り、左に強調の色の 3px の帯。
+        let first_row = PaletteLayout::new(view(), &palette).row(1);
         assert_eq!(fills(&commands, colors().selection()), vec![first_row]);
         assert!(
             fills(&commands, colors().cursor())

@@ -70,6 +70,7 @@ pub mod located_record;
 pub mod note_tone;
 pub mod notice;
 pub mod pair_group;
+pub mod palette_heading;
 pub mod palette_item;
 pub mod palette_layout;
 pub mod palette_mode;

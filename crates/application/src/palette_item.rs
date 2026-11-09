@@ -5,6 +5,7 @@ use nene_ledger_core::dialect_candidate::DialectCandidate;
 use crate::about_line::AboutLine;
 use crate::command_id::CommandId;
 use crate::key_guide::KeyGuide;
+use crate::palette_heading::PaletteHeading;
 use crate::reading_choice::ReadingChoice;
 
 /// パレットの候補 1 つ。
@@ -22,4 +23,6 @@ pub enum PaletteItem {
     Candidate(DialectCandidate),
     /// 「このアプリについて」の行（読むだけ・ADR 0032）。
     About(AboutLine),
+    /// 何も打っていない操作の一覧の見出し（選べない・GitHub Issue #420）。
+    Heading(PaletteHeading),
 }

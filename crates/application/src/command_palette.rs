@@ -52,6 +52,18 @@ pub struct CommandPalette {
     scope: Option<String>,
 }
 
+/// 候補 `items` の `index` 番目から、`forward` の向きに見て最初の選べる候補（見出しでない）の番目。無ければ `None`。
+fn selectable_from(items: &[PaletteItem], index: usize, forward: bool) -> Option<usize> {
+    let heading = |at: &usize| matches!(items.get(*at), Some(PaletteItem::Heading(_)));
+    if forward {
+        (index..items.len()).find(|at| !heading(at))
+    } else {
+        (0..=index.min(items.len().saturating_sub(1)))
+            .rev()
+            .find(|at| !heading(at))
+    }
+}
+
 /// 覚えておく最近使った操作の数。
 pub const RECENT: usize = 5;
 
@@ -314,7 +326,10 @@ impl CommandPalette {
     /// 選んでいる候補の番目（候補の数に収める）。
     #[must_use]
     pub fn selected(&self) -> usize {
-        self.selected.min(self.items().len().saturating_sub(1))
+        let items = self.items();
+        let index = self.selected.min(items.len().saturating_sub(1));
+        // 見出しは選べない。見出しを指していれば、その下の最初の候補（GitHub Issue #420）。
+        selectable_from(&items, index, true).unwrap_or(index)
     }
 
     /// 意図を受ける。`current_theme` は今の配色の位置（配色を選ぶ段へ入るとき、元に戻す先として覚える）。
@@ -592,15 +607,20 @@ impl CommandPalette {
 
     /// 候補の `index` 番目をクリックした（選んで決める）。
     pub fn click(&mut self, index: usize, current_theme: usize) -> PaletteOutcome {
+        // 見出しは押しても何もしない（選んでいる候補も動かさない・GitHub Issue #420）。
+        if matches!(self.items().get(index), Some(PaletteItem::Heading(_))) {
+            return PaletteOutcome::Stay;
+        }
         self.selected = index;
         self.confirm(current_theme)
     }
 
     /// 選んでいる候補を `step` で動かす。
     fn step(&mut self, step: CursorStep) -> PaletteOutcome {
-        let last = self.items().len().saturating_sub(1);
+        let items = self.items();
+        let last = items.len().saturating_sub(1);
         let current = self.selected();
-        let next = match step {
+        let wanted = match step {
             CursorStep::Up => current.saturating_sub(1),
             CursorStep::Down => current.saturating_add(1).min(last),
             CursorStep::PageUp => current.saturating_sub(PAGE),
@@ -609,6 +629,11 @@ impl CommandPalette {
             CursorStep::RowEnd | CursorStep::Bottom => last,
             CursorStep::Left | CursorStep::Right => current,
         };
+        // 見出しは飛ばす。動いた向きに候補が無ければ（いちばん上の見出し）、反対の向きの最初の候補（GitHub Issue #420）。
+        let forward = wanted >= current;
+        let next = selectable_from(&items, wanted, forward)
+            .or_else(|| selectable_from(&items, wanted, !forward))
+            .unwrap_or(current);
         self.retarget(next)
     }
 
@@ -621,7 +646,12 @@ impl CommandPalette {
             Some(&PaletteItem::Candidate(candidate)) => {
                 PaletteOutcome::PreviewReading(ReadingChoice::dialect(candidate.dialect()))
             }
-            Some(&PaletteItem::Command(_) | &PaletteItem::Key(_) | &PaletteItem::About(_))
+            Some(
+                &PaletteItem::Command(_)
+                | &PaletteItem::Key(_)
+                | &PaletteItem::About(_)
+                | &PaletteItem::Heading(_),
+            )
             | None => PaletteOutcome::Stay,
         }
     }
@@ -715,7 +745,11 @@ impl CommandPalette {
     fn confirm(&mut self, current_theme: usize) -> PaletteOutcome {
         match self.items().get(self.selected()) {
             // パレットに無いキーの行は読むだけ。
-            None | Some(&PaletteItem::Key(_) | &PaletteItem::About(_)) => PaletteOutcome::Stay,
+            // 見出しは選べない（指で押しても何もしない・GitHub Issue #420）。
+            None
+            | Some(&PaletteItem::Key(_) | &PaletteItem::About(_) | &PaletteItem::Heading(_)) => {
+                PaletteOutcome::Stay
+            }
             Some(&PaletteItem::Theme(position)) => PaletteOutcome::Commit(position),
             Some(&PaletteItem::Reading(choice)) => PaletteOutcome::CommitReading(choice),
             Some(&PaletteItem::Candidate(candidate)) => {
@@ -762,6 +796,7 @@ impl CommandPalette {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::palette_heading::PaletteHeading;
     use crate::selection_mode::SelectionMode;
     use crate::zoom_step::ZoomStep;
 
@@ -1023,8 +1058,13 @@ mod tests {
         assert_eq!(full.recent().len(), RECENT);
         let again = CommandPalette::open_with_recent(full.recent());
         assert_eq!(
-            again.items().first(),
-            Some(&PaletteItem::Command(CommandId::Copy))
+            again.items().get(..2),
+            Some(
+                &[
+                    PaletteItem::Heading(PaletteHeading::Recent),
+                    PaletteItem::Command(CommandId::Copy)
+                ][..]
+            )
         );
     }
 
@@ -1157,32 +1197,54 @@ mod tests {
         );
     }
 
+    /// ↑↓・PageUp/Down・Home/End は見出しを飛ばし、見出しを選ぶことは無い（GitHub Issue #420）。
     #[test]
-    fn page_and_end_keys_move_through_the_list() {
+    fn page_and_end_keys_move_through_the_list_and_skip_headings() {
         let mut palette = CommandPalette::open();
         let moving = |step| Intent::Move {
             step,
             mode: SelectionMode::Collapse,
         };
+        let items = palette.items();
+        let chosen = |open: &CommandPalette| items[open.selected()];
+        // 開いた直後は「よく使う」の見出しの下の最初の操作。
+        assert_eq!(items[0], PaletteItem::Heading(PaletteHeading::Frequent));
+        assert_eq!(chosen(&palette), PaletteItem::Command(CommandId::OpenFile));
         palette.handle(moving(CursorStep::Bottom), 0);
-        assert_eq!(palette.selected(), CommandId::ALL.len() - 1);
-        // 1 回の PageUp は 10 件。残りが 10 件より少なくなったら、次の 1 回で先頭（0 で止まる）。
-        let pages = (CommandId::ALL.len() - 1) / 10;
-        for page in 1..=pages {
-            palette.handle(moving(CursorStep::PageUp), 0);
-            assert_eq!(palette.selected(), CommandId::ALL.len() - 1 - 10 * page);
+        assert_eq!(palette.selected(), items.len() - 1);
+        assert_eq!(chosen(&palette), PaletteItem::Command(CommandId::ShowAbout));
+        palette.handle(moving(CursorStep::Top), 0);
+        assert_eq!(palette.selected(), 1);
+        palette.handle(moving(CursorStep::Up), 0);
+        assert_eq!(palette.selected(), 1);
+        // 押した見出しは何もしない。
+        assert_eq!(palette.click(0, 0), PaletteOutcome::Stay);
+    }
+
+    /// どのキーで動いても、見出しを選ぶことは無い（GitHub Issue #420）。
+    #[test]
+    fn no_key_ever_selects_a_heading() {
+        let mut palette = CommandPalette::open();
+        let moving = |step| Intent::Move {
+            step,
+            mode: SelectionMode::Collapse,
+        };
+        let items = palette.items();
+        let chosen = |open: &CommandPalette| items[open.selected()];
+        for step in [
+            CursorStep::PageUp,
+            CursorStep::Up,
+            CursorStep::PageDown,
+            CursorStep::Down,
+        ] {
+            for _ in 0..items.len() {
+                palette.handle(moving(step), 0);
+                assert!(
+                    !matches!(chosen(&palette), PaletteItem::Heading(_)),
+                    "{step:?}"
+                );
+            }
         }
-        palette.handle(moving(CursorStep::PageUp), 0);
-        assert_eq!(palette.selected(), 0);
-        for page in 1..=pages {
-            palette.handle(moving(CursorStep::PageDown), 0);
-            assert_eq!(palette.selected(), 10 * page);
-        }
-        palette.handle(moving(CursorStep::PageDown), 0);
-        assert_eq!(palette.selected(), CommandId::ALL.len() - 1);
-        palette.handle(moving(CursorStep::RowStart), 0);
-        palette.handle(moving(CursorStep::Left), 0);
-        assert_eq!(palette.selected(), 0);
     }
 
     #[test]
