@@ -11,4 +11,6 @@ pub enum HoverTarget {
     Menu,
     /// 表と詳細ペインの境の線（掴めば高さを変える・GitHub Issue #452）。
     PaneGrip,
+    /// 詳細ペインの上（ホイールでペインの本文を動かす・GitHub Issue #454）。
+    Pane,
 }
