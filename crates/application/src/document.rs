@@ -87,7 +87,7 @@ use crate::selection_stats::SelectionStats;
 use crate::selection_totals::SelectionTotals;
 use crate::status_line::{
     RAGGED_TOTALS, cursor_status, format_status, group_digits, index_status, notice_status,
-    skipped_note, totals_status,
+    skipped_note, totals_status, width_status,
 };
 use crate::table_changes::TableChanges;
 use crate::table_extent::TableExtent;
@@ -4922,10 +4922,10 @@ impl Document {
     fn status(&self) -> String {
         let cursor = self.selection.cursor();
         format!(
-            "{} · {} · {} 列 · {}",
-            index_status(self.shown_index()),
+            "{} · {} · {} · {}",
+            index_status(self.shown_index(), self.header_line()),
             format_status(self.format),
-            self.widths.columns().len(),
+            width_status(self.widths.columns().len(), self.expected_columns()),
             cursor_status(
                 self.line_of(cursor.body()),
                 self.source_column(cursor.column())

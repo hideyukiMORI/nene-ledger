@@ -4,6 +4,7 @@ use alloc::format;
 use alloc::string::String;
 
 use nene_ledger_core::dialect::Dialect;
+use nene_ledger_core::header_rows::HeaderRows;
 use nene_ledger_core::line_ending_counts::LineEndingCounts;
 use nene_ledger_core::quoting::Quoting;
 use nene_ledger_core::text_encoding::TextEncoding;
@@ -126,9 +127,11 @@ fn pasted_status(
     }
 }
 
-/// 索引の状態を、窓の下の行の文言にする。🔴 表示言語の文言の表（ADR 0011）を入れるまでの仮の日本語。
+/// 索引の状態を、窓の下の行の文言にする。`header` は行の並びの中の見出しの位置（無ければ `None`）。作り終えたら、
+/// データの行の数を見出しと前書きの行と分けて言う（pandas の `len` や件数と突き合わせて 1 行ずれて見えない・GitHub Issue #383）。
+/// 🔴 表示言語の文言の表（ADR 0011）を入れるまでの仮の日本語。
 #[must_use]
-pub fn index_status(state: JobState) -> String {
+pub fn index_status(state: JobState, header: Option<HeaderRows>) -> String {
     match state {
         JobState::Waiting => String::from("索引を作る準備をしています"),
         JobState::Running(progress) => match progress.long_quoted_cell() {
@@ -144,14 +147,42 @@ pub fn index_status(state: JobState) -> String {
         }
         JobState::Finished(summary) => match summary.unclosed_quote() {
             Some(quote) => format!(
-                "{} 行 · {} バイト目の引用符が最後まで閉じていません",
-                group_digits(summary.records()),
+                "{} · {} バイト目の引用符が最後まで閉じていません",
+                records_status(summary.records(), header),
                 group_digits(quote)
             ),
-            None => format!("{} 行", group_digits(summary.records())),
+            None => records_status(summary.records(), header),
         },
         JobState::Failed => String::from("索引を作れませんでした"),
         JobState::Cancelled => String::from("索引を中止しました"),
+    }
+}
+
+/// 行の数の文言。見出しがあれば、データの行と見出し（と前書き）の行を分ける。
+fn records_status(records: u64, header: Option<HeaderRows>) -> String {
+    match header {
+        None => format!("{} 行", group_digits(records)),
+        Some(header) if header.first() == 0 => format!(
+            "データ {} 行（見出し {} 行）",
+            group_digits(records.saturating_sub(header.end())),
+            header.count()
+        ),
+        Some(header) => format!(
+            "データ {} 行（見出し {} 行・前書き {} 行）",
+            group_digits(records.saturating_sub(header.end())),
+            header.count(),
+            group_digits(header.first())
+        ),
+    }
+}
+
+/// 列の数の文言。見出しと違う列の数の行があって表の列が見出しより多ければ、見出しの列の数と最大を分ける
+/// （空の列が足されて見えるのを、表の列の数と取り違えない・GitHub Issue #383）。
+#[must_use]
+pub fn width_status(columns: usize, expected: Option<usize>) -> String {
+    match expected {
+        Some(heading) if heading < columns => format!("{heading} 列（最大 {columns}）"),
+        Some(_) | None => format!("{columns} 列"),
     }
 }
 
@@ -661,27 +692,69 @@ mod tests {
     #[test]
     fn each_state_has_a_line() {
         assert_eq!(
-            index_status(JobState::Waiting),
+            index_status(JobState::Waiting, None),
             "索引を作る準備をしています"
         );
         let running = JobState::Running(JobProgress::new(45, 100, None));
-        assert_eq!(index_status(running), "索引を作っています 45%");
+        assert_eq!(index_status(running, None), "索引を作っています 45%");
         let suspicious = JobState::Running(JobProgress::new(50, 100, Some(1_048_577)));
         assert_eq!(
-            index_status(suspicious),
+            index_status(suspicious, None),
             "索引を作っています 50% · 1,048,577 バイト目の引用符が閉じていないかもしれません"
         );
         let stopping = JobState::CancelRequested(JobProgress::new(30, 100, None));
-        assert_eq!(index_status(stopping), "索引を止めています（30% まで）");
+        assert_eq!(
+            index_status(stopping, None),
+            "索引を止めています（30% まで）"
+        );
         let finished = JobState::Finished(IndexSummary::new(1_234_567, None));
-        assert_eq!(index_status(finished), "1,234,567 行");
+        assert_eq!(index_status(finished, None), "1,234,567 行");
         let unclosed = JobState::Finished(IndexSummary::new(2, Some(4)));
         assert_eq!(
-            index_status(unclosed),
+            index_status(unclosed, None),
             "2 行 · 4 バイト目の引用符が最後まで閉じていません"
         );
-        assert_eq!(index_status(JobState::Failed), "索引を作れませんでした");
-        assert_eq!(index_status(JobState::Cancelled), "索引を中止しました");
+        assert_eq!(
+            index_status(JobState::Failed, None),
+            "索引を作れませんでした"
+        );
+        assert_eq!(
+            index_status(JobState::Cancelled, None),
+            "索引を中止しました"
+        );
+    }
+
+    /// 見出しがあれば、データの行の数を見出しと前書きと分けて言う（GitHub Issue #383）。
+    #[test]
+    fn data_rows_are_counted_apart_from_the_header() {
+        let finished = JobState::Finished(IndexSummary::new(5_001, None));
+        assert_eq!(
+            index_status(finished, Some(HeaderRows::single(0))),
+            "データ 5,000 行（見出し 1 行）"
+        );
+        assert_eq!(
+            index_status(finished, HeaderRows::new(2, 2)),
+            "データ 4,997 行（見出し 2 行・前書き 2 行）"
+        );
+        let unclosed = JobState::Finished(IndexSummary::new(3, Some(4)));
+        assert_eq!(
+            index_status(unclosed, Some(HeaderRows::single(0))),
+            "データ 2 行（見出し 1 行） · 4 バイト目の引用符が最後まで閉じていません"
+        );
+        // 作っている間は数えた行の数を言わないので、見出しは関わらない。
+        assert_eq!(
+            index_status(JobState::Waiting, Some(HeaderRows::single(0))),
+            "索引を作る準備をしています"
+        );
+    }
+
+    /// 見出しより多い列の行があれば、見出しの列の数と最大を分ける（GitHub Issue #383）。
+    #[test]
+    fn the_column_count_follows_the_header() {
+        assert_eq!(width_status(6, Some(5)), "5 列（最大 6）");
+        assert_eq!(width_status(5, Some(5)), "5 列");
+        assert_eq!(width_status(5, None), "5 列");
+        assert_eq!(width_status(5, Some(6)), "5 列");
     }
 
     use alloc::vec;
