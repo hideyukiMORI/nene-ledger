@@ -7,12 +7,17 @@ use nene_ledger_scan::window_record::WindowRecord;
 /// ファイル全体の、列の数が見出しと違う行を数える畳み込み。見出しとそれより前（前書き）のレコードは数えない。
 /// 数え方は F8（`FindScope::shape`）と範囲の集計（`SelectionStats::add_shape`）と同じ：レコードのセルの数が見出しの
 /// セルの数と違えば 1 つ。
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub(crate) struct RaggedFold {
     header: HeaderRows,
     expected: usize,
     rows: u64,
+    /// 見つけた行のレコードの番号（昇順・多くて `POSITIONS` 個）。F8 で今いる行が何件目かを言う（GitHub Issue #415）。
+    positions: Vec<u64>,
 }
+
+/// 覚えておく壊れた行の位置の数（8 バイト × 10 万 = 800 KB まで）。越えたら「何件目」は言わない。
+const POSITIONS: usize = 100_000;
 
 impl RaggedFold {
     /// 見出しのレコード `header`（セルの数 `expected`）の後ろを数える。
@@ -21,12 +26,18 @@ impl RaggedFold {
             header,
             expected,
             rows: 0,
+            positions: Vec::new(),
         }
     }
 
     /// 数えた行の数。
-    pub(crate) const fn rows(self) -> u64 {
+    pub(crate) const fn rows(&self) -> u64 {
         self.rows
+    }
+
+    /// 見つけた行のレコードの番号（昇順）。数えた行の数より少なければ、覚えきれなかった。
+    pub(crate) fn into_positions(self) -> Vec<u64> {
+        self.positions
     }
 }
 
@@ -34,6 +45,9 @@ impl RecordFold for RaggedFold {
     fn record(&mut self, number: u64, record: &WindowRecord) {
         if number >= self.header.end() && record.record().fields().len() != self.expected {
             self.rows = self.rows.saturating_add(1);
+            if self.positions.len() < POSITIONS {
+                self.positions.push(number);
+            }
         }
     }
 }
@@ -68,6 +82,10 @@ mod tests {
                     |_| ControlFlow::Continue(()),
                 );
                 assert_eq!(flow.unwrap(), ControlFlow::Continue(()));
+                assert_eq!(
+                    u64::try_from(fold.clone().into_positions().len()).unwrap(),
+                    fold.rows()
+                );
                 fold.rows()
             })
             .collect()

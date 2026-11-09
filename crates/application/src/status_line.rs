@@ -188,11 +188,18 @@ pub fn width_status(columns: usize, expected: Option<usize>) -> String {
 }
 
 /// ファイル全体の、列の数が見出しと違う行の数の文言（GitHub Issue #391）。前に ` · ` を付ける。無ければ空。
-/// F8 で 1 つずつ飛べることを添える。
+/// F8 で 1 つずつ飛べることを添える。カーソルの行がその何件目か分かれば「1 / 2」と言う（GitHub Issue #415）。
 #[must_use]
-pub fn ragged_status(rows: Option<u64>) -> String {
-    rows.map(|rows| format!(" · {RAGGED_TOTALS} {}（F8）", group_digits(rows)))
-        .unwrap_or_default()
+pub fn ragged_status(rows: Option<(u64, Option<u64>)>) -> String {
+    match rows {
+        None => String::new(),
+        Some((rows, None)) => format!(" · {RAGGED_TOTALS} {}（F8）", group_digits(rows)),
+        Some((rows, Some(place))) => format!(
+            " · {RAGGED_TOTALS} {} / {}（F8）",
+            group_digits(place),
+            group_digits(rows)
+        ),
+    }
 }
 
 /// 読み方の文言（文字コード · 区切り · 引用の扱い · 改行）。引用の扱いは既定（RFC 4180）でないときだけ（Issue #68）。
@@ -823,7 +830,14 @@ mod tests {
     /// ファイル全体の列の数が違う行は、数えてあれば F8 を添えて言う（GitHub Issue #391）。
     #[test]
     fn ragged_rows_of_the_whole_file_are_counted_with_the_key() {
-        assert_eq!(ragged_status(Some(1_234)), " · 列の数が違う行 1,234（F8）");
+        assert_eq!(
+            ragged_status(Some((1_234, None))),
+            " · 列の数が違う行 1,234（F8）"
+        );
+        assert_eq!(
+            ragged_status(Some((1_234, Some(5)))),
+            " · 列の数が違う行 5 / 1,234（F8）"
+        );
         assert_eq!(ragged_status(None), "");
     }
 
