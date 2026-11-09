@@ -6285,7 +6285,7 @@ mod tests {
         let texts = all_texts(&frame);
         for wanted in [
             "note",
-            "2 行目　2 列目　11 文字　UTF-8 で 31 バイト",
+            "2 行目　2 列目　11 文字　UTF-8 で 31 バイト　¶ 改行 1",
             "Ctrl+Shift+U で閉じる",
             "東京都千代田区",
             "丸の内",

@@ -17,6 +17,7 @@ use nene_ledger_core::table_layout::{GRID_LINE, TableLayout};
 use nene_ledger_core::text_encoding::TextEncoding;
 use nene_ledger_core::text_role::TextRole;
 
+use crate::cell_display::mark_legend;
 use crate::client_bands::{ClientBands, DETAIL_PADDING, DETAIL_RULE};
 use crate::detail_content::DetailContent;
 use crate::detail_place::DetailPlace;
@@ -288,8 +289,15 @@ fn aux_text(
             } else {
                 ""
             };
+            // 表の印（□ など）を言葉にする（豆腐に見えて驚かない・GitHub Issue #387）。
+            let legend = mark_legend(value);
+            let marks = if legend.is_empty() {
+                legend
+            } else {
+                format!("　{legend}")
+            };
             format!(
-                "{position}　{} 文字　{} で {} バイト{json}",
+                "{position}　{} 文字　{} で {} バイト{json}{marks}",
                 group_digits(characters),
                 byte_encoding_name(encoding),
                 group_digits(encoding.encoded_length(value))
