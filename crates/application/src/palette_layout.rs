@@ -33,7 +33,7 @@ pub const FIND_CHIPS: [(&str, &str, FindToggle); 5] = [
     ("セル全体", "Alt+W", FindToggle::WholeCell),
     ("正規表現", "Alt+R", FindToggle::Regex),
     ("全角半角を区別", "Alt+Z", FindToggle::Width),
-    ("かなを区別", "Alt+K", FindToggle::Kana),
+    ("ひら/カタを区別", "Alt+K", FindToggle::Kana),
 ];
 /// 上の行に置く札の数。
 const FIRST_ROW_CHIPS: usize = 3;
