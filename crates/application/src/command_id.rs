@@ -72,6 +72,8 @@ pub enum CommandId {
     FindPrevious,
     /// 置き換える（Ctrl+H・ADR 0030 の決定 6）。
     Replace,
+    /// ファイルを選んで新しい窓で開く（Ctrl+O・GitHub Issue #344）。
+    OpenFile,
     /// 書き換えを保存する（ADR 0026 の決定 6）。
     Save,
     /// 名前を付けて保存する。
@@ -104,7 +106,7 @@ pub enum CommandId {
 
 impl CommandId {
     /// すべての操作（何も打たないときの順）。
-    pub const ALL: [Self; 43] = [
+    pub const ALL: [Self; 44] = [
         Self::Top,
         Self::Bottom,
         Self::GoTo,
@@ -133,6 +135,7 @@ impl CommandId {
         Self::FindNext,
         Self::FindPrevious,
         Self::Replace,
+        Self::OpenFile,
         Self::Save,
         Self::SaveAs,
         Self::NewTable,
@@ -187,6 +190,7 @@ impl CommandId {
             Self::FindNext => "次を探す",
             Self::FindPrevious => "前を探す",
             Self::Replace => "置き換える（探して）",
+            Self::OpenFile => "ファイルを開く…",
             Self::Save => "変えた所を保存する",
             Self::SaveAs => "名前を付けて保存する",
             Self::NewTable => "新しい表を作る",
@@ -237,6 +241,7 @@ impl CommandId {
             Self::FindNext => "つぎをさがす",
             Self::FindPrevious => "まえをさがす",
             Self::Replace => "おきかえる",
+            Self::OpenFile => "ふぁいるをひらく",
             Self::Save => "かえたところをほぞんする",
             Self::SaveAs => "なまえをつけてほぞんする",
             Self::NewTable => "あたらしいひょうをつくる",
@@ -294,6 +299,7 @@ impl CommandId {
             Self::FindNext => &["find", "next", "search"],
             Self::FindPrevious => &["find", "previous", "back", "search"],
             Self::Replace => &["replace", "find", "okikae", "chikan"],
+            Self::OpenFile => &["open", "file", "load"],
             Self::Save => &["save", "write"],
             Self::SaveAs => &["saveas", "save as", "export"],
             Self::NewTable => &["new", "create", "blank"],
@@ -353,6 +359,7 @@ impl CommandId {
             Self::FindNext => Some("F3"),
             Self::FindPrevious => Some("Shift+F3"),
             Self::Replace => Some("Ctrl+H"),
+            Self::OpenFile => Some("Ctrl+O"),
             Self::Save => Some("Ctrl+S"),
             Self::SaveAs => Some("Ctrl+Shift+S"),
             Self::NewTable => Some("Ctrl+N"),
@@ -394,6 +401,7 @@ impl CommandId {
             | Self::FindNext
             | Self::FindPrevious
             | Self::Replace
+            | Self::OpenFile
             | Self::Save
             | Self::SaveAs
             | Self::NewTable
@@ -450,6 +458,7 @@ impl CommandId {
             Self::FindNext => Some(Intent::FindAgain { forward: true }),
             Self::FindPrevious => Some(Intent::FindAgain { forward: false }),
             Self::Replace => Some(Intent::OpenFind { replace: true }),
+            Self::OpenFile => Some(Intent::OpenFile),
             Self::Save => Some(Intent::Save),
             Self::SaveAs => Some(Intent::SaveAs),
             Self::NewTable => Some(Intent::NewTable),
@@ -485,7 +494,8 @@ mod tests {
             assert_eq!(command.intent().is_none(), opens_a_list);
             assert!(!opens_a_list || command.keys().is_none());
             // 「…」は次に選ぶか打つものがある操作。行へ飛ぶは入力欄を開く意図を持つ。
-            let asks_more = opens_a_list || command == CommandId::GoTo;
+            let asks_more =
+                opens_a_list || command == CommandId::GoTo || command == CommandId::OpenFile;
             assert_eq!(command.name(DetailPane::Open).ends_with('…'), asks_more);
         }
     }

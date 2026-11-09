@@ -269,6 +269,7 @@ impl CommandPalette {
             | Intent::Save
             | Intent::SaveAs
             | Intent::NewTable
+            | Intent::OpenFile
             | Intent::Paste
             | Intent::Undo
             | Intent::Redo
@@ -301,6 +302,10 @@ impl CommandPalette {
     /// 段に固有の意図：探す段の Enter・Shift+Enter・F3・条件、飛ぶ先の段の Enter、置換の段の全部。共通の扱いなら `None`。
     fn mode_intent(&mut self, intent: Intent) -> Option<PaletteOutcome> {
         match self.mode {
+            PaletteMode::Replace { .. } if intent == (Intent::OpenFind { replace: false }) => {
+                self.mode = PaletteMode::Find;
+                Some(PaletteOutcome::Stay)
+            }
             PaletteMode::Replace { with } => self.replace_intent(intent, with),
             // 検索の欄で Ctrl+H は置換の欄へ。打った文字と条件を引き継ぐ（GitHub Issue #187）。
             PaletteMode::Find if intent == (Intent::OpenFind { replace: true }) => {
@@ -332,6 +337,8 @@ impl CommandPalette {
         }
     }
 
+    /// 置換の欄で Ctrl+F は検索の欄へ（打った文字と条件を引き継ぐ）。探す文字が空なら、Enter と Alt+A は閉じずに「探す」
+    /// 欄へ戻す（黙って閉じない）。どちらも GitHub Issue #187。
     /// 置換の段の意図（`with` は置き換える欄を打っている間）。字と Backspace は打っている欄へ、Tab / Shift+Tab は欄を替え、
     /// Enter は置き換えて次へ、Alt+A は全部、Shift+Enter・F3・Shift+F3・Alt+C・Alt+W は探す段と同じ。ほかは `None`
     /// （Esc などはパレットの共通の扱い）。
@@ -341,14 +348,11 @@ impl CommandPalette {
             Intent::Advance(CursorStep::Right | CursorStep::Left) => {
                 self.mode = PaletteMode::Replace { with: !with };
             }
-            // 探す文字が空なら、閉じずに「探す」欄へ戻す（黙って閉じない・GitHub Issue #187）。
             Intent::Confirm | Intent::ReplaceAll if self.query.is_empty() => {
                 self.mode = PaletteMode::Replace { with: false };
             }
             Intent::Confirm => return Some(PaletteOutcome::Replace { all: false }),
             Intent::ReplaceAll => return Some(PaletteOutcome::Replace { all: true }),
-            // 置換の欄で Ctrl+F は検索の欄へ（打った文字と条件を引き継ぐ・GitHub Issue #187）。
-            Intent::OpenFind { replace: false } => self.mode = PaletteMode::Find,
             Intent::Advance(CursorStep::Up) | Intent::FindAgain { .. } | Intent::FindToggle(_) => {
                 return Some(self.find_intent(intent));
             }
@@ -387,6 +391,7 @@ impl CommandPalette {
             | Intent::Save
             | Intent::SaveAs
             | Intent::NewTable
+            | Intent::OpenFile
             | Intent::Paste
             | Intent::Undo
             | Intent::Redo

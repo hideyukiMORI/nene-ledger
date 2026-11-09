@@ -89,8 +89,10 @@ fn main() -> ExitCode {
     {
         return show_blank(theme);
     }
+    // ファイルを渡されず、選ぶ画面もやめた（か無い）なら、空の新しい表で始める。スタートメニューやストアから起動して
+    // 何も出ずに終わらない（GitHub Issue #344・ADR 0035）。開くのは Ctrl+O か、窓にファイルを落とす。
     let Some(path) = rest.first().map(PathBuf::from).or_else(chosen_file) else {
-        return ExitCode::from(2_u8);
+        return show_blank(theme);
     };
     open_and_show(&path, theme)
 }
@@ -323,7 +325,8 @@ fn open_anyway(_path: &Path) -> bool {
     true
 }
 
-/// ファイルを渡されなかったとき。Windows は「ファイルを開く」画面で選ばせ（やめれば `None`）、X11 は使い方を知らせる。
+/// ファイルを渡されなかったとき。Windows は「ファイルを開く」画面で選ばせる（やめれば `None`）。X11 は選ぶ画面が無いので
+/// `None`（空の新しい表で始める・GitHub Issue #344）。
 fn chosen_file() -> Option<PathBuf> {
     #[cfg(windows)]
     {
@@ -331,9 +334,6 @@ fn chosen_file() -> Option<PathBuf> {
     }
     #[cfg(not(windows))]
     {
-        report(
-            "使い方: nene-ledger [--theme <配色>] <CSV か TSV のファイル> | nene-ledger [--theme <配色>] --new | nene-ledger --dump <ファイル>",
-        );
         None
     }
 }

@@ -447,6 +447,7 @@ impl Document {
             | Intent::Save
             | Intent::SaveAs
             | Intent::NewTable
+            | Intent::OpenFile
             | Intent::Paste
             | Intent::Undo
             | Intent::Redo
@@ -998,6 +999,7 @@ impl Document {
             | Intent::Save
             | Intent::SaveAs
             | Intent::NewTable
+            | Intent::OpenFile
             | Intent::Paste
             | Intent::Undo
             | Intent::Redo
@@ -1143,6 +1145,7 @@ impl Document {
             | Intent::Save
             | Intent::SaveAs
             | Intent::NewTable
+            | Intent::OpenFile
             | Intent::Paste
             | Intent::Undo
             | Intent::Redo => self.pointer_intent(intent, window),
@@ -1185,6 +1188,7 @@ impl Document {
             | Intent::Save
             | Intent::SaveAs
             | Intent::NewTable
+            | Intent::OpenFile
             | Intent::Paste
             | Intent::Undo
             | Intent::Redo
@@ -1311,6 +1315,7 @@ impl Document {
             | Intent::Save
             | Intent::SaveAs
             | Intent::NewTable
+            | Intent::OpenFile
             | Intent::Paste
             | Intent::Undo
             | Intent::Redo
@@ -2896,6 +2901,7 @@ impl Document {
             | Intent::Save
             | Intent::SaveAs
             | Intent::NewTable
+            | Intent::OpenFile
             | Intent::Paste
             | Intent::Undo
             | Intent::Redo
@@ -3115,6 +3121,7 @@ impl Document {
             | Intent::Save
             | Intent::SaveAs
             | Intent::NewTable
+            | Intent::OpenFile
             | Intent::Paste
             | Intent::Undo
             | Intent::Redo
@@ -5024,6 +5031,7 @@ fn changes_the_table(intent: Intent) -> bool {
             | Intent::Save
             | Intent::SaveAs
             | Intent::NewTable
+            | Intent::OpenFile
             | Intent::Paste
             | Intent::Undo
             | Intent::Redo
@@ -5086,6 +5094,7 @@ const fn keeps_cut(intent: Intent) -> bool {
         | Intent::Confirm
         | Intent::Advance(_)
         | Intent::NewTable
+        | Intent::OpenFile
         | Intent::Paste
         | Intent::OpenFind { .. }
         | Intent::FindAgain { .. }

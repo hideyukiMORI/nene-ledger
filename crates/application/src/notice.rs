@@ -73,6 +73,8 @@ pub enum Notice {
     Replace(ReplaceNotice),
     /// 新しい表の窓を開けなかった（自分の exe を起こせない・ADR 0028 の決定 1）。
     NewWindowFailed,
+    /// ファイルを選ぶ画面が無い（X11）。開くファイルは引数で渡すか、窓に落とす（GitHub Issue #344）。
+    NoFileChooser,
     /// 読み取り専用（EDIT-13・GitHub Issue #238）。
     ReadOnly(ReadOnlyNotice),
     /// 新しい表は、読み方を変えられない（名前を付けて保存してから・ADR 0028 の決定 3）。

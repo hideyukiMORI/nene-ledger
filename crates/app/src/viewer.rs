@@ -146,6 +146,17 @@ impl Viewer {
         }
     }
 
+    /// Ctrl+O：開くファイルを選ばせ、新しい窓で開く（落としたファイルと同じ作り・GitHub Issue #344）。Windows は OS の
+    /// 「ファイルを開く」画面、X11 は選ぶ画面が無いので知らせる。
+    fn open_chosen_file(&mut self) {
+        #[cfg(windows)]
+        if let Some(path) = nene_ledger_ui_win32::desktop::choose_file() {
+            Session::open_files(self, &[path.to_string_lossy().into_owned()]);
+        }
+        #[cfg(not(windows))]
+        self.document.notify(Notice::NoFileChooser);
+    }
+
     /// 新しい表を新しい窓で開く（自分の exe を `--new` で起こす・ADR 0028 の決定 1）。今の窓は残る。
     fn open_new_window(&mut self) {
         #[cfg(windows)]
@@ -883,6 +894,10 @@ impl Viewer {
         }
         if intent == Intent::NewTable {
             self.open_new_window();
+            return None;
+        }
+        if intent == Intent::OpenFile {
+            self.open_chosen_file();
             return None;
         }
         if let Intent::Zoom(step) = intent {
