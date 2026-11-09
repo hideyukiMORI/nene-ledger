@@ -271,6 +271,10 @@ fn aux_text(
     let number = format!("{} 行目", group_digits(place.record().saturating_add(1)));
     // 列の数が見出しと違う行は、そう言う（GitHub Issue #317・専門家ペルソナの 4 巡目）。
     let row = match place.shape() {
+        // 見出しより多ければ、消し方を添える（GitHub Issue #413）。
+        Some((cells, expected)) if cells > expected => format!(
+            "{number}（{cells} 列・見出しは {expected} 列 · Ctrl+Shift+P「余計なセル」で消せる）"
+        ),
         Some((cells, expected)) => {
             format!("{number}（列の数が違う：{cells} 列・見出しは {expected} 列）")
         }

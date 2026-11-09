@@ -256,7 +256,7 @@ impl<'view> FramePainter<'view> {
             && matches!(row.row(), RowId::Source(_))
             && self
                 .expected
-                .is_some_and(|expected| row.cells().len() != expected);
+                .is_some_and(|expected| self.width_of_row(row) != expected);
         let gutter_ink = match row.row() {
             RowId::Added(_) => self.palette.cursor(),
             RowId::Source(_) if self.preamble => gutter_ink.mixed(gutter_fill, MARK_FADE),
@@ -278,6 +278,13 @@ impl<'view> FramePainter<'view> {
             let shown = row.line().saturating_add(1).to_string();
             self.text(gutter, &shown, gutter_ink);
         }
+    }
+
+    /// 行 `row` のセルの数。後ろの余計なセルを消した分は数えない（GitHub Issue #413）。
+    fn width_of_row(&self, row: &ViewRow) -> usize {
+        let width = row.cells().len();
+        self.edits
+            .map_or(width, |edits| edits.kept_width(row.row(), width))
     }
 
     /// 1 行。罫線の色で行の帯（表の幅まで）を塗り、その上にセルを塗って、残った 1 画素を罫線にする。
