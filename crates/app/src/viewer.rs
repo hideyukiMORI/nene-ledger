@@ -1009,6 +1009,11 @@ impl Viewer {
             self.palette_took_last = true;
             return self.palette_intent(intent, view);
         }
+        // 状態の行の右端の案内（「F1 · Ctrl+Shift+P で操作の一覧」）を押したら、操作の一覧を開く（マウスで探す人の入口・
+        // GitHub Issue #422）。
+        let on_hint =
+            matches!(intent, Intent::Point { at, .. } if self.document.palette_hint_hit(at, view));
+        let intent = if on_hint { Intent::OpenPalette } else { intent };
         if self.opened_palette(intent) {
             // 検索と置換の箱を開いたら、カーソルのセルを箱の下に隠さない（GitHub Issue #300）。
             let effect = self.reveal_cursor(view);

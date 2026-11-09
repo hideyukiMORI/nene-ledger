@@ -11,7 +11,7 @@ NeNe Ledger（プレビュー版）
   1. この zip を好きなフォルダに展開します（インストールは要りません）。
   2. CSV ファイルを nene-ledger.exe の上にドラッグして落とすか、
      nene-ledger.exe を開いてファイルを選びます。samples フォルダに見本があります。
-  3. Ctrl+Shift+P（または F1）で操作の一覧が開きます。
+  3. F1（または Ctrl+Shift+P）で操作の一覧が開きます。右下の「F1 · Ctrl+Shift+P で操作の一覧」を押しても開きます。
      「キーの一覧を見る…」でキーの割り当てを、「このアプリについて…」で版とライセンスを見られます。
 
 ■ 最初に開くとき
@@ -42,7 +42,7 @@ see the release notes on GitHub for what works and what does not yet.
 
 - Unzip anywhere (no installer). Drop a CSV file onto nene-ledger.exe, or open the exe
   and choose a file. Sample files are in the "samples" folder.
-- Ctrl+Shift+P (or F1) opens the command palette, including the key list and "About".
+- F1 (or Ctrl+Shift+P, or clicking the hint at the bottom right) opens the command palette, including the key list and "About".
 - The exe is not code-signed. If Windows SmartScreen stops it, click "More info" and
   then "Run anyway".
 - License: NeNe Ledger License 1.0 (see LICENSE): free to use, credit required for
