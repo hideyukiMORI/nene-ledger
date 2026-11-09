@@ -2195,6 +2195,37 @@ impl Document {
             .unwrap_or_default()
     }
 
+    /// 行へ飛ぶ段（Ctrl+G）の知らせ（GitHub Issue #307）。打つ前は表の行と列の範囲（書き方は欄の案内）、範囲の外の番号はどこまでか
+    /// （注意・Enter では端へ飛ぶ）。打った番号が範囲の中なら `None`（今までどおり「Enter で n 行目へ」）。
+    #[must_use]
+    pub fn go_to_note(&self, query: &str) -> Option<(String, NoteTone)> {
+        let lines = self.records().map(|records| self.rows.len(records));
+        let columns = self.widths.columns().len();
+        if query.trim().is_empty() {
+            let rows = lines.map_or_else(
+                || String::from("行の数を数えています"),
+                |count| format!("1〜{} 行", group_digits(count)),
+            );
+            return Some((format!("{rows} · 1〜{columns} 列"), NoteTone::Prompt));
+        }
+        let target = GoToTarget::parse(query)?;
+        if let Some(count) = lines.filter(|&count| target.record() >= count) {
+            return Some((
+                format!("{} 行までです（Enter で末尾の行へ）", group_digits(count)),
+                NoteTone::Problem,
+            ));
+        }
+        target
+            .column()
+            .filter(|&column| column >= columns)
+            .map(|_| {
+                (
+                    format!("{columns} 列までです（Enter で右端の列へ）"),
+                    NoteTone::Problem,
+                )
+            })
+    }
+
     /// [`Self::replace_guide`] の知らせの種類（色・GitHub Issue #305）。数えている間と件数を見せている間・端から続けた
     /// ことは確かめ（強調）、置き換えたことは済んだ（緑）、見つからない・置き換えなかった・止めた・読めないは注意（赤）。
     #[must_use]
@@ -9430,6 +9461,34 @@ mod tests {
         text_at(
             &document.frame(normal(), palette()),
             "Ctrl+Shift+P でコマンド",
+        );
+    }
+
+    /// 行へ飛ぶ段は、打つ前に表の行と列の範囲と書き方を、範囲の外の番号にはどこまでかを言う（GitHub Issue #307）。
+    #[test]
+    fn going_to_says_the_range_and_numbers_outside_it() {
+        let document = indexed_editable();
+        assert_eq!(
+            document.go_to_note(""),
+            Some((String::from("1〜3 行 · 1〜2 列"), NoteTone::Prompt))
+        );
+        assert_eq!(document.go_to_note("2"), None);
+        assert_eq!(document.go_to_note("2,2"), None);
+        assert_eq!(document.go_to_note("abc"), None);
+        assert_eq!(
+            document.go_to_note("4").map(|note| note.1),
+            Some(NoteTone::Problem)
+        );
+        assert_eq!(
+            document.go_to_note("1,3"),
+            Some((
+                String::from("2 列までです（Enter で右端の列へ）"),
+                NoteTone::Problem
+            ))
+        );
+        assert_eq!(
+            editable().go_to_note("").map(|note| note.0),
+            Some(String::from("行の数を数えています · 1〜2 列"))
         );
     }
 
