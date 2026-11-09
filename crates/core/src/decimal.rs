@@ -49,6 +49,14 @@ impl Decimal {
         })
     }
 
+    /// 大きさを比べる。小数点以下の桁の多いほうにそろえて比べ、そろえて桁あふれなら `None`（範囲の最小と最大・
+    /// GitHub Issue #389）。`1.0` と `1` は等しい。
+    #[must_use]
+    pub fn checked_cmp(self, other: Self) -> Option<core::cmp::Ordering> {
+        let scale = self.scale.max(other.scale);
+        Some(self.rescaled(scale)?.cmp(&other.rescaled(scale)?))
+    }
+
     /// `count` 個で割った平均を、小数点以下 `AVERAGE_SCALE` 桁で四捨五入する（0.5 は 0 から遠い側へ）。
     /// `count` が 0 か桁あふれなら `None`。
     #[must_use]
@@ -203,5 +211,27 @@ mod tests {
         );
         assert_eq!(Decimal::new(-1, 6).average(2), Some(Decimal::new(-1, 6)));
         assert_eq!(Decimal::new(1, 6).average(3), Some(Decimal::new(0, 6)));
+    }
+
+    /// 小数点以下の桁が違っても値で比べ、そろえて桁あふれなら比べない（GitHub Issue #389）。
+    #[test]
+    fn values_compare_across_scales() {
+        use core::cmp::Ordering;
+        assert_eq!(
+            Decimal::new(10, 1).checked_cmp(Decimal::new(1, 0)),
+            Some(Ordering::Equal)
+        );
+        assert_eq!(
+            Decimal::new(-15, 1).checked_cmp(Decimal::new(-1, 0)),
+            Some(Ordering::Less)
+        );
+        assert_eq!(
+            Decimal::new(1_234, 2).checked_cmp(Decimal::new(12, 0)),
+            Some(Ordering::Greater)
+        );
+        assert_eq!(
+            Decimal::new(i128::MAX, 0).checked_cmp(Decimal::new(1, 30)),
+            None
+        );
     }
 }

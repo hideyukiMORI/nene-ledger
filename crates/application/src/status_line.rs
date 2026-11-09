@@ -464,6 +464,15 @@ fn stats_status(stats: SelectionStats) -> String {
                 .average()
                 .map(|average| format!("平均 {}", decimal_status(average))),
         );
+        // 数が 2 つ以上で、すべて同じでなければ最小〜最大（外れ値や桁の違いに気づく・GitHub Issue #389）。
+        let spread = stats
+            .extremes()
+            .filter(|&(low, high)| low.checked_cmp(high) != Some(core::cmp::Ordering::Equal));
+        parts.extend(
+            spread.map(|(low, high)| {
+                format!("範囲 {}〜{}", decimal_status(low), decimal_status(high))
+            }),
+        );
     }
     // 書き方を読み替えて数にしたセルがあれば、その数を添える（¥・桁区切り・指数・全角など・GitHub Issue #319）。
     if stats.rewritten() > 0 {
@@ -473,6 +482,10 @@ fn stats_status(stats: SelectionStats) -> String {
         ));
     }
     parts.push(format!("数でない {}", group_digits(stats.not_numbers())));
+    // 空のセルがあれば数える（欠損に気づく・GitHub Issue #389）。
+    if stats.empties() > 0 {
+        parts.push(format!("空 {}", group_digits(stats.empties())));
+    }
     parts.join(" · ")
 }
 
@@ -616,11 +629,26 @@ mod tests {
                 "0012", "¥3", "1.5e3", "1"
             ])))
             .as_deref(),
-            Some("件数 4 · 合計 1,516 · 平均 379 · 記号や指数を読んだ 2 · 数でない 0")
+            Some(
+                "件数 4 · 合計 1,516 · 平均 379 · 範囲 1〜1,500 · 記号や指数を読んだ 2 · 数でない 0"
+            )
         );
         assert_eq!(
             totals_status(SelectionTotals::Counted(stats_of(&["0012", "-3.5"]))).as_deref(),
-            Some("件数 2 · 合計 8.5 · 平均 4.25 · 数でない 0")
+            Some("件数 2 · 合計 8.5 · 平均 4.25 · 範囲 -3.5〜12 · 数でない 0")
+        );
+    }
+
+    /// 範囲の空のセルを数え、数の最小〜最大を添える。すべて同じ数なら範囲は言わない（GitHub Issue #389）。
+    #[test]
+    fn totals_count_empty_cells_and_show_the_spread() {
+        assert_eq!(
+            totals_status(SelectionTotals::Counted(stats_of(&["1", "", "30", ""]))).as_deref(),
+            Some("件数 2 · 合計 31 · 平均 15.5 · 範囲 1〜30 · 数でない 0 · 空 2")
+        );
+        assert_eq!(
+            totals_status(SelectionTotals::Counted(stats_of(&["5", "5.0"]))).as_deref(),
+            Some("件数 2 · 合計 10.0 · 平均 5 · 数でない 0")
         );
     }
 
@@ -638,7 +666,7 @@ mod tests {
         stats.add_shape(2, 3);
         assert_eq!(
             totals_status(SelectionTotals::Counted(stats)).as_deref(),
-            Some("列の数が違う行 2 を含む · 件数 2 · 合計 3 · 平均 1.5 · 数でない 0")
+            Some("列の数が違う行 2 を含む · 件数 2 · 合計 3 · 平均 1.5 · 範囲 1〜2 · 数でない 0")
         );
     }
 
@@ -663,7 +691,7 @@ mod tests {
         assert_eq!(totals_status(SelectionTotals::Hidden), None);
         assert_eq!(
             totals_status(SelectionTotals::Counted(stats_of(&["1000.5", "2", "x"]))).as_deref(),
-            Some("件数 3 · 合計 1,002.5 · 平均 501.25 · 数でない 1")
+            Some("件数 3 · 合計 1,002.5 · 平均 501.25 · 範囲 2〜1,000.5 · 数でない 1")
         );
         assert_eq!(
             totals_status(SelectionTotals::Counted(stats_of(&["a", "b"]))).as_deref(),

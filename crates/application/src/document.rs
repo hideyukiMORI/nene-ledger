@@ -6511,11 +6511,14 @@ mod tests {
         assert_eq!(document.refresh_totals(), TotalsRequest::Settled);
         assert_eq!(
             document.right_status(),
-            "件数 4 · 合計 3 · 平均 1.5 · 数でない 2"
+            "件数 4 · 合計 3 · 平均 1.5 · 範囲 1〜2 · 数でない 2"
         );
         // 右端のパレットの案内の代わりに描く。
         let frame = document.frame(view(1000, 300, WindowPlacement::Normal), palette());
-        let (totals, _) = text_at(&frame, "件数 4 · 合計 3 · 平均 1.5 · 数でない 2");
+        let (totals, _) = text_at(
+            &frame,
+            "件数 4 · 合計 3 · 平均 1.5 · 範囲 1〜2 · 数でない 2",
+        );
         assert!(totals.x() > 500);
         assert!(!frame.commands().iter().any(|command| matches!(
             command,
@@ -6541,7 +6544,8 @@ mod tests {
         extend(&mut document, CursorStep::Down);
         extend(&mut document, CursorStep::Down);
         assert_eq!(document.refresh_totals(), TotalsRequest::Settled);
-        let wanted = "列の数が違う行 1 を含む · 件数 3 · 合計 60 · 平均 20 · 数でない 0";
+        let wanted =
+            "列の数が違う行 1 を含む · 件数 3 · 合計 60 · 平均 20 · 範囲 10〜30 · 数でない 0";
         assert_eq!(document.right_status(), wanted);
         let frame = document.frame(view(1000, 300, WindowPlacement::Normal), palette());
         assert!(frame.commands().iter().any(|command| matches!(
@@ -6575,7 +6579,7 @@ mod tests {
         document.count_totals(0, &rows);
         assert_eq!(
             document.right_status(),
-            "件数 4 · 合計 3.3 · 平均 0.825 · 数でない 0"
+            "件数 4 · 合計 3.3 · 平均 0.825 · 範囲 0.1〜2 · 数でない 0"
         );
         // 範囲が変わらなければ作り直さない。
         assert_eq!(document.refresh_totals(), TotalsRequest::Unchanged);
@@ -6889,7 +6893,7 @@ mod tests {
         assert_eq!(document.refresh_totals(), TotalsRequest::Settled);
         assert_eq!(
             document.right_status(),
-            "件数 4 · 合計 3 · 平均 1.5 · 数でない 2"
+            "件数 4 · 合計 3 · 平均 1.5 · 範囲 1〜2 · 数でない 2"
         );
     }
 
@@ -6990,7 +6994,7 @@ mod tests {
         document.refresh_totals();
         assert_eq!(
             document.right_status(),
-            "件数 2 · 合計 31 · 平均 15.5 · 数でない 0"
+            "件数 2 · 合計 31 · 平均 15.5 · 範囲 1〜30 · 数でない 0"
         );
         // 範囲ごとに選択の色: セル 2 つ ＋ 行番号 2 つ ＋ 見出し 2 つ。
         let frame = document.frame(window, palette());
@@ -7016,7 +7020,7 @@ mod tests {
         // 1 + 2 + 3 + 20 + 30（30 は 2 回選んだが 1 回だけ）。
         assert_eq!(
             document.right_status(),
-            "件数 5 · 合計 56 · 平均 11.2 · 数でない 0"
+            "件数 5 · 合計 56 · 平均 11.2 · 範囲 1〜30 · 数でない 0"
         );
     }
 
@@ -7080,7 +7084,7 @@ mod tests {
         document.refresh_totals();
         assert_eq!(
             document.right_status(),
-            "件数 3 · 合計 60 · 平均 20 · 数でない 0"
+            "件数 3 · 合計 60 · 平均 20 · 範囲 10〜30 · 数でない 0"
         );
         // 行番号は行全体。Shift で前の起点の行から広げる。
         document.apply(pointing(10, 58, SelectionMode::Collapse), window);
@@ -7094,7 +7098,7 @@ mod tests {
         document.refresh_totals();
         assert_eq!(
             document.right_status(),
-            "件数 6 · 合計 66 · 平均 11 · 数でない 0"
+            "件数 6 · 合計 66 · 平均 11 · 範囲 1〜30 · 数でない 0"
         );
         document.apply(moving(CursorStep::Down), window);
         document.apply(Intent::SelectAll, window);
@@ -7169,7 +7173,7 @@ mod tests {
         document.refresh_totals();
         assert_eq!(
             document.right_status(),
-            "件数 2 · 合計 30 · 平均 15 · 数でない 0"
+            "件数 2 · 合計 30 · 平均 15 · 範囲 10〜20 · 数でない 0"
         );
         // 本体の最初の行は列の番号の行の下。
         document.apply(pointing(47, 58, SelectionMode::Collapse), window);
