@@ -814,7 +814,7 @@ fn placeholder(mode: PaletteMode) -> &'static str {
         PaletteMode::Reading {
             aspect: ReadingAspect::Header,
             ..
-        } => "行の番号で絞る（例: 2）",
+        } => "行の番号で絞る（例: 2・2-3）",
         PaletteMode::Candidates { .. } => "英字で絞る（例: tab, comma）。上から判別の点数の順",
     }
 }
@@ -1335,7 +1335,7 @@ mod tests {
         let mut headers = CommandPalette::open();
         headers.enter_reading(ReadingAspect::Header, ReadingChoice::Header(None));
         let shown_headers = headers.paint(view(), colors(), DetailPane::Closed);
-        assert!(texts(&shown_headers).contains(&"行の番号で絞る（例: 2）"));
+        assert!(texts(&shown_headers).contains(&"行の番号で絞る（例: 2・2-3）"));
         let mut themes = CommandPalette::open();
         typed_into(&mut themes, "haishoku");
         let _entered = themes.handle(Intent::Confirm, 1);
