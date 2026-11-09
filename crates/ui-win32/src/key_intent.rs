@@ -36,6 +36,7 @@ const VK_A: u16 = 0x41;
 const VK_C: u16 = 0x43;
 const VK_G: u16 = 0x47;
 const VK_N: u16 = 0x4E;
+const VK_O: u16 = 0x4F;
 const VK_V: u16 = 0x56;
 const VK_X: u16 = 0x58;
 const VK_F: u16 = 0x46;
@@ -151,6 +152,7 @@ fn control_intent(key: u16, shift: bool, alt: bool) -> Option<Intent> {
         (VK_Z, true) | (VK_Y, false) => Some(Intent::Redo),
         (VK_G, false) => Some(Intent::OpenGoTo),
         (VK_N, false) => Some(Intent::NewTable),
+        (VK_O, false) => Some(Intent::OpenFile),
         (VK_V, false) => Some(Intent::Paste),
         (VK_P, true) => Some(Intent::OpenPalette),
         (VK_U, true) => Some(Intent::ToggleDetail),
@@ -396,6 +398,7 @@ mod tests {
         assert_eq!(key_intent(VK_A, control()), Some(Intent::SelectAll));
         assert_eq!(key_intent(VK_G, control()), Some(Intent::OpenGoTo));
         assert_eq!(key_intent(VK_N, control()), Some(Intent::NewTable));
+        assert_eq!(key_intent(VK_O, control()), Some(Intent::OpenFile));
         assert_eq!(key_intent(VK_V, control()), Some(Intent::Paste));
     }
 

@@ -76,6 +76,8 @@ pub enum CommandId {
     NextRaggedRow,
     /// 列の数が見出しと違う前の行へ（GitHub Issue #340）。
     PreviousRaggedRow,
+    /// ファイルを選んで新しい窓で開く（Ctrl+O・GitHub Issue #344）。
+    OpenFile,
     /// 書き換えを保存する（ADR 0026 の決定 6）。
     Save,
     /// 名前を付けて保存する。
@@ -108,7 +110,7 @@ pub enum CommandId {
 
 impl CommandId {
     /// すべての操作（何も打たないときの順）。
-    pub const ALL: [Self; 45] = [
+    pub const ALL: [Self; 46] = [
         Self::Top,
         Self::Bottom,
         Self::GoTo,
@@ -139,6 +141,7 @@ impl CommandId {
         Self::Replace,
         Self::NextRaggedRow,
         Self::PreviousRaggedRow,
+        Self::OpenFile,
         Self::Save,
         Self::SaveAs,
         Self::NewTable,
@@ -195,6 +198,7 @@ impl CommandId {
             Self::NextRaggedRow => "列の数が見出しと違う次の行へ",
             Self::PreviousRaggedRow => "列の数が見出しと違う前の行へ",
             Self::Replace => "置き換える（探して）",
+            Self::OpenFile => "ファイルを開く…",
             Self::Save => "変えた所を保存する",
             Self::SaveAs => "名前を付けて保存する",
             Self::NewTable => "新しい表を作る",
@@ -247,6 +251,7 @@ impl CommandId {
             Self::NextRaggedRow => "れつのかずがみだしとちがうつぎのぎょうへ",
             Self::PreviousRaggedRow => "れつのかずがみだしとちがうまえのぎょうへ",
             Self::Replace => "おきかえる",
+            Self::OpenFile => "ふぁいるをひらく",
             Self::Save => "かえたところをほぞんする",
             Self::SaveAs => "なまえをつけてほぞんする",
             Self::NewTable => "あたらしいひょうをつくる",
@@ -306,6 +311,7 @@ impl CommandId {
             Self::NextRaggedRow => &["ragged", "broken", "columns", "malformed", "next"],
             Self::PreviousRaggedRow => &["ragged", "broken", "columns", "malformed", "previous"],
             Self::Replace => &["replace", "find", "okikae", "chikan"],
+            Self::OpenFile => &["open", "file", "load"],
             Self::Save => &["save", "write"],
             Self::SaveAs => &["saveas", "save as", "export"],
             Self::NewTable => &["new", "create", "blank"],
@@ -351,6 +357,7 @@ impl CommandId {
             Self::Find | Self::FindNext | Self::FindPrevious => &["検索", "サーチ"],
             Self::NextRaggedRow | Self::PreviousRaggedRow => &["壊れた行", "ずれ", "列数"],
             Self::Replace => &["置換", "検索", "書き換え"],
+            Self::OpenFile => &["読み込み", "オープン"],
             Self::Save => &["上書き保存", "書き出し"],
             Self::SaveAs => &["別名", "エクスポート", "書き出し"],
             Self::NewTable => &["新規", "作成"],
@@ -411,6 +418,7 @@ impl CommandId {
             Self::FindNext => Some("F3"),
             Self::FindPrevious => Some("Shift+F3"),
             Self::Replace => Some("Ctrl+H"),
+            Self::OpenFile => Some("Ctrl+O"),
             Self::Save => Some("Ctrl+S"),
             Self::SaveAs => Some("Ctrl+Shift+S"),
             Self::NewTable => Some("Ctrl+N"),
@@ -454,6 +462,7 @@ impl CommandId {
             | Self::Replace
             | Self::NextRaggedRow
             | Self::PreviousRaggedRow
+            | Self::OpenFile
             | Self::Save
             | Self::SaveAs
             | Self::NewTable
@@ -513,6 +522,7 @@ impl CommandId {
             Self::FindNext => Some(Intent::FindAgain { forward: true }),
             Self::FindPrevious => Some(Intent::FindAgain { forward: false }),
             Self::Replace => Some(Intent::OpenFind { replace: true }),
+            Self::OpenFile => Some(Intent::OpenFile),
             Self::Save => Some(Intent::Save),
             Self::SaveAs => Some(Intent::SaveAs),
             Self::NewTable => Some(Intent::NewTable),
@@ -554,7 +564,8 @@ mod tests {
             );
             assert!(!opens_a_list || command.keys().is_none());
             // 「…」は次に選ぶか打つものがある操作。行へ飛ぶは入力欄を開く意図を持つ。
-            let asks_more = opens_a_list || command == CommandId::GoTo;
+            let asks_more =
+                opens_a_list || command == CommandId::GoTo || command == CommandId::OpenFile;
             assert_eq!(command.name(DetailPane::Open).ends_with('…'), asks_more);
         }
     }
