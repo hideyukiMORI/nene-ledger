@@ -106,6 +106,15 @@ M2 は「探して置き換え、壊れた行を直す」束を含む（ROADMAP�
 - 表の端で送れない（箱が上で表の先頭の行・箱が下で表の末尾の行）ときは、**箱を反対の端へ寄せる**（上なら窓の下・下なら上）。寄せた位置は閉じるまでそのまま
 - 試して選ばなかった形：VS Code の `editor.find.addExtraSpaceOnTop`（1 行目の上に空きを足す）。表は見出しの行と行の番号を固定して描くので、空きを足すと見出しの固定の作りに手が入る。GNOME Text Editor は同じ問題が未解決（Issue #346）
 
+### 9. 置換の欄は 2 つを縦に並べ、名札を付ける（2026-11-09 追記・GitHub Issue #287）
+
+> 第 8 節と同じく、専門家ペルソナ 3 人の推しで作った。施主の確認を待つ。
+
+- 決定 1 の「Ctrl+H で置換の段（検索の欄 ＋ 置き換える文字の欄）」を、**入力の欄を 2 つ縦に並べる**形にする（前は箱が 1 つで、Tab で中身が入れ替わり、もう一方は灰色の 1 行だった）。左に名札「探す」「置換後」。打っている欄だけ下辺を強調の色にして入力の印を置き、名札も濃くする。欄を押しても打つ先が移る
+- **Ctrl+H はいつも探す欄から**（前は、前に探した文字があると置き換える欄から始まり、どちらに打っているか取り違えた）
+- Ctrl+F と Ctrl+H で前に探した文字を入れて開くときは、**その文字を全部選んでおく**（選択の色で塗る）。打てば置き換わり、Backspace で全部消える。条件の切り替えでは選んだまま、ほかのキーで選びを外す（Excel・VS Code と同じ）
+- 置換の段の 1 行目のキーの案内は「Enter 置き換えて次へ · Alt+A 全部 · Tab 欄を替える」（Shift+Enter で前を探すのは探す段と同じなので省いた）
+
 ## 強制
 
 - **active**（GitHub Issue #151 で入れた）:
@@ -135,6 +144,9 @@ M2 は「探して置き換え、壊れた行を直す」束を含む（ROADMAP�
 - **active**（GitHub Issue #286 で入れた）:
   - 箱の下に入る行は箱のすぐ下（下の箱なら上）へ送り、箱と横に重ならない列は送らない。表の端で送れないことが分かる（application のテスト `a_found_cell_is_not_left_under_the_cover`・`only_columns_beside_the_cover_are_covered`・`a_row_under_the_cover_comes_out_just_below_it`）
   - 下へ寄せた箱は、下の端との空きが上と同じで、大きさと行の数は変えない（`a_lowered_panel_sits_at_the_bottom_with_the_same_rows`）
+- **active**（GitHub Issue #287 で入れた）:
+  - 置換の段は 2 つの欄と名札を描き、打っている欄だけ強調し、Tab と欄を押すことで替わる（application のテスト `the_replace_step_shows_both_fields_and_its_keys`・`only_the_typed_field_is_accented`）
+  - Ctrl+H は探す欄から、前の文字は全部選んで打てば置き換わる（`the_replace_step_types_into_two_fields`・`a_previous_query_is_selected_and_typing_replaces_it`・貼り付けと 1 字ずつが同じ `inserting_text_at_once_equals_typing_it`）
 - **planned（実装の Issue で active にする）**:
   - 正規表現の逆戻りで止まらない（病的な式と入力の時間を測る・gate-proofs）
   - 1 GB の表で、最後の行にだけある値を見つける時間を DuckDB / qsv / EmEditor と同じファイルで記録（QLT-014。`grep` と `rg` との比べは benchmarks 第 8 節）
