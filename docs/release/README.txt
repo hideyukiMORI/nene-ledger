@@ -19,7 +19,8 @@ NeNe Ledger（プレビュー版）
   止めたら、「詳細情報」を押してから「実行」を押してください。
 
 ■ 主なキー
-  Ctrl+F 検索 / Ctrl+H 置換 / F3 次を探す / Ctrl+Z 元に戻す / Ctrl+Y やり直す /
+  Ctrl+F 検索 / Ctrl+H 置換 / F3 次を探す / F8 列の数が違う次の行へ /
+  Ctrl+Z 元に戻す / Ctrl+Y やり直す /
   Ctrl+O ファイルを開く / Ctrl+S 保存 / Ctrl+Shift+S 名前を付けて保存 / Ctrl+N 新しい表 /
   Ctrl+C コピー / Ctrl+X 切り取り / Ctrl+V 貼り付け / F2 またはダブルクリックでセルを直す
 

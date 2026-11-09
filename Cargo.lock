@@ -133,7 +133,7 @@ checksum = "743fb55ba31b18fb1ecef6bdc9aa2743314978ac084044301a7eee33fb99a20d"
 
 [[package]]
 name = "nene-ledger"
-version = "0.1.0-preview.1"
+version = "0.1.0-preview.2"
 dependencies = [
  "nene-ledger-adapters-windows",
  "nene-ledger-adapters-x11",
@@ -147,7 +147,7 @@ dependencies = [
 
 [[package]]
 name = "nene-ledger-adapters-windows"
-version = "0.1.0-preview.1"
+version = "0.1.0-preview.2"
 dependencies = [
  "nene-ledger-application",
  "nene-ledger-core",
@@ -156,7 +156,7 @@ dependencies = [
 
 [[package]]
 name = "nene-ledger-adapters-x11"
-version = "0.1.0-preview.1"
+version = "0.1.0-preview.2"
 dependencies = [
  "nene-ledger-application",
  "nene-ledger-core",
@@ -164,14 +164,14 @@ dependencies = [
 
 [[package]]
 name = "nene-ledger-application"
-version = "0.1.0-preview.1"
+version = "0.1.0-preview.2"
 dependencies = [
  "nene-ledger-core",
 ]
 
 [[package]]
 name = "nene-ledger-core"
-version = "0.1.0-preview.1"
+version = "0.1.0-preview.2"
 dependencies = [
  "regex-automata",
  "regex-syntax",
@@ -179,7 +179,7 @@ dependencies = [
 
 [[package]]
 name = "nene-ledger-scan"
-version = "0.1.0-preview.1"
+version = "0.1.0-preview.2"
 dependencies = [
  "encoding_rs",
  "nene-ledger-application",
@@ -188,7 +188,7 @@ dependencies = [
 
 [[package]]
 name = "nene-ledger-store"
-version = "0.1.0-preview.1"
+version = "0.1.0-preview.2"
 dependencies = [
  "encoding_rs",
  "nene-ledger-application",
@@ -197,7 +197,7 @@ dependencies = [
 
 [[package]]
 name = "nene-ledger-ui-win32"
-version = "0.1.0-preview.1"
+version = "0.1.0-preview.2"
 dependencies = [
  "nene-ledger-application",
  "nene-ledger-core",
@@ -207,7 +207,7 @@ dependencies = [
 
 [[package]]
 name = "nene-ledger-ui-x11"
-version = "0.1.0-preview.1"
+version = "0.1.0-preview.2"
 dependencies = [
  "cairo-rs",
  "nene-ledger-application",
@@ -556,4 +556,4 @@ checksum = "acf4d1bc32aa46eec18caa634ec3cf4c05bfa151f12b93b510b15190f69a1ca8"
 
 [[package]]
 name = "xtask"
-version = "0.1.0-preview.1"
+version = "0.1.0-preview.2"
