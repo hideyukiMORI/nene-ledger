@@ -69,8 +69,11 @@ impl ReplaceRun {
     }
 
     pub(crate) fn set_counted(&mut self, changes: Vec<(CellChange, String)>, skipped: u64) {
-        let literal = !self.scope.query().options().regex();
-        self.breakdown = Some(ReplaceBreakdown::of(&changes, &self.replacement, literal));
+        self.breakdown = Some(ReplaceBreakdown::of(
+            &changes,
+            &self.replacement,
+            self.scope.query(),
+        ));
         self.counted = Some((changes, skipped));
     }
 
