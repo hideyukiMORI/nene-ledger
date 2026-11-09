@@ -412,9 +412,8 @@ impl CommandId {
             Self::ChooseDelimiter => &["区切り文字", "カンマ", "タブ", "セパレータ"],
             Self::ChooseQuoting => &["ダブルクォート", "クォート", "エスケープ"],
             Self::ChooseHeader => &["ヘッダー", "列名"],
-            Self::MoveColumnsLeft | Self::MoveColumnsRight | Self::ResetColumns => {
-                &["列の移動", "並べ替え"]
-            }
+            // 「並べ替え」は行の並べ替え（ソート・まだ無い）と取り違えるので言い換えにしない（GitHub Issue #426）。
+            Self::MoveColumnsLeft | Self::MoveColumnsRight | Self::ResetColumns => &["列の移動"],
             Self::ResetWidths => &["列幅", "自動調整"],
             Self::FreezeColumns | Self::UnfreezeColumns => &["ウィンドウ枠", "ピン留め"],
             Self::Copy => &["複写"],

@@ -70,6 +70,52 @@ pub fn commands_with_recent(query: &str, recent: &[CommandId]) -> Vec<PaletteIte
     items
 }
 
+/// まだ無いが予定のある機能（FEATURES の SORT・FILT・XFRM-09・PRNT-01）を指す言葉と、知らせに出す名前。Excel の言葉で
+/// 打って当たりが無いとき、「無い」と黙らずに「まだ無い（予定）」と言う（専門家ペルソナと文献の相談・GitHub Issue #426）。
+const PLANNED: [(&str, &[&str]); 4] = [
+    (
+        "並べ替え",
+        &[
+            "並べ替え",
+            "並び替え",
+            "ならべかえ",
+            "ならびかえ",
+            "ソート",
+            "sort",
+            "narabekae",
+        ],
+    ),
+    (
+        "絞り込み（フィルター）",
+        &["絞り込", "しぼりこ", "フィルタ", "filter", "shiborikomi"],
+    ),
+    (
+        "重複の削除",
+        &[
+            "重複",
+            "じゅうふく",
+            "duplicate",
+            "dedup",
+            "chouhuku",
+            "choufuku",
+        ],
+    ),
+    ("印刷", &["印刷", "いんさつ", "print", "insatsu", "pdf"]),
+];
+
+/// 打った `query` が、まだ無いが予定のある機能を指していれば、その名前（GitHub Issue #426）。
+#[must_use]
+pub fn planned_feature(query: &str) -> Option<&'static str> {
+    let lower = query.trim().to_lowercase();
+    if lower.is_empty() {
+        return None;
+    }
+    PLANNED
+        .iter()
+        .find(|(_, words)| words.iter().any(|word| lower.contains(word)))
+        .map(|&(name, _)| name)
+}
+
 /// 操作 `command` が検索 `raw`（小文字）・`folded`（寄せた形）に合う度合い（小さいほど上）。合わなければ `None`。
 fn command_rank(command: CommandId, raw: &str, folded: &str) -> Option<u8> {
     if raw.is_empty() {
@@ -450,6 +496,29 @@ mod tests {
             commands_with_recent("", &[])[0],
             PaletteItem::Heading(PaletteHeading::Frequent)
         );
+    }
+
+    /// Excel の言葉でまだ無い機能を打てば、その名前が分かり、ほかの操作に取り違えて当たらない（GitHub Issue #426）。
+    #[test]
+    fn planned_features_are_named_and_not_matched_elsewhere() {
+        for (query, name) in [
+            ("並べ替え", "並べ替え"),
+            ("sort", "並べ替え"),
+            ("narabekae", "並べ替え"),
+            ("フィルター", "絞り込み（フィルター）"),
+            ("重複", "重複の削除"),
+            ("印刷", "印刷"),
+            ("Print", "印刷"),
+        ] {
+            assert_eq!(planned_feature(query), Some(name), "{query}");
+            assert!(
+                commands(query).is_empty(),
+                "{query}: {:?}",
+                ids(&commands(query))
+            );
+        }
+        assert_eq!(planned_feature(""), None);
+        assert_eq!(planned_feature("hozon"), None);
     }
 
     /// 打てば見出しの無い、合う度合いの順のまま（GitHub Issue #420）。
