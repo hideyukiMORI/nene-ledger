@@ -17,7 +17,7 @@ use x11rb::protocol::Event;
 use crate::chrome_action::ChromeAction;
 use crate::cursor_shape::CursorShape;
 use crate::drop_step::DropStep;
-use crate::frame_surface::{measure, paint};
+use crate::frame_surface::{measure, measure_advances, paint};
 use crate::key_intent::button_intent;
 use crate::paste_receipt::PasteReceipt;
 use crate::pointer_at::PointerAt;
@@ -67,11 +67,14 @@ impl Ui {
     ///
     /// 接続が切れた・描けないとき。
     pub fn run<S: Session>(self, session: &mut S) -> Result<(), UiFailure> {
-        let mut screen = Screen::new(Viewport::new(
-            INITIAL_SIZE,
-            measure(ZoomLevel::hundred())?,
-            self.window.placement()?,
-        ));
+        let mut screen = Screen::new(
+            Viewport::new(
+                INITIAL_SIZE,
+                measure(ZoomLevel::hundred())?,
+                self.window.placement()?,
+            ),
+            measure_advances(ZoomLevel::hundred())?,
+        );
         loop {
             let event = self.window.next_event()?;
             match self.respond(session, &event, &mut screen)? {
@@ -91,7 +94,7 @@ impl Ui {
     fn redraw<S: Session>(&self, session: &S, screen: &mut Screen) -> Result<(), UiFailure> {
         let zoom = session.zoom();
         if zoom != screen.zoom() {
-            screen.set_zoom(zoom, measure(zoom)?);
+            screen.set_zoom(zoom, (measure(zoom)?, measure_advances(zoom)?));
         }
         let name = session.window_name();
         if screen.rename(&name) {
