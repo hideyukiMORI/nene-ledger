@@ -880,9 +880,9 @@ fn checker_squares(rect: PixelRect, size: u32) -> Vec<PixelRect> {
         .collect()
 }
 
-/// 「セルが無い」の市松の升目の大きさ（論理 px・施主「もう少し細かく」で 8 から 6（#440）、さらに 4（#442））と、字の色から塗りの色へ寄せる割合（薄く・GitHub Issue #438）。
-const CHECKER: u32 = 4;
-const CHECKER_FADE: u8 = 88;
+/// 「セルが無い」の市松の升目の大きさ（論理 px・施主「もう少し細かく」で 8 から 6（#440）、4（#442）を経て 5（#444））と、字の色から塗りの色へ寄せる割合（薄く・88 から 92・GitHub Issue #438・#444）。
+const CHECKER: u32 = 5;
+const CHECKER_FADE: u8 = 92;
 
 /// 元の値 `value` を表示の 1 行にしたときの、見えない字の印の範囲（長い値は数えない・当たった字と同じ約束）。
 fn marks_in(value: &str) -> Vec<Range<usize>> {
