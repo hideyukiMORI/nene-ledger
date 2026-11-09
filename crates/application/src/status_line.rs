@@ -3,6 +3,7 @@
 use alloc::format;
 use alloc::string::String;
 
+use nene_ledger_core::dialect::Dialect;
 use nene_ledger_core::line_ending_counts::LineEndingCounts;
 use nene_ledger_core::quoting::Quoting;
 use nene_ledger_core::text_encoding::TextEncoding;
@@ -274,12 +275,38 @@ pub fn notice_status(notice: Notice) -> String {
         Notice::Rows(rows) => rows_status(rows),
         Notice::Columns(columns) => columns_status(columns),
         Notice::EditMissingCell => String::from("この行には、この列のセルがありません"),
-        Notice::DialectUnsure { top, second } => format!(
-            "判別に確信なし（1 位 {}%・2 位 {}%）· 候補は Ctrl+Shift+P → candidates",
-            top / 10,
-            second / 10
-        ),
+        Notice::DialectUnsure { top, rival } => dialect_unsure_status(top, rival),
     }
+}
+
+/// 判別に確信が無いときの文言（GitHub Issue #381）。区切りが同じなら区切りは疑わせず、引用の読み方の迷いとして言う。
+fn dialect_unsure_status(top: Dialect, rival: Option<Dialect>) -> String {
+    let opened = dialect_name(top);
+    match rival {
+        Some(other) if other.delimiter() == top.delimiter() => format!(
+            "{}は確か。引用の読み方が決まらない（{} で開いた・{} もありうる）· {DIALECT_ROUTE}",
+            delimiter_name(top.delimiter().byte()),
+            quoting_short_name(top.quoting(), top.quote()),
+            quoting_short_name(other.quoting(), other.quote())
+        ),
+        Some(other) => format!(
+            "判別に確信なし（{opened} で開いた・{} もありうる）· {DIALECT_ROUTE}",
+            dialect_name(other)
+        ),
+        None => format!("判別に確信なし（{opened} で開いた）· {DIALECT_ROUTE}"),
+    }
+}
+
+/// 判別の候補から選び直す入口（パレットは漢字でも引ける・ChooseDialect）。
+const DIALECT_ROUTE: &str = "選び直すのは Ctrl+Shift+P →「判別」";
+
+/// 方言の短い名前（区切り・引用の読み方）。
+fn dialect_name(dialect: Dialect) -> String {
+    format!(
+        "{}・{}",
+        delimiter_name(dialect.delimiter().byte()),
+        quoting_short_name(dialect.quoting(), dialect.quote())
+    )
 }
 
 /// コピーした知らせの文言（`cut` は 1 MiB で切り詰めた行の数）。
@@ -804,12 +831,34 @@ mod tests {
             notice_status(Notice::Frozen { columns: 0 }),
             "列の固定を外しました"
         );
+    }
+
+    /// 判別に確信が無い知らせは、迷った 2 つの読み方の名前を出す（GitHub Issue #381）。
+    #[test]
+    fn an_unsure_detection_names_both_readings() {
         assert_eq!(
             notice_status(Notice::DialectUnsure {
-                top: 412,
-                second: 398
+                top: Dialect::new(Delimiter::COMMA, Quoting::Doubled, b'"').unwrap(),
+                rival: Some(
+                    Dialect::new(Delimiter::new(b';').unwrap(), Quoting::Doubled, b'"').unwrap()
+                ),
             }),
-            "判別に確信なし（1 位 41%・2 位 39%）· 候補は Ctrl+Shift+P → candidates"
+            "判別に確信なし（カンマ区切り・\"\" で引用符（RFC 4180） で開いた・セミコロン区切り・\"\" で引用符（RFC 4180） もありうる）· 選び直すのは Ctrl+Shift+P →「判別」"
+        );
+        // 区切りが同じなら区切りは疑わせない（GitHub Issue #381）。
+        assert_eq!(
+            notice_status(Notice::DialectUnsure {
+                top: Dialect::new(Delimiter::TAB, Quoting::Doubled, b'"').unwrap(),
+                rival: Some(Dialect::new(Delimiter::TAB, Quoting::Backslash, b'"').unwrap()),
+            }),
+            "タブ区切りは確か。引用の読み方が決まらない（\"\" で引用符（RFC 4180） で開いた・\\ で逃がす もありうる）· 選び直すのは Ctrl+Shift+P →「判別」"
+        );
+        assert_eq!(
+            notice_status(Notice::DialectUnsure {
+                top: Dialect::new(Delimiter::TAB, Quoting::Doubled, b'"').unwrap(),
+                rival: None,
+            }),
+            "判別に確信なし（タブ区切り・\"\" で引用符（RFC 4180） で開いた）· 選び直すのは Ctrl+Shift+P →「判別」"
         );
     }
 

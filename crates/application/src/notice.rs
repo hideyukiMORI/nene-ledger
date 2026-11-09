@@ -1,5 +1,7 @@
 //! 状態の行に一度だけ出す知らせ。
 
+use nene_ledger_core::dialect::Dialect;
+
 use crate::columns_notice::ColumnsNotice;
 use crate::find_notice::FindNotice;
 use crate::paste_notice::PasteNotice;
@@ -89,11 +91,12 @@ pub enum Notice {
     Columns(ColumnsNotice),
     /// このセルは差分で消した（`Absent`・KEEP-05）ので直せない。列の数が足りない行のセルは足して直せる（GitHub Issue #83）。
     EditMissingCell,
-    /// 方言の判別に確信が無い（FR-023・Issue #3）。黙って 1 位で開いたことを知らせ、候補から選ぶ入口を示す。
+    /// 方言の判別に確信が無い（FR-023・Issue #3）。1 位で開いたことと、迷った相手の読み方を知らせ、候補から選ぶ入口を示す
+    /// （点数の割合だけでは何と迷ったか分からない・GitHub Issue #381）。
     DialectUnsure {
-        /// 1 位の点数（千分率）。
-        top: u32,
-        /// 2 位の点数（千分率）。
-        second: u32,
+        /// 開いた読み方（1 位）。
+        top: Dialect,
+        /// 1 位と競った読み方（`Detection::rival`）。無ければ `None`。
+        rival: Option<Dialect>,
     },
 }
