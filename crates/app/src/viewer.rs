@@ -994,10 +994,11 @@ impl Session for Viewer {
         };
         let mut commands = frame.into_commands();
         let note = self.document.replace_guide();
-        commands.extend(open.state().paint_noted(
+        let lines = self.document.replace_detail();
+        commands.extend(open.state().paint_replacing(
             view,
             (open.colors(), self.document.detail()),
-            note.as_deref(),
+            (note.as_deref(), &lines),
         ));
         Frame::new(view.size(), commands)
     }
