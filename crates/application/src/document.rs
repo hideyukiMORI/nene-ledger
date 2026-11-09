@@ -19,7 +19,7 @@ use crate::cell_position::CellPosition;
 use crate::cell_restore::CellRestore;
 use crate::cell_row::CellRow;
 use crate::chrome_painter::ChromePainter;
-use crate::client_bands::ClientBands;
+use crate::client_bands::{ClientBands, DETAIL_LINES, MAX_DETAIL_LINES, MIN_DETAIL_LINES};
 use crate::clipboard_text::ClipboardText;
 use crate::close_choice::CloseChoice;
 use crate::close_prompt::ClosePrompt;
@@ -165,6 +165,8 @@ pub struct Document {
     custom: BTreeMap<usize, u32>,
     /// 指が見出しの列の境目の上にあるか（カーソルの形）。
     grip: bool,
+    /// 詳細ペインの本文の行の数（境の線で変える・設定に覚える・GitHub Issue #452）。
+    detail_lines: u32,
     /// 行の並び（ADR 0024 の層 1・ADR 0027）。
     rows: RowOrder,
     /// 列の並び（ADR 0024 の層 1・ADR 0027）。表の列は、この並びの順（`t`）で数える。
@@ -229,6 +231,10 @@ const EDITING_HINT_EDITING: &str = "編集中 · Enter 確定 · Esc やめる �
 pub const MAX_COPY_ROWS: u64 = 100_000;
 /// 見出しの列の境目として押せる、境目の左右の画素（100% のとき・Issue #64）。
 const COLUMN_GRIP: u32 = 4;
+/// 詳細ペインと表の境の線を掴める上下の幅（画素・100% のとき・GitHub Issue #452）。
+const PANE_GRIP: u32 = 3;
+/// 詳細ペインを広げても表に残す行の数（見出しの行を除く・GitHub Issue #452）。
+const MIN_TABLE_ROWS: u32 = 3;
 /// 列を移すときの、落とす位置の線の太さ（画素・100% のとき・ほかの帯と同じ 3）。
 const DROP_LINE: u32 = 3;
 
@@ -310,6 +316,7 @@ impl Document {
             index: JobState::Waiting,
             custom: BTreeMap::new(),
             grip: false,
+            detail_lines: DETAIL_LINES,
             rows: RowOrder::whole(),
             columns: ColumnOrder::whole(),
             source_width,
@@ -1320,6 +1327,12 @@ impl Document {
     /// 2 度目の押し（ADR 0026 の決定 1）。1 度押したのと同じに扱い、押した所がカーソルの本体のセルなら、押して始めた
     /// ドラッグを終えて、そのセルを編集の状態（元の値・カーソルは末尾）で直し始める。保存の途中は直し始めない。
     fn double_click(&mut self, at: PixelPoint, window: WindowView) -> DocumentEffect {
+        // 境の線のダブルクリックは、詳細ペインを既定の高さに戻す（GitHub Issue #452）。
+        if self.pane_grip(at, window) {
+            self.hold = None;
+            self.detail_lines = DETAIL_LINES;
+            return DocumentEffect::Stay;
+        }
         let effect = self.apply(
             Intent::Point {
                 at,
@@ -3273,6 +3286,13 @@ impl Document {
             self.view.first_body(),
             self.first_column,
         );
+        if self.pane_grip(at, window) {
+            self.hold = Some(PointerHold::PaneHeight {
+                press_y: at.y(),
+                start: self.detail_lines,
+            });
+            return;
+        }
         if let Some(display) = self.column_grip(at, window) {
             self.start_resize(at, display);
             return;
@@ -3328,6 +3348,63 @@ impl Document {
             .map(|(column, _)| column)
     }
 
+    /// 詳細ペインの本文の行の数（境の線で変える・GitHub Issue #452）。
+    #[must_use]
+    pub const fn detail_lines(&self) -> u32 {
+        self.detail_lines
+    }
+
+    /// 詳細ペインの本文の行の数を `lines` にする（設定から・`MIN_DETAIL_LINES`〜`MAX_DETAIL_LINES` に収める）。
+    pub fn set_detail_lines(&mut self, lines: u32) {
+        self.detail_lines = lines.clamp(MIN_DETAIL_LINES, MAX_DETAIL_LINES);
+    }
+
+    /// `at` が、開いている詳細ペインと表の境の線の上（上下に `PANE_GRIP` の幅）か（GitHub Issue #452）。
+    fn pane_grip(&self, at: PixelPoint, window: WindowView) -> bool {
+        if self.detail != DetailPane::Open {
+            return false;
+        }
+        let client = window.chrome().client();
+        let bands = ClientBands::split(
+            client.size().height(),
+            window,
+            self.detail,
+            self.detail_lines,
+        );
+        let boundary = client.origin().y().saturating_add(bands.table());
+        let grip = window.metrics().px(PANE_GRIP);
+        let (left, right) = (
+            client.origin().x(),
+            client.origin().x().saturating_add(client.size().width()),
+        );
+        (left..right).contains(&at.x()) && at.y().abs_diff(boundary) <= grip
+    }
+
+    /// 境の線を押したまま `at` へ動かした。上へ動かすほどペインが高くなる。表は少なくとも `MIN_TABLE_ROWS` 行を残す。
+    fn resize_pane(&mut self, hold: PointerHold, at: PointerPoint, window: WindowView) {
+        let PointerHold::PaneHeight { press_y, start } = hold else {
+            return;
+        };
+        let metrics = window.metrics();
+        let line = i64::from(ClientBands::body_line(metrics).max(1));
+        let dy = i64::from(press_y) - i64::from(at.y());
+        let wanted = (i64::from(start) + (dy + line / 2).div_euclid(line))
+            .clamp(i64::from(MIN_DETAIL_LINES), i64::from(MAX_DETAIL_LINES));
+        let client = window.chrome().client();
+        let room = client
+            .size()
+            .height()
+            .saturating_sub(TableLayout::row_height_for(metrics))
+            .saturating_sub(
+                TableLayout::row_height_for(window.content_metrics())
+                    .saturating_mul(MIN_TABLE_ROWS),
+            );
+        let most = ClientBands::lines_for_height(room, window);
+        self.detail_lines = u32::try_from(wanted)
+            .unwrap_or(DETAIL_LINES)
+            .min(most.max(MIN_DETAIL_LINES));
+    }
+
     /// 表示の列 `display` の境目を `at` で押した。離すまで、その元の列の幅を変える。
     fn start_resize(&mut self, at: PixelPoint, display: usize) {
         let column = self.source_column(display);
@@ -3372,11 +3449,14 @@ impl Document {
     pub fn pointer_shape(&self) -> PointerShape {
         match self.hold {
             Some(PointerHold::ColumnWidth { .. }) => PointerShape::ColumnResize,
+            Some(PointerHold::PaneHeight { .. }) => PointerShape::RowResize,
             Some(
                 PointerHold::Thumb { .. } | PointerHold::Track { .. } | PointerHold::Cells { .. },
             )
             | None => {
-                if self.grip {
+                if self.hovered == Some(HoverTarget::PaneGrip) {
+                    PointerShape::RowResize
+                } else if self.grip {
                     PointerShape::ColumnResize
                 } else {
                     PointerShape::Arrow
@@ -3532,6 +3612,10 @@ impl Document {
             self.resize_to(hold, at, window);
             return DocumentEffect::Stay;
         }
+        if let PointerHold::PaneHeight { .. } = hold {
+            self.resize_pane(hold, at, window);
+            return DocumentEffect::Stay;
+        }
         let Some(scrollbar) = hold
             .orientation()
             .and_then(|orientation| self.bars(window).bar(orientation))
@@ -3558,7 +3642,9 @@ impl Document {
                 });
                 DocumentEffect::Stay
             }
-            PointerHold::Cells { .. } | PointerHold::ColumnWidth { .. } => DocumentEffect::Stay,
+            PointerHold::Cells { .. }
+            | PointerHold::ColumnWidth { .. }
+            | PointerHold::PaneHeight { .. } => DocumentEffect::Stay,
         }
     }
 
@@ -3597,7 +3683,8 @@ impl Document {
             Some(
                 PointerHold::Thumb { .. }
                 | PointerHold::Track { .. }
-                | PointerHold::ColumnWidth { .. },
+                | PointerHold::ColumnWidth { .. }
+                | PointerHold::PaneHeight { .. },
             )
             | None => PressKind::Cells,
         };
@@ -4033,6 +4120,12 @@ impl Document {
 
     /// ドラッグ中の Esc。押す前の選択と表示に戻す。ドラッグしていなければ `None`。
     fn cancel_drag(&mut self, window: WindowView) -> Option<DocumentEffect> {
+        // 詳細ペインの高さを変えている途中の Esc は、押す前の高さに戻す（GitHub Issue #452）。
+        if let Some(PointerHold::PaneHeight { start, .. }) = self.hold {
+            self.hold = None;
+            self.detail_lines = start;
+            return Some(DocumentEffect::Stay);
+        }
         if let Some(PointerHold::ColumnWidth {
             column, original, ..
         }) = self.hold
@@ -4159,6 +4252,8 @@ impl Document {
         });
         let hovered = if view_menu_hit(window, at) {
             Some(HoverTarget::Menu)
+        } else if at.is_some_and(|at| self.pane_grip(at, window)) {
+            Some(HoverTarget::PaneGrip)
         } else {
             thumb
         };
@@ -4190,7 +4285,8 @@ impl Document {
                 PointerHold::Thumb { .. }
                 | PointerHold::Track { .. }
                 | PointerHold::Cells { .. }
-                | PointerHold::ColumnWidth { .. },
+                | PointerHold::ColumnWidth { .. }
+                | PointerHold::PaneHeight { .. },
             )
             | None => self.row_total(),
         };
@@ -4770,7 +4866,12 @@ impl Document {
     /// 窓 `window` の表の所（中身から詳細ペインと下の状態の行を除いた所）。
     fn table_area(&self, window: WindowView) -> PixelRect {
         let client = window.chrome().client();
-        let bands = ClientBands::split(client.size().height(), window, self.detail);
+        let bands = ClientBands::split(
+            client.size().height(),
+            window,
+            self.detail,
+            self.detail_lines,
+        );
         PixelRect::new(
             client.origin(),
             PixelSize::new(client.size().width(), bands.table()),
@@ -4947,7 +5048,7 @@ impl Document {
         (palette, found): (Palette, Option<&FindQuery>),
     ) -> Vec<DrawCommand> {
         let (metrics, content) = (view.metrics(), view.content_metrics());
-        let bands = ClientBands::split(size.height(), view, self.detail);
+        let bands = ClientBands::split(size.height(), view, self.detail, self.detail_lines);
         let table_height = bands.table();
         let status_height = bands.status();
         let area = PixelRect::new(
@@ -5161,7 +5262,12 @@ impl Document {
             return false;
         }
         let client = window.chrome().client();
-        let bands = ClientBands::split(client.size().height(), window, self.detail);
+        let bands = ClientBands::split(
+            client.size().height(),
+            window,
+            self.detail,
+            self.detail_lines,
+        );
         let top = client
             .origin()
             .y()
@@ -7290,6 +7396,64 @@ mod tests {
             window,
         );
         assert_eq!(document.first_column(), 0);
+    }
+
+    /// 表と詳細ペインの境の線を掴んで上へ動かすとペインが高くなり、上下の矢印の形になる。ダブルクリックで既定の高さ、
+    /// 動かしている途中の Esc で押す前の高さに戻る。閉じたペインには掴む所が無い（GitHub Issue #452）。
+    #[test]
+    fn the_pane_border_can_be_dragged_reset_and_cancelled() {
+        let window = view(400, 600, WindowPlacement::Normal);
+        let mut document = opened_with(&table(&[&["h"], &["1"]]));
+        let client = window.chrome().client();
+        let bands = |shown: &Document| {
+            ClientBands::split(
+                client.size().height(),
+                window,
+                shown.detail,
+                shown.detail_lines,
+            )
+        };
+        let border = client.origin().y() + bands(&document).table();
+        let before = bands(&document).detail();
+        document.hover(Some(PixelPoint::new(100, border)), window);
+        assert_eq!(document.pointer_shape(), PointerShape::RowResize);
+        document.apply(pointing(100, border, SelectionMode::Collapse), window);
+        let line = i32::try_from(ClientBands::body_line(window.metrics())).unwrap();
+        let up = i32::try_from(border).unwrap() - line * 3_i32;
+        document.apply(dragging_to(100, up), window);
+        assert_eq!(document.detail_lines(), DETAIL_LINES + 3);
+        assert!(bands(&document).detail() > before);
+        document.apply(Intent::Release, window);
+        assert_eq!(document.detail_lines(), DETAIL_LINES + 3);
+        // ダブルクリックで既定の高さ。
+        let moved = client.origin().y() + bands(&document).table();
+        document.apply(
+            Intent::DoubleClick {
+                at: PixelPoint::new(100, moved),
+            },
+            window,
+        );
+        assert_eq!(document.detail_lines(), DETAIL_LINES);
+        // 動かしている途中の Esc は押す前の高さ。下へは下限まで。
+        document.apply(pointing(100, border, SelectionMode::Collapse), window);
+        document.apply(
+            dragging_to(100, i32::try_from(border).unwrap() + line * 20),
+            window,
+        );
+        assert_eq!(document.detail_lines(), MIN_DETAIL_LINES);
+        document.apply(Intent::Cancel, window);
+        assert_eq!(document.detail_lines(), DETAIL_LINES);
+        // 上へは表に 3 行を残すまで。
+        document.apply(pointing(100, border, SelectionMode::Collapse), window);
+        document.apply(dragging_to(100, 0), window);
+        document.apply(Intent::Release, window);
+        assert!(
+            bands(&document).table()
+                >= TableLayout::row_height_for(window.content_metrics()) * MIN_TABLE_ROWS
+        );
+        document.apply(Intent::ToggleDetail, window);
+        document.hover(Some(PixelPoint::new(100, border)), window);
+        assert_eq!(document.pointer_shape(), PointerShape::Arrow);
     }
 
     fn dragging_to(x: i32, y: i32) -> Intent {

@@ -44,6 +44,13 @@ pub enum PointerHold {
         /// 押す前に利用者が変えていた幅（Esc で戻す先・無ければ自動の幅）。
         original: Option<u32>,
     },
+    /// 表と詳細ペインの境の線を押して、ペインの高さを変えている（GitHub Issue #452）。
+    PaneHeight {
+        /// 押した所の縦の位置（窓の中）。
+        press_y: u32,
+        /// 押したときのペインの本文の行の数。
+        start: u32,
+    },
     /// セル・行番号・見出しの上で押した（しきい値を超えて動かせば範囲を広げるドラッグ）。
     Cells {
         /// 何を広げるか。
@@ -67,7 +74,7 @@ impl PointerHold {
     pub fn orientation(self) -> Option<ScrollOrientation> {
         match self {
             Self::Thumb { orientation, .. } | Self::Track { orientation, .. } => Some(orientation),
-            Self::Cells { .. } | Self::ColumnWidth { .. } => None,
+            Self::Cells { .. } | Self::ColumnWidth { .. } | Self::PaneHeight { .. } => None,
         }
     }
 
@@ -76,7 +83,10 @@ impl PointerHold {
     pub fn dragging_cells(self) -> bool {
         match self {
             Self::Cells { dragging, .. } => dragging,
-            Self::Thumb { .. } | Self::Track { .. } | Self::ColumnWidth { .. } => false,
+            Self::Thumb { .. }
+            | Self::Track { .. }
+            | Self::ColumnWidth { .. }
+            | Self::PaneHeight { .. } => false,
         }
     }
 }

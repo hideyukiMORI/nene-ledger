@@ -6,8 +6,10 @@ use nene_ledger_core::table_layout::TableLayout;
 use crate::detail_pane::DetailPane;
 use crate::window_view::WindowView;
 
-/// 詳細ペインの本文の行の数（多いとき）。
+/// 詳細ペインの本文の行の数の既定（境の線のダブルクリックで戻す高さ・GitHub Issue #452）。
 pub(crate) const DETAIL_LINES: u32 = 5;
+/// 詳細ペインの本文の行の数の上限（境の線を動かして変えられる・GitHub Issue #452）。
+pub(crate) const MAX_DETAIL_LINES: u32 = 60;
 /// 詳細ペインの本文の行の数の下限。1 行では値が 2 行以上あると「あと N 行」だけになり、値が見えない（Issue #39）。
 pub(crate) const MIN_DETAIL_LINES: u32 = 2;
 /// 詳細ペインの本文の上下の余白（画素・100% のとき）。
@@ -25,11 +27,12 @@ pub(crate) struct ClientBands {
 
 impl ClientBands {
     /// 中身の高さ `height` を分ける。状態の行は窓の部品の字、詳細ペインは中身の字の寸法で決める（ADR 0020）。
-    pub(crate) fn split(height: u32, view: WindowView, pane: DetailPane) -> Self {
+    /// ペインの高さは、窓の部品の字で本文 `lines` 行の高さを目安にする（利用者が境の線で変える・GitHub Issue #452）。
+    pub(crate) fn split(height: u32, view: WindowView, pane: DetailPane, lines: u32) -> Self {
         let status = TableLayout::row_height_for(view.metrics()).min(height);
         let rest = height.saturating_sub(status);
         let detail = match pane {
-            DetailPane::Open => Self::detail_height(view).min(rest),
+            DetailPane::Open => Self::detail_height(view, lines).min(rest),
             DetailPane::Closed => 0,
         };
         Self {
@@ -42,10 +45,15 @@ impl ClientBands {
     /// 開いた詳細ペインの高さ。100% のとき（窓の部品の字で本文 `DETAIL_LINES` 行）の高さを目安にし、中身の字で
     /// その高さに入るだけの本文の行を置く（拡大するほど行の数が減る・Issue #38）。ただし本文は少なくとも
     /// `MIN_DETAIL_LINES` 行で、とても大きく拡大すると目安より少し高くなる（Issue #39）。
-    pub(crate) fn detail_height(view: WindowView) -> u32 {
-        let budget = Self::pane_height(view.metrics(), DETAIL_LINES);
+    pub(crate) fn detail_height(view: WindowView, lines: u32) -> u32 {
+        let budget = Self::pane_height(
+            view.metrics(),
+            lines.clamp(MIN_DETAIL_LINES, MAX_DETAIL_LINES),
+        );
         let content = view.content_metrics();
-        Self::pane_height(content, Self::body_lines(budget, content))
+        // 縮小しても、選んだ行の数より増やさない（Issue #38・GitHub Issue #452）。
+        let chosen = lines.clamp(MIN_DETAIL_LINES, MAX_DETAIL_LINES);
+        Self::pane_height(content, Self::body_lines(budget, content).min(chosen))
     }
 
     /// 字の寸法 `metrics` で本文 `lines` 行の詳細ペインの高さ。表との境の線・見出しの行（表の行と同じ高さ・下の罫線を
@@ -58,7 +66,7 @@ impl ClientBands {
             .saturating_add(metrics.px(DETAIL_RULE))
     }
 
-    /// 高さ `height` の詳細ペインに入る本文の行の数（少なくとも `MIN_DETAIL_LINES`・多くて `DETAIL_LINES`）。描画もこれで数える。
+    /// 高さ `height` の詳細ペインに入る本文の行の数（少なくとも `MIN_DETAIL_LINES`・多くて `MAX_DETAIL_LINES`）。描画もこれで数える。
     pub(crate) fn body_lines(height: u32, metrics: GlyphMetrics) -> u32 {
         let fixed = metrics
             .px(DETAIL_PADDING)
@@ -66,7 +74,15 @@ impl ClientBands {
             .saturating_add(TableLayout::row_height_for(metrics))
             .saturating_add(metrics.px(DETAIL_RULE));
         (height.saturating_sub(fixed) / Self::body_line(metrics).max(1))
-            .clamp(MIN_DETAIL_LINES, DETAIL_LINES)
+            .clamp(MIN_DETAIL_LINES, MAX_DETAIL_LINES)
+    }
+
+    /// 本文の行の数 `lines` の、窓の部品の字（100% の目安）でのペインの高さ。境の線を動かした距離を行の数に直すのに使う。
+    pub(crate) fn lines_for_height(height: u32, view: WindowView) -> u32 {
+        let metrics = view.metrics();
+        let fixed = Self::pane_height(metrics, 0);
+        (height.saturating_sub(fixed) / Self::body_line(metrics).max(1))
+            .clamp(MIN_DETAIL_LINES, MAX_DETAIL_LINES)
     }
 
     /// 詳細ペインの本文の 1 行の高さ（1.5 行。和文を折り返して読む行の高さ）。
@@ -113,14 +129,14 @@ mod tests {
     #[test]
     fn the_status_line_comes_first_then_the_pane_then_the_table() {
         // 本文の 1 行は 24。ペインは 24 × 5 ＋ 余白 6 × 2 ＋ 見出しの行 25 ＋ 線 1 = 158。状態の行は 25。
-        let closed = ClientBands::split(400, view(), DetailPane::Closed);
+        let closed = ClientBands::split(400, view(), DetailPane::Closed, DETAIL_LINES);
         assert_eq!(
             (closed.table(), closed.detail(), closed.status()),
             (375, 0, 25)
         );
-        let open = ClientBands::split(400, view(), DetailPane::Open);
+        let open = ClientBands::split(400, view(), DetailPane::Open, DETAIL_LINES);
         assert_eq!((open.table(), open.detail(), open.status()), (217, 158, 25));
-        let tiny = ClientBands::split(100, view(), DetailPane::Open);
+        let tiny = ClientBands::split(100, view(), DetailPane::Open, DETAIL_LINES);
         assert_eq!((tiny.table(), tiny.detail(), tiny.status()), (0, 75, 25));
     }
 
@@ -130,7 +146,7 @@ mod tests {
         let at = |line_height: u32| {
             let content = GlyphMetrics::new(line_height / 2, line_height, line_height * 3 / 4);
             let zoomed = view().with_content_metrics(content);
-            let height = ClientBands::detail_height(zoomed);
+            let height = ClientBands::detail_height(zoomed, DETAIL_LINES);
             (ClientBands::body_lines(height, content), height)
         };
         assert_eq!(at(16), (5, 158));

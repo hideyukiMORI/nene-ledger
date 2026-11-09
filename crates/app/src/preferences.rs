@@ -112,6 +112,15 @@ impl Preferences {
         self.save()
     }
 
+    /// 詳細ペインの本文の行の数を替えて書く（変わらなければ書かない・GitHub Issue #452）。
+    pub(crate) fn set_detail_lines(&mut self, lines: u32) -> Result<(), SettingsFailure> {
+        if self.settings.detail_lines() == lines {
+            return Ok(());
+        }
+        self.settings = self.settings.with_detail_lines(lines);
+        self.save()
+    }
+
     /// 検索の条件を替えて書く（変わらなければ書かない・ADR 0030 の決定 3・GitHub Issue #213）。
     pub(crate) fn set_find(&mut self, find: FindOptions) -> Result<(), SettingsFailure> {
         if self.settings.find() == find {

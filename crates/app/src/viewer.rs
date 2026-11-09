@@ -112,6 +112,7 @@ impl Viewer {
         preferences: Preferences,
     ) -> Self {
         document.set_detail(preferences.settings().detail());
+        document.set_detail_lines(preferences.settings().detail_lines());
         let (job, ticker) = workers.into_parts();
         Self {
             document,
@@ -961,6 +962,7 @@ impl Viewer {
         let mut trial = Document::open(base.title().to_owned(), summary, header, cells);
         trial.mark_cut(cuts);
         trial.set_detail(base.detail());
+        trial.set_detail_lines(base.detail_lines());
         let original = core::mem::replace(&mut self.document, trial);
         if self.trial.is_none() {
             self.trial = Some(original);
@@ -988,6 +990,25 @@ impl Viewer {
                     self.document = original;
                 }
             }
+        }
+    }
+
+    /// 詳細ペインの開閉と高さを設定に覚える。高さは境の線を離した・戻した・やめたときだけ書く（動かしている間は書かない・
+    /// GitHub Issue #452）。書けなければ知らせる。
+    fn remember_pane(&mut self, intent: Intent) {
+        let saved = if intent == Intent::ToggleDetail {
+            self.preferences.set_detail(self.document.detail())
+        } else if matches!(
+            intent,
+            Intent::Release | Intent::DoubleClick { .. } | Intent::Cancel
+        ) {
+            self.preferences
+                .set_detail_lines(self.document.detail_lines())
+        } else {
+            Ok(())
+        };
+        if saved.is_err() {
+            self.document.notify(Notice::SettingsUnsaved);
         }
     }
 
@@ -1044,11 +1065,7 @@ impl Viewer {
             return None;
         }
         let effect = self.document.apply(intent, view);
-        if intent == Intent::ToggleDetail
-            && self.preferences.set_detail(self.document.detail()).is_err()
-        {
-            self.document.notify(Notice::SettingsUnsaved);
-        }
+        self.remember_pane(intent);
         // Ctrl+Enter の一括の入力は、貼り付けと同じく行を読んでから書く（EDIT-02）。
         let copied = if let DocumentEffect::ReadPasted { first_line, count } = effect {
             self.finish_paste(PasteRequest::Read { first_line, count }, view);

@@ -53,6 +53,8 @@ pub(crate) fn cursor_glyph(shape: CursorShape) -> u16 {
         CursorShape::Edge(ResizeEdge::BottomLeft) => 12,
         CursorShape::Edge(ResizeEdge::Left) => 70,
         CursorShape::ColumnResize => 108,
+        // sb_v_double_arrow（GitHub Issue #452）。
+        CursorShape::RowResize => 116,
     }
 }
 
@@ -69,5 +71,6 @@ mod tests {
         assert_eq!(cursor_glyph(CursorShape::Edge(ResizeEdge::BottomRight)), 14);
         assert_eq!(cursor_glyph(CursorShape::Edge(ResizeEdge::Right)), 96);
         assert_eq!(cursor_glyph(CursorShape::ColumnResize), 108);
+        assert_eq!(cursor_glyph(CursorShape::RowResize), 116);
     }
 }

@@ -13,11 +13,13 @@ pub(crate) enum CursorShape {
     Edge(ResizeEdge),
     /// 列の幅を変える（左右の矢印）。
     ColumnResize,
+    /// 詳細ペインの高さを変える（上下の矢印・GitHub Issue #452）。
+    RowResize,
 }
 
 impl CursorShape {
     /// すべて（窓を開くときに作るカーソルの並び）。
-    pub(crate) const ALL: [Self; 10] = [
+    pub(crate) const ALL: [Self; 11] = [
         Self::Arrow,
         Self::Edge(ResizeEdge::TopLeft),
         Self::Edge(ResizeEdge::Top),
@@ -28,6 +30,7 @@ impl CursorShape {
         Self::Edge(ResizeEdge::BottomLeft),
         Self::Edge(ResizeEdge::Left),
         Self::ColumnResize,
+        Self::RowResize,
     ];
 
     /// 飾りの当たり判定 `hit` と、中身が求める形 `shape` のカーソル。縁が先で、中身の形は中身の上でだけ。
@@ -35,6 +38,7 @@ impl CursorShape {
         match (hit, shape) {
             (ChromeHit::Edge(edge), _) => Self::Edge(edge),
             (ChromeHit::Client, PointerShape::ColumnResize) => Self::ColumnResize,
+            (ChromeHit::Client, PointerShape::RowResize) => Self::RowResize,
             (ChromeHit::Client, PointerShape::Arrow)
             | (ChromeHit::Caption | ChromeHit::Button(_), _) => Self::Arrow,
         }
