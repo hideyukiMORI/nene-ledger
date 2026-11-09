@@ -3,7 +3,7 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use nene_ledger_core::display_width::{char_columns, extends_previous};
+use nene_ledger_core::display_width::{char_columns, display_columns, extends_previous};
 
 use crate::cell_display::single_line;
 
@@ -46,6 +46,40 @@ pub fn wrap(text: &str, max_columns: u32, max_lines: usize) -> WrappedText {
         hidden: total.saturating_sub(lines.len()),
         lines,
     }
+}
+
+/// `text` を [`wrap`] と同じく折り返したときの、`index` 字目（0 から・改行も 1 字）の前の位置：折り返した何行目か
+/// と、その行の左からの桁（半角 1・全角 2）。詳細ペインで直すときのカーソルの棒の位置（GitHub Issue #458）。
+#[must_use]
+pub fn caret_place(text: &str, max_columns: u32, index: usize) -> (usize, u32) {
+    let mut row = 0_usize;
+    let mut before = 0_usize;
+    for logical in text.split('\n') {
+        let length = logical.chars().count();
+        // `\r\n` の `\r` は改行の一部（`wrap` と同じく 1 つの改行に数える）。
+        let pieces = wrap_line(&single_line(logical.trim_end_matches('\r')), max_columns);
+        if index <= before.saturating_add(length) {
+            let (offset, column) = place_in_pieces(&pieces, index.saturating_sub(before));
+            return (row.saturating_add(offset), column);
+        }
+        row = row.saturating_add(pieces.len());
+        before = before.saturating_add(length).saturating_add(1);
+    }
+    (row.saturating_sub(1), 0)
+}
+
+/// 折り返した 1 つの論理の行 `pieces` の中の、`left` 字目の前の位置（何番目の切れ端か・その中の桁）。
+fn place_in_pieces(pieces: &[String], mut left: usize) -> (usize, u32) {
+    for (offset, piece) in pieces.iter().enumerate() {
+        let count = piece.chars().count();
+        let last = offset.saturating_add(1) == pieces.len();
+        if left < count || (left == count && last) {
+            let head: String = piece.chars().take(left).collect();
+            return (offset, display_columns(&head));
+        }
+        left = left.saturating_sub(count);
+    }
+    (pieces.len().saturating_sub(1), 0)
 }
 
 /// 改行を含まない 1 行を、`max_columns` で折り返す。空の行も 1 行と数える。前の字に重なる字（結合文字・異体字の
@@ -121,5 +155,27 @@ mod tests {
     #[test]
     fn a_zero_width_still_shows_one_character_per_line() {
         assert_eq!(lines(&wrap("ab", 0, 10)), vec!["a", "b"]);
+    }
+
+    /// カーソルの棒の位置は、折り返しと改行をまたいでも折り返した行と桁で言う（GitHub Issue #458）。
+    #[test]
+    fn the_caret_is_placed_on_the_wrapped_line() {
+        // 幅 4 で「abcdef」は「abcd」「ef」。改行の後の「gh」は 3 行目。
+        let text = "abcdef\ngh";
+        assert_eq!(caret_place(text, 4, 0), (0, 0));
+        assert_eq!(caret_place(text, 4, 3), (0, 3));
+        assert_eq!(caret_place(text, 4, 4), (1, 0));
+        assert_eq!(caret_place(text, 4, 6), (1, 2));
+        assert_eq!(caret_place(text, 4, 7), (2, 0));
+        assert_eq!(caret_place(text, 4, 9), (2, 2));
+    }
+
+    /// 全角は 2 桁・空の値は先頭・`\r\n` は 1 つの改行（GitHub Issue #458）。
+    #[test]
+    fn the_caret_counts_wide_characters_and_line_breaks() {
+        assert_eq!(caret_place("あいう", 10, 2), (0, 4));
+        assert_eq!(caret_place("", 10, 0), (0, 0));
+        assert_eq!(caret_place("ab\n", 10, 3), (1, 0));
+        assert_eq!(caret_place("ab\r\ncd", 10, 5), (1, 1));
     }
 }

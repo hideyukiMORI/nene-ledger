@@ -8,6 +8,8 @@ pub(crate) struct EditingCell {
     text: String,
     caret: u32,
     underline: Option<(u32, u32)>,
+    /// カーソルの棒を描くか（詳細ペインで打っている間は、表のセルには描かない・GitHub Issue #458）。
+    caret_shown: bool,
 }
 
 impl EditingCell {
@@ -17,7 +19,21 @@ impl EditingCell {
             text,
             caret,
             underline,
+            caret_shown: true,
         }
+    }
+
+    /// カーソルの棒を描かない（詳細ペインで打っている間・GitHub Issue #458）。
+    pub(crate) fn without_caret(self) -> Self {
+        Self {
+            caret_shown: false,
+            ..self
+        }
+    }
+
+    /// カーソルの棒を描くか。
+    pub(crate) const fn caret_shown(&self) -> bool {
+        self.caret_shown
     }
 
     /// 描く文字列（改行は印に直してある）。

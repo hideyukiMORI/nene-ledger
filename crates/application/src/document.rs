@@ -19,7 +19,9 @@ use crate::cell_position::CellPosition;
 use crate::cell_restore::CellRestore;
 use crate::cell_row::CellRow;
 use crate::chrome_painter::ChromePainter;
-use crate::client_bands::{ClientBands, DETAIL_LINES, MAX_DETAIL_LINES, MIN_DETAIL_LINES};
+use crate::client_bands::{
+    ClientBands, DETAIL_LINES, DETAIL_RULE, MAX_DETAIL_LINES, MIN_DETAIL_LINES,
+};
 use crate::clipboard_text::ClipboardText;
 use crate::close_choice::CloseChoice;
 use crate::close_prompt::ClosePrompt;
@@ -41,6 +43,7 @@ use crate::edit_commit::EditCommit;
 use crate::edit_history::EditHistory;
 use crate::edit_mode::EditMode;
 use crate::edit_step::EditStep;
+use crate::edit_surface::EditSurface;
 use crate::editing_cell::EditingCell;
 use crate::find_bound::FindBound;
 use crate::find_notice::FindNotice;
@@ -3198,11 +3201,12 @@ impl Document {
         let underline = caret
             .underline()
             .map(|(start, end)| (columns(start), columns(end)));
-        Some(EditingCell::new(
-            single_line(&text),
-            columns(caret.cursor()),
-            underline,
-        ))
+        let cell = EditingCell::new(single_line(&text), columns(caret.cursor()), underline);
+        // 詳細ペインで打っている間は、表のセルには値だけを見せ、カーソルの棒はペインに（GitHub Issue #458）。
+        Some(match editor.surface() {
+            EditSurface::Cell => cell,
+            EditSurface::Pane => cell.without_caret(),
+        })
     }
 
     /// カーソルを `step` で動かし（`mode` で畳む・広げる）、見えるように横を動かして、縦の表示の先頭を返す（1 画面 `page` 行）。
@@ -3301,6 +3305,11 @@ impl Document {
             self.view.first_body(),
             self.first_column,
         );
+        // 詳細ペインの本文を押したら、そこで直す（Excel の数式バーと同じ・GitHub Issue #458）。
+        if !self.pane_grip(at, window) && self.in_pane_body(at, window) {
+            self.edit_in_pane();
+            return;
+        }
         if self.pane_grip(at, window) {
             self.hold = Some(PointerHold::PaneHeight {
                 press_y: at.y(),
@@ -3420,6 +3429,27 @@ impl Document {
             Scroll::Left { .. } | Scroll::Right { .. } => first,
         };
         self.detail_scroll = Some((self.selection.cursor(), moved.min(most)));
+    }
+
+    /// `at` が、詳細ペインの本文（見出しの行より下）の上か（GitHub Issue #458）。
+    fn in_pane_body(&self, at: PixelPoint, window: WindowView) -> bool {
+        self.pane_rect(window).is_some_and(|pane| {
+            let header = window
+                .content_metrics()
+                .px(DETAIL_RULE)
+                .saturating_add(TableLayout::row_height_for(window.content_metrics()));
+            contains_point(pane, at) && at.y() >= pane.origin().y().saturating_add(header)
+        })
+    }
+
+    /// 詳細ペインで直す。直していなければ、カーソルのセルを編集の状態で直し始める（カーソルは末尾）。表のセルで直して
+    /// いれば、打っている所をペインへ移す（値はそのまま）（GitHub Issue #458）。
+    fn edit_in_pane(&mut self) {
+        if (self.editor.is_some() || self.begin_edit(EditMode::Editing))
+            && let Some(editor) = self.editor.as_mut()
+        {
+            editor.type_in_pane();
+        }
     }
 
     /// `at` が、開いている詳細ペインと表の境の線の上（上下に `PANE_GRIP` の幅）か（GitHub Issue #452）。
@@ -5217,9 +5247,20 @@ impl Document {
             name.as_deref(),
         )
         .with_shape(shape);
-        DetailPainter::new(pane, metrics, palette, self.format.format().encoding())
-            .with_scroll(self.detail_offset())
-            .paint(place, self.detail_content())
+        // 詳細ペインで打っている間は、確定前の字も含めた欄の字とカーソルの棒を見せる（GitHub Issue #458）。
+        let typing = self
+            .editor
+            .as_ref()
+            .filter(|editor| editor.surface() == EditSurface::Pane)
+            .map(|editor| editor.field().display());
+        let painter = DetailPainter::new(pane, metrics, palette, self.format.format().encoding())
+            .with_scroll(self.detail_offset());
+        match &typing {
+            Some((text, caret)) => painter
+                .with_caret(Some(caret.cursor()))
+                .paint(place, DetailContent::Value(text)),
+            None => painter.paint(place, self.detail_content()),
+        }
     }
 
     /// 状態の行に見せる索引の状態。作り終えていれば、行の数は足し消しの後の行の並びの数（ADR 0027 の決定 1）。
@@ -7572,6 +7613,76 @@ mod tests {
         document.apply(moving(CursorStep::Down), window);
         document.apply(moving(CursorStep::Up), window);
         assert_eq!(first_line(&document), "line 1");
+    }
+
+    /// 詳細ペインの本文を押すと、カーソルのセルをペインで直し始める（棒はペインだけ）。Alt+Enter で改行、Esc でやめれば
+    /// 何も変わらず、Enter で確定すれば表のセルに入る。表のセルで直している途中に押せば、打っている所だけがペインへ移る
+    /// （GitHub Issue #458）。
+    #[test]
+    fn the_pane_accepts_editing_like_a_formula_bar() {
+        let window = view(400, 600, WindowPlacement::Normal);
+        let mut document = editable();
+        document.set_detail(DetailPane::Open);
+        let pane = document.pane_rect(window).unwrap();
+        let inside = PixelPoint::new(
+            pane.origin().x() + 40,
+            pane.origin().y() + pane.size().height() - 12,
+        );
+        let body = |_: &Document| inside;
+        // ペインの本文の中の、強調の色の細い棒（カーソルの棒）の数。
+        let caret_fills = |shown: &Document| {
+            let frame = shown.frame(window, palette());
+            fills(&frame, palette().cursor())
+                .into_iter()
+                .filter(|rect| {
+                    rect.size().width() == 2
+                        && rect.origin().y() > pane.origin().y() + 30
+                        && rect.origin().x() > pane.origin().x() + 4
+                })
+                .count()
+        };
+        let at = body(&document);
+        document.apply(pointing(at.x(), at.y(), SelectionMode::Collapse), window);
+        assert!(document.editor().is_some());
+        assert_eq!(document.editor().unwrap().surface(), EditSurface::Pane);
+        assert_eq!(caret_fills(&document), 1);
+        let frame = document.frame(window, palette());
+        assert!(
+            all_texts(&frame).contains(&"直している · Enter 確定 · Alt+Enter 改行 · Esc やめる")
+        );
+        document.apply(Intent::Type('9'), window);
+        document.apply(Intent::BreakLine, window);
+        document.apply(Intent::Type('x'), window);
+        assert_eq!(document.editor().unwrap().field().text(), "00129\nx");
+        document.apply(Intent::Cancel, window);
+        assert!(document.editor().is_none());
+        assert!(document.edits().is_empty());
+        document.apply(pointing(at.x(), at.y(), SelectionMode::Collapse), window);
+        document.apply(Intent::Type('9'), window);
+        document.apply(Intent::Confirm, window);
+        assert_eq!(
+            document.edits().get(RowId::Source(0), ColumnId::Source(0)),
+            Some(&CellValue::Text(String::from("00129")))
+        );
+    }
+
+    /// 表のセルで直している途中に詳細ペインを押すと、値はそのまま、打っている所だけがペインへ移る（GitHub Issue #458）。
+    #[test]
+    fn clicking_the_pane_moves_typing_there_and_keeps_the_value() {
+        let window = view(400, 600, WindowPlacement::Normal);
+        let mut document = editable();
+        document.set_detail(DetailPane::Open);
+        let pane = document.pane_rect(window).unwrap();
+        let at = PixelPoint::new(
+            pane.origin().x() + 40,
+            pane.origin().y() + pane.size().height() - 12,
+        );
+        document.apply(Intent::Edit, window);
+        document.apply(Intent::Type('7'), window);
+        assert_eq!(document.editor().unwrap().surface(), EditSurface::Cell);
+        document.apply(pointing(at.x(), at.y(), SelectionMode::Collapse), window);
+        assert_eq!(document.editor().unwrap().surface(), EditSurface::Pane);
+        assert_eq!(document.editor().unwrap().field().text(), "00127");
     }
 
     fn dragging_to(x: i32, y: i32) -> Intent {

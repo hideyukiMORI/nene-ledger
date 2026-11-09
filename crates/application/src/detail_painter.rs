@@ -23,7 +23,7 @@ use crate::detail_content::DetailContent;
 use crate::detail_place::DetailPlace;
 use crate::shown_body::ShownBody;
 use crate::status_line::{byte_encoding_name, group_digits};
-use crate::text_wrap::wrap;
+use crate::text_wrap::{caret_place, wrap};
 
 /// 本文の左の帯の太さ（カーソルの枠と同じ青。このペインがカーソルのセルの拡大だと示す）。
 const BAR: u32 = 3;
@@ -33,6 +33,10 @@ const TEXT_LEFT: u32 = 12;
 const RIGHT_PADDING: u32 = 16;
 /// 開閉の案内。
 const HINT: &str = "Ctrl+Shift+U で閉じる";
+/// ペインで直している間の、見出しの行の右の案内（GitHub Issue #458）。
+const EDITING_HINT: &str = "直している · Enter 確定 · Alt+Enter 改行 · Esc やめる";
+/// ペインで直している間のカーソルの棒の幅（画素・100% のとき・GitHub Issue #458）。
+const CARET: u32 = 2;
 /// 本文のスクロールバーの幅とつまみの最小の長さ（画素・100% のとき・GitHub Issue #454）。
 const PANE_SCROLLBAR: u32 = 4;
 const PANE_SCROLLBAR_MIN: u32 = 12;
@@ -47,6 +51,8 @@ pub(crate) struct DetailPainter {
     commands: Vec<DrawCommand>,
     /// 本文の見せる最初の行（折り返した行の番目・GitHub Issue #454）。
     scroll: usize,
+    /// ペインで直している間の、カーソルの棒の前の字の数（本文の値の中・GitHub Issue #458）。
+    caret: Option<usize>,
 }
 
 impl DetailPainter {
@@ -64,7 +70,14 @@ impl DetailPainter {
             encoding,
             commands: Vec::new(),
             scroll: 0,
+            caret: None,
         }
+    }
+
+    /// ペインで直している：本文の `caret` 字目の前にカーソルの棒を描き、棒が見えるように本文を動かし、見出しの行に
+    /// 直し方を出す（GitHub Issue #458）。
+    pub(crate) fn with_caret(self, caret: Option<usize>) -> Self {
+        Self { caret, ..self }
     }
 
     /// 本文を、折り返した `scroll` 行目から見せる（ペインの中のスクロール・GitHub Issue #454）。
@@ -134,14 +147,20 @@ impl DetailPainter {
         let name_width = estimate.saturating_add(estimate / 2).min(half);
         let line = height.saturating_sub(self.metrics.px(GRID_LINE));
         self.text_in(area(name_left, top, half, line), name, self.palette.text());
-        let hint_width = self.columns_width(HINT);
+        // ペインで直している間は、閉じ方の代わりに直し方を強調の色で（見ているときと見分ける・GitHub Issue #458）。
+        let (hint, hint_color) = if self.caret.is_some() {
+            (EDITING_HINT, self.palette.cursor())
+        } else {
+            (HINT, self.palette.gutter_text())
+        };
+        let hint_width = self.columns_width(hint);
         let hint_left = (left.saturating_add(width))
             .saturating_sub(self.metrics.px(RIGHT_PADDING))
             .saturating_sub(hint_width);
         self.text_in(
             area(hint_left, top, hint_width, line),
-            String::from(HINT),
-            self.palette.gutter_text(),
+            String::from(hint),
+            hint_color,
         );
         // 列の名前の後ろは全角 2 つ分空ける。
         let aux_left = name_left
@@ -166,7 +185,24 @@ impl DetailPainter {
         let columns = text_width / self.metrics.half_width().max(1);
         let room = ClientBands::body_lines(self.pane.size().height(), self.metrics);
         let limit = usize::try_from(room).unwrap_or(usize::MAX);
-        let shown = body_lines(content, columns, limit, self.scroll);
+        // 直している間は、カーソルの棒の行が見えるように本文を動かす。
+        let caret_place = self.caret.and_then(|caret| match content {
+            DetailContent::Value(value) => Some(caret_place(value, columns, caret)),
+            DetailContent::Cut { .. }
+            | DetailContent::OutOfView
+            | DetailContent::Missing
+            | DetailContent::NoRows => None,
+        });
+        let scroll = caret_place.map_or(self.scroll, |(row, _)| {
+            self.scroll
+                .min(row)
+                .max(row.saturating_add(1).saturating_sub(limit))
+        });
+        let shown = if caret_place.is_some() {
+            body_lines_for_editing(content, columns, limit, scroll)
+        } else {
+            body_lines(content, columns, limit, scroll)
+        };
         let (total, first) = (shown.total(), shown.first());
         let (lines, note) = shown.into_lines();
         let left = self
@@ -191,9 +227,30 @@ impl DetailPainter {
                 self.palette.gutter_text(),
             );
         }
+        if let Some(place) = caret_place {
+            self.caret_bar((left, top, line), place, first);
+        }
+
         if total > limit {
             self.scrollbar(top, line.saturating_mul(room), (first, limit, total));
         }
+    }
+
+    /// 直している間のカーソルの棒（本文の左上 `left`・`top`・1 行の高さ `line`、折り返した `row` 行目の `column` 桁の前、
+    /// 見せている最初の行 `first`・GitHub Issue #458）。
+    fn caret_bar(
+        &mut self,
+        (left, top, line): (u32, u32, u32),
+        (row, column): (usize, u32),
+        first: usize,
+    ) {
+        let visible_row = u32::try_from(row.saturating_sub(first)).unwrap_or(u32::MAX);
+        let caret_top = top.saturating_add(line.saturating_mul(visible_row));
+        let caret_left = left.saturating_add(column.saturating_mul(self.metrics.half_width()));
+        self.fill(
+            area(caret_left, caret_top, self.metrics.px(CARET), line),
+            self.palette.cursor(),
+        );
     }
 
     /// 本文の右の細いスクロールバー（高さ `height` の所に、全部 `total` 行のうち `first` 行目から `shown` 行を見せている）。
@@ -301,6 +358,31 @@ fn body_lines(content: DetailContent<'_>, columns: u32, limit: usize, scroll: us
             "〈あと {} 行〉",
             group_digits(u64::try_from(rest.saturating_sub(shown)).unwrap_or(u64::MAX))
         )),
+        total,
+        first,
+    )
+}
+
+/// 直している間の本文の行：「〈あと N 行〉」の断り書きを出さず、`scroll` 行目から `limit` 行を見せる（カーソルの棒の
+/// 行が隠れないように・GitHub Issue #458）。空の値も断り書きにせず、空の 1 行にする。
+fn body_lines_for_editing(
+    content: DetailContent<'_>,
+    columns: u32,
+    limit: usize,
+    scroll: usize,
+) -> ShownBody {
+    let DetailContent::Value(value) = content else {
+        return body_lines(content, columns, limit, scroll);
+    };
+    let all = wrap(value, columns, usize::MAX);
+    let total = all.lines().len();
+    let first = scroll.min(total.saturating_sub(limit));
+    ShownBody::new(
+        all.lines()
+            .get(first..first.saturating_add(limit).min(total))
+            .unwrap_or_default()
+            .to_vec(),
+        None,
         total,
         first,
     )
