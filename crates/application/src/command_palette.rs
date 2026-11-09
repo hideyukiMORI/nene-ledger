@@ -48,6 +48,8 @@ pub struct CommandPalette {
     whole_selected: bool,
     /// 最近使った操作（新しい順・多くて `RECENT` 個・GitHub Issue #309）。何も打っていない操作の一覧の上に出す。
     recent: Vec<CommandId>,
+    /// 検索と置換で照らす列の名札（「範囲：販売価格」・列を選んで開いたとき・GitHub Issue #411）。
+    scope: Option<String>,
 }
 
 /// 覚えておく最近使った操作の数。
@@ -67,6 +69,7 @@ impl CommandPalette {
             low: false,
             whole_selected: false,
             recent: Vec::new(),
+            scope: None,
         }
     }
 
@@ -84,6 +87,7 @@ impl CommandPalette {
             low: false,
             whole_selected: !text.is_empty(),
             recent: Vec::new(),
+            scope: None,
         }
     }
 
@@ -102,6 +106,7 @@ impl CommandPalette {
             low: false,
             whole_selected: !text.is_empty(),
             recent: Vec::new(),
+            scope: None,
         }
     }
 
@@ -109,6 +114,17 @@ impl CommandPalette {
     pub fn set_replacement(&mut self, text: &str) {
         self.replacement.clear();
         self.replacement.push_str(text);
+    }
+
+    /// 検索と置換で照らす列の名札（`None` なら全部の列）。
+    pub fn set_scope(&mut self, scope: Option<String>) {
+        self.scope = scope;
+    }
+
+    /// 検索と置換で照らす列の名札。
+    #[must_use]
+    pub fn scope(&self) -> Option<&str> {
+        self.scope.as_deref()
     }
 
     /// 箱を窓の下へ寄せる（`low`）か上へ戻す。表を送っても見つけたセルが箱の下に残るときに、反対の端へ寄せる
@@ -227,6 +243,7 @@ impl CommandPalette {
             low: false,
             whole_selected: false,
             recent: Vec::new(),
+            scope: None,
         }
     }
 
@@ -251,6 +268,7 @@ impl CommandPalette {
             low: false,
             whole_selected: false,
             recent: Vec::new(),
+            scope: None,
         }
     }
 

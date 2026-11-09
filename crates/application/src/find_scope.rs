@@ -23,6 +23,8 @@ pub struct FindScope {
     edits: CellEdits,
     /// 値の問いの代わりに、列の数がこれと違う原本の行（の 1 列目）に当たる（列の数が見出しと違う次の行へ・GitHub Issue #338）。
     shape: Option<usize>,
+    /// 照らす表示の列をこの範囲に限る（列を選んで検索・置換を開いたとき・GitHub Issue #411）。`None` なら全部の列。
+    within: Option<Range<usize>>,
 }
 
 impl FindScope {
@@ -34,7 +36,21 @@ impl FindScope {
             columns,
             edits,
             shape: None,
+            within: None,
         }
+    }
+
+    /// 照らす表示の列を `within` に限る（`None` なら全部・GitHub Issue #411）。
+    #[must_use]
+    pub fn within(self, within: Option<Range<usize>>) -> Self {
+        Self { within, ..self }
+    }
+
+    /// 表示の `display` 列目を照らすか。
+    fn covers(&self, display: usize) -> bool {
+        self.within
+            .as_ref()
+            .is_none_or(|within| within.contains(&display))
     }
 
     /// 列の数が `expected`（見出しのセルの数）と違う原本の行に当たる問い（GitHub Issue #338）。値は照らさない。足した行は
@@ -46,6 +62,7 @@ impl FindScope {
             columns,
             edits: CellEdits::empty(),
             shape: Some(expected),
+            within: None,
         }
     }
 
@@ -111,6 +128,9 @@ impl FindScope {
         source: &S,
         replacement: &str,
     ) -> Option<(CellChange, String)> {
+        if !self.covers(display) {
+            return None;
+        }
         let &column = self.columns.get(display)?;
         let file = match column {
             ColumnId::Source(index) => source(index),
@@ -136,7 +156,7 @@ impl FindScope {
     /// 行 `row` の表示の `display` 列目のセルが当たるか。
     fn hits<S: Fn(usize) -> Option<String>>(&self, row: RowId, display: usize, source: &S) -> bool {
         // 列の数の問いは、行のレコード全体で照らす（`FindFold`）。セルごとには当たらない。
-        if self.shape.is_some() {
+        if self.shape.is_some() || !self.covers(display) {
             return false;
         }
         let Some(&column) = self.columns.get(display) else {
@@ -241,5 +261,27 @@ mod tests {
             .unwrap();
         assert_eq!(edited.after(), "Xto");
         assert_eq!(original, "tokyo");
+    }
+
+    /// 列を選んで開いたら、その表示の列だけを照らし、置き換える（GitHub Issue #411）。
+    #[test]
+    fn a_scope_within_columns_skips_the_others() {
+        // 表示の 0 列目は原本の 1 列目、1 列目は原本の 0 列目。
+        let source = |index: usize| Some(String::from(["送料無料", "送料無料 対象"][index]));
+        let all = scope("送料無料", CellEdits::empty());
+        assert_eq!(all.first_in_row(RowId::Source(0), 0..3, source), Some(0));
+        let second = all.clone().within(Some(1..2));
+        assert_eq!(second.first_in_row(RowId::Source(0), 0..3, source), Some(1));
+        assert_eq!(second.last_in_row(RowId::Source(0), 0..3, source), Some(1));
+        assert!(
+            second
+                .replaced_cell((RowId::Source(0), 0), &source, "無料")
+                .is_none()
+        );
+        assert!(
+            second
+                .replaced_cell((RowId::Source(0), 1), &source, "無料")
+                .is_some()
+        );
     }
 }

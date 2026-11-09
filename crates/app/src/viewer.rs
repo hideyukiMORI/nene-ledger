@@ -523,6 +523,8 @@ impl Viewer {
         let options = self.preferences.settings().find();
         let colors = self.preferences.theme().palette();
         let mut palette = CommandPalette::open_find(&text, options);
+        // 列全体を選んで開いたら、その列だけを探す（GitHub Issue #411）。
+        palette.set_scope(self.document.scope_find_to_selection());
         // 検索の欄から Ctrl+H で置換の欄へ切り替えたときのために、前に置き換えた文字を入れておく（GitHub Issue #187）。
         palette.set_replacement(&self.replacement);
         self.palette = Some(OpenPalette::new(palette, colors));
@@ -567,10 +569,10 @@ impl Viewer {
         // 条件はいつも設定のもの（切り替えたら書くので、この窓でも次の起動でも同じ・ADR 0030 の決定 3）。
         let options = self.preferences.settings().find();
         let colors = self.preferences.theme().palette();
-        self.palette = Some(OpenPalette::new(
-            CommandPalette::open_replace(&text, &self.replacement, options),
-            colors,
-        ));
+        let mut palette = CommandPalette::open_replace(&text, &self.replacement, options);
+        // 列全体を選んで開いたら、その列だけを置き換える（説明文を巻き込まない・GitHub Issue #411）。
+        palette.set_scope(self.document.scope_find_to_selection());
+        self.palette = Some(OpenPalette::new(palette, colors));
     }
 
     /// 置換の欄で Enter（カーソルのセルを置き換えて次へ・欄は開いたまま）か Alt+A（`all`・欄を閉じて全部を数える）。

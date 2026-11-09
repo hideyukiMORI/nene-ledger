@@ -367,35 +367,30 @@ impl<'state> PalettePainter<'state> {
     fn find_line(&mut self) {
         let options = self.palette.find_options();
         if options.regex() && FindQuery::new(self.palette.query(), options).is_broken() {
-            let field = self.layout.field();
-            let text = String::from("読めない正規表現");
-            let right = field
-                .origin()
-                .x()
-                .saturating_add(field.size().width())
-                .saturating_sub(self.px(TEXT_INSET));
-            let left = right.saturating_sub(self.width_of(&text));
-            self.text_at(from_left(field, left), text, self.colors.cursor());
+            self.field_right(String::from("読めない正規表現"), self.colors.cursor());
         }
-        // 探す段の知らせ（見つからない・端から続けた）は欄の右端に、その場で（GitHub Issue #291）。
-        if let (PaletteMode::Find, Some(note)) = (self.palette.mode(), self.note) {
-            let field = self.layout.field();
-            let right = field
-                .origin()
-                .x()
-                .saturating_add(field.size().width())
-                .saturating_sub(self.px(TEXT_INSET));
-            let left = right.saturating_sub(self.width_of(note));
-            let color = self.tone_color(self.tone);
-            self.text_at(from_left(field, left), String::from(note), color);
+        // 探す段の知らせ（見つからない・端から続けた）は欄の右端に、その場で（GitHub Issue #291）。列に限って探すなら、
+        // 知らせが無い間は欄の右端に名札（GitHub Issue #411）。
+        let scope = self.palette.scope().map(String::from);
+        if self.palette.mode() == PaletteMode::Find {
+            match (self.note, &scope) {
+                (Some(note), _) => self.field_right(String::from(note), self.tone_color(self.tone)),
+                (None, Some(scope)) => self.field_right(scope.clone(), self.colors.cursor()),
+                (None, None) => {}
+            }
         }
         if let PaletteMode::Replace { .. } = self.palette.mode() {
             let (text, color) = self.note.map_or_else(
-                || {
-                    (
+                || match &scope {
+                    // 列に限って置き換えるなら、案内の頭に名札を強調の色で（GitHub Issue #411）。
+                    Some(scope) => (
+                        format!("{scope} · Enter 置き換えて次へ · Alt+A 全部"),
+                        self.colors.cursor(),
+                    ),
+                    None => (
                         String::from("Enter 置き換えて次へ · Alt+A 全部 · Tab 欄を替える"),
                         self.colors.gutter_text(),
-                    )
+                    ),
                 },
                 |note| (String::from(note), self.tone_color(self.tone)),
             );
@@ -414,6 +409,18 @@ impl<'state> PalettePainter<'state> {
         for (chip, (name, key, toggle)) in chips.into_iter().zip(FIND_CHIPS) {
             self.chip(chip, (name, key), toggle_is_on(options, toggle));
         }
+    }
+
+    /// 欄の右端に、余白を空けて右に寄せた文言。
+    fn field_right(&mut self, text: String, color: Color) {
+        let field = self.layout.field();
+        let right = field
+            .origin()
+            .x()
+            .saturating_add(field.size().width())
+            .saturating_sub(self.px(TEXT_INSET));
+        let left = right.saturating_sub(self.width_of(&text));
+        self.text_at(from_left(field, left), text, color);
     }
 
     /// 全部の置換の内訳の行（2 行目から・注意は強調の色）。1 行目はキーの案内（件数と確かめ）。
