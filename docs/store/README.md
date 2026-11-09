@@ -8,7 +8,7 @@ Win32 の exe を MSIX に包み、Microsoft Store に出すための手順と�
 | --- | --- |
 | MSIX の宣言の型（`@…@` を埋める） | `packaging/msix/AppxManifest.xml.in` |
 | Identity（Partner Center の値） | `packaging/msix/identity.env`（🔴 今は手元で試す仮の値） |
-| アイコンの元とロゴ | `packaging/msix/icon.svg`・`packaging/msix/Assets/*.png` |
+| アイコンの元とロゴ | `packaging/msix/icon.svg`・`packaging/msix/Assets/*.png`（`tools/icons.sh` で作る・比べた画像は `icon/`） |
 | 包みを作る | `make msix`（`tools/msix.sh`）→ `out/msix/NeNeLedger_<版>_x64.msix` |
 | 版の写し方の確かめ | `make msix-check`（`make check` からも呼ぶ） |
 | 認定の検査（WACK） | `tools/wack.ps1`（管理者の PowerShell） |
@@ -56,6 +56,6 @@ Win32 の exe を MSIX に包み、Microsoft Store に出すための手順と�
 
 - **WACK はまだ走らせていない**（`appcert.exe` は昇格が要り、WSL から起動できない。UAC の確認を施主の画面に勝手に出さなかった）
 - Identity は仮の値。ストアに出す包みは、施主が名前を予約してから作り直す
-- アイコンは仮（`icon.svg`）。デザインを替えるなら SVG を差し替え、ロゴの PNG を作り直す（`rsvg-convert`）
+- アイコンは 2026-11-09 に NeNe の兄弟と同じ作法で作り直した（ADR 0035 の決定 7）。替えるなら `icon.svg` を差し替えて `tools/icons.sh`。ストアのスクリーンショット（`screenshots/`）は前のアイコンの時に撮ったもの
 - タグから CI で MSIX を作る手順はまだ（ADR 0035 の planned）
 - ストアの「仕事効率化」の区分・年齢区分・審査の可否は、出してみるまで分からない

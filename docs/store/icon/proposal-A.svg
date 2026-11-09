@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <title>NeNe Ledger (A: charcoal tile)</title>
+  <rect width="256" height="256" rx="24" fill="#1A1917"/>
+  <rect x="52" y="52" width="152" height="152" rx="12" fill="#F5F2EB"/>
+  <path d="M64 52 H192 A12 12 0 0 1 204 64 V92 H52 V64 A12 12 0 0 1 64 52 Z" fill="#D08C3F"/>
+  <rect x="122" y="92" width="12" height="112" fill="#1A1917"/>
+  <rect x="52" y="130" width="152" height="12" fill="#1A1917"/>
+  <rect x="52" y="168" width="152" height="12" fill="#1A1917"/>
+</svg>

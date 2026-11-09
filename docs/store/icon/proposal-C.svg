@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <title>NeNe Ledger (C: cream tile, ledger columns)</title>
+  <rect width="256" height="256" rx="24" fill="#F5F2EB"/>
+  <rect x="1.5" y="1.5" width="253" height="253" rx="22.5" fill="none" stroke="#1A1917" stroke-width="3"/>
+  <rect x="44" y="48" width="168" height="40" rx="8" fill="#1A1917"/>
+  <g stroke="#1A1917" stroke-width="12" stroke-linecap="round">
+    <line x1="56" y1="124" x2="200" y2="124"/>
+    <line x1="56" y1="166" x2="200" y2="166"/>
+    <line x1="56" y1="208" x2="200" y2="208"/>
+  </g>
+  <rect x="122" y="100" width="12" height="118" fill="#1A1917"/>
+  <rect x="140" y="140" width="66" height="14" rx="7" fill="#D08C3F"/>
+</svg>
