@@ -4,6 +4,7 @@
 //! 命令の順と意味は X11 版の `frame_surface` と同じ。
 
 use nene_ledger_application::zoom_level::ZoomLevel;
+use nene_ledger_core::char_advances::{ASCII_PRINTABLE, CharAdvances, SUBPIXELS};
 use nene_ledger_core::color::Color;
 use nene_ledger_core::display_scale::DisplayScale;
 use nene_ledger_core::draw_command::DrawCommand;
@@ -115,6 +116,24 @@ impl Pen {
             to_pixels(f64::from(baseline)),
         )
         .with_scale(scale))
+    }
+
+    /// 画面の倍率 `scale` での、拡大 `zoom` の中身の字の送り幅（ASCII の印字できる字は 1 字ずつ、全角は「国」・
+    /// 詳細ペインの押した所とカーソルの棒を実際の字に合わせる・GitHub Issue #462）。
+    pub(crate) fn measure_advances(
+        &self,
+        zoom: ZoomLevel,
+        scale: DisplayScale,
+    ) -> Result<CharAdvances, Win32Failure> {
+        let format = self.format(content_size(zoom, scale))?;
+        let mut ascii = [0_u32; ASCII_PRINTABLE];
+        for (slot, character) in ascii.iter_mut().zip(' '..='~') {
+            let (width, _, _) =
+                self.line_metrics(&format, character.encode_utf8(&mut [0_u8; 4]))?;
+            *slot = subpixels(width);
+        }
+        let (wide, _, _) = self.line_metrics(&format, "国")?;
+        Ok(CharAdvances::measured(ascii, subpixels(wide)))
     }
 
     /// フレームを描き切って窓に出す。字は画面の倍率 `scale` を掛け、中身の字はさらに拡大 `zoom` の大きさ（ADR 0020）。
@@ -371,6 +390,11 @@ impl Pen {
     ) -> Result<(f32, f32, f32), Win32Failure> {
         metrics_of(&self.layout(format, text)?)
     }
+}
+
+/// 画素を `SUBPIXELS` 分の 1 の細かさで。
+fn subpixels(pixels: f32) -> u32 {
+    to_pixels(f64::from(pixels) * f64::from(SUBPIXELS))
 }
 
 /// 配置の 1 行目の幅・高さ・基準線までの高さ。

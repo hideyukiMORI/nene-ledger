@@ -52,6 +52,14 @@ pub fn wrap(text: &str, max_columns: u32, max_lines: usize) -> WrappedText {
 /// と、その行の左からの桁（半角 1・全角 2）。詳細ペインで直すときのカーソルの棒の位置（GitHub Issue #458）。
 #[must_use]
 pub fn caret_place(text: &str, max_columns: u32, index: usize) -> (usize, u32) {
+    let (row, head) = caret_piece(text, max_columns, index);
+    (row, display_columns(&head))
+}
+
+/// [`caret_place`] と同じ位置を、折り返した何行目かと、その行の左からカーソルまでの見せる字（表の印に替えた後）で
+/// 言う。画素の位置は UI が測った送り幅でこの字を測る（GitHub Issue #462）。
+#[must_use]
+pub fn caret_piece(text: &str, max_columns: u32, index: usize) -> (usize, String) {
     let mut row = 0_usize;
     let mut before = 0_usize;
     for logical in text.split('\n') {
@@ -59,20 +67,25 @@ pub fn caret_place(text: &str, max_columns: u32, index: usize) -> (usize, u32) {
         // `\r\n` の `\r` は改行の一部（`wrap` と同じく 1 つの改行に数える）。
         let pieces = wrap_line(&single_line(logical.trim_end_matches('\r')), max_columns);
         if index <= before.saturating_add(length) {
-            let (offset, column) = place_in_pieces(&pieces, index.saturating_sub(before));
-            return (row.saturating_add(offset), column);
+            let (offset, head) = place_in_pieces(&pieces, index.saturating_sub(before));
+            return (row.saturating_add(offset), head);
         }
         row = row.saturating_add(pieces.len());
         before = before.saturating_add(length).saturating_add(1);
     }
-    (row.saturating_sub(1), 0)
+    (row.saturating_sub(1), String::new())
 }
 
-/// [`caret_place`] の逆。`text` を幅 `max_columns` で折り返したときの、`row` 行目の左から `column` 桁の所に近い字の
-/// 境目が何字目か（0 から・改行も 1 字）。行の右より右は行の末尾、最後の行より下は値の末尾。詳細ペインを押した所に
-/// カーソルの棒を置く（GitHub Issue #460）。
+/// [`caret_piece`] の逆。`text` を幅 `max_columns` で折り返したときの、`row` 行目の左から `x` の所に近い字の
+/// 境目が何字目か（0 から・改行も 1 字）。`x` は字の送り幅 `advance` と同じ単位。行の右より右は行の末尾、最後の行より
+/// 下は値の末尾。詳細ペインを押した所にカーソルの棒を置く（GitHub Issue #460・#462）。
 #[must_use]
-pub fn index_at(text: &str, max_columns: u32, row: usize, column: u32) -> usize {
+pub fn index_at<F: Fn(char) -> u32>(
+    text: &str,
+    max_columns: u32,
+    (row, x): (usize, u32),
+    advance: F,
+) -> usize {
     let mut first_row = 0_usize;
     let mut before = 0_usize;
     for logical in text.split('\n') {
@@ -90,7 +103,7 @@ pub fn index_at(text: &str, max_columns: u32, row: usize, column: u32) -> usize 
                 .sum();
             return before
                 .saturating_add(skipped)
-                .saturating_add(index_in_piece(piece, column));
+                .saturating_add(index_in_piece(piece, x, &advance));
         }
         first_row = first_row.saturating_add(rows);
         before = before.saturating_add(length).saturating_add(1);
@@ -98,32 +111,31 @@ pub fn index_at(text: &str, max_columns: u32, row: usize, column: u32) -> usize 
     text.chars().count()
 }
 
-/// 折り返した切れ端 `piece` の、左から `column` 桁の所に近い字の境目（字の真ん中より右なら後ろ）。
-fn index_in_piece(piece: &str, column: u32) -> usize {
+/// 折り返した切れ端 `piece` の、左から `x` の所に近い字の境目（字の真ん中より右なら後ろ）。
+fn index_in_piece<F: Fn(char) -> u32>(piece: &str, x: u32, advance: F) -> usize {
     let mut width = 0_u32;
     for (index, character) in piece.chars().enumerate() {
-        let columns = char_columns(character);
-        // 字の真ん中（桁の 2 倍で比べる）より左なら、その字の前。
-        if column.saturating_mul(2) < width.saturating_mul(2).saturating_add(columns) {
+        let wide = advance(character);
+        // 字の真ん中（2 倍で比べる）より左なら、その字の前。
+        if x.saturating_mul(2) < width.saturating_mul(2).saturating_add(wide) {
             return index;
         }
-        width = width.saturating_add(columns);
+        width = width.saturating_add(wide);
     }
     piece.chars().count()
 }
 
 /// 折り返した 1 つの論理の行 `pieces` の中の、`left` 字目の前の位置（何番目の切れ端か・その中の桁）。
-fn place_in_pieces(pieces: &[String], mut left: usize) -> (usize, u32) {
+fn place_in_pieces(pieces: &[String], mut left: usize) -> (usize, String) {
     for (offset, piece) in pieces.iter().enumerate() {
         let count = piece.chars().count();
         let last = offset.saturating_add(1) == pieces.len();
         if left < count || (left == count && last) {
-            let head: String = piece.chars().take(left).collect();
-            return (offset, display_columns(&head));
+            return (offset, piece.chars().take(left).collect());
         }
         left = left.saturating_sub(count);
     }
-    (pieces.len().saturating_sub(1), 0)
+    (pieces.len().saturating_sub(1), String::new())
 }
 
 /// 改行を含まない 1 行を、`max_columns` で折り返す。空の行も 1 行と数える。前の字に重なる字（結合文字・異体字の
@@ -235,7 +247,7 @@ mod tests {
         ];
         for (text, width, row, column, expected) in cases {
             assert_eq!(
-                index_at(text, width, row, column),
+                index_at(text, width, (row, column), char_columns),
                 expected,
                 "{text:?} {row} {column}"
             );
@@ -248,7 +260,7 @@ mod tests {
         let text = "abcdef\ngh";
         for index in 0..=9 {
             let (row, column) = caret_place(text, 4, index);
-            let back = index_at(text, 4, row, column);
+            let back = index_at(text, 4, (row, column), char_columns);
             assert_eq!(caret_place(text, 4, back), (row, column));
         }
     }

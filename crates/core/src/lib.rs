@@ -17,6 +17,7 @@ pub mod cell_edits;
 pub mod cell_kind;
 pub mod cell_value;
 pub mod cell_writing;
+pub mod char_advances;
 pub mod chrome_button;
 pub mod chrome_hit;
 pub mod color;

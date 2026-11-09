@@ -3501,7 +3501,8 @@ impl Document {
         };
         editor.type_in_pane();
         let (text, _) = editor.field().display();
-        let (index, first) = pane_index_at((pane, metrics), &text, shown, at);
+        let advances = window.advances();
+        let (index, first) = pane_index_at((pane, metrics, &advances), &text, shown, at);
         editor.place_caret(index, extend);
         self.detail_scroll = Some((cursor, first));
     }
@@ -5239,7 +5240,7 @@ impl Document {
                 PixelPoint::new(0, table_height),
                 PixelSize::new(size.width(), bands.detail()),
             );
-            commands.extend(self.detail_commands(pane, content, palette));
+            commands.extend(self.detail_commands(pane, view, palette));
         }
         let status_top = table_height.saturating_add(bands.detail());
         let band = PixelRect::new(
@@ -5302,11 +5303,11 @@ impl Document {
         self.cuts = cuts;
     }
 
-    /// 詳細ペイン（矩形 `pane`）の命令。
+    /// 詳細ペイン（矩形 `pane`）の命令。字は窓の見え `view` の中身の字の寸法と送り幅で。
     fn detail_commands(
         &self,
         pane: PixelRect,
-        metrics: GlyphMetrics,
+        view: WindowView,
         palette: Palette,
     ) -> Vec<DrawCommand> {
         let cursor = self.selection.cursor();
@@ -5330,8 +5331,14 @@ impl Document {
             .as_ref()
             .filter(|editor| editor.surface() == EditSurface::Pane)
             .map(|editor| editor.field().display());
-        let painter = DetailPainter::new(pane, metrics, palette, self.format.format().encoding())
-            .with_scroll(self.detail_offset());
+        let painter = DetailPainter::new(
+            pane,
+            view.content_metrics(),
+            palette,
+            self.format.format().encoding(),
+        )
+        .with_scroll(self.detail_offset())
+        .with_advances(view.advances());
         match &typing {
             Some((text, caret)) => painter
                 .with_caret(Some(*caret))
@@ -5982,6 +5989,7 @@ mod tests {
     use crate::index_summary::IndexSummary;
     use crate::scroll::Scroll;
     use crate::selection_mode::SelectionMode;
+    use nene_ledger_core::char_advances::{ASCII_PRINTABLE, CharAdvances, SUBPIXELS};
     use nene_ledger_core::chrome_button::ChromeButton;
     use nene_ledger_core::color::Color;
     use nene_ledger_core::text_caret::TextCaret;
@@ -7848,6 +7856,33 @@ mod tests {
             pane_selection(&document, window)[0].size().width(),
             4 * half
         );
+    }
+
+    /// UI が測った送り幅（全角が数字 2 つより狭い字体）で、押した所とカーソルの棒が実際の字に合う（GitHub Issue #462）。
+    #[test]
+    fn the_pane_uses_the_measured_advances() {
+        let half = 8 * SUBPIXELS;
+        let window = view(400, 600, WindowPlacement::Normal).with_advances(CharAdvances::measured(
+            [half; ASCII_PRINTABLE],
+            12 * SUBPIXELS,
+        ));
+        let mut document = editable();
+        document.set_detail(DetailPane::Open);
+        document.apply(moving(CursorStep::Right), window);
+        let (left, top) = pane_text_at(&document, window, 0);
+        // 「東京」の字の境目は 0・12・24 画素。20 画素は 24 に近い（数字の幅の 2 倍で数えると 16 に近い）。
+        document.apply(pointing(left + 20, top, SelectionMode::Collapse), window);
+        assert_eq!(
+            document.editor().unwrap().field().caret(),
+            TextCaret::new(2, 2)
+        );
+        let frame = document.frame(window, palette());
+        let bars: Vec<PixelRect> = fills(&frame, palette().cursor())
+            .into_iter()
+            .filter(|rect| rect.size().width() == 2 && rect.origin().y() + 2 >= top)
+            .collect();
+        assert_eq!(bars.len(), 1);
+        assert_eq!(bars[0].origin().x(), left + 24);
     }
 
     fn dragging_to(x: i32, y: i32) -> Intent {
