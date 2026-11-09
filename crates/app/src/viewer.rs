@@ -636,7 +636,7 @@ impl Viewer {
             return;
         };
         let effect = match job.take_result() {
-            Some(Ok(RangeOutcome::Finished(fold))) => self.document.found(fold.found(), view),
+            Some(Ok(RangeOutcome::Finished(fold))) => self.reveal_found(fold.found(), view),
             Some(Ok(RangeOutcome::Cancelled)) => {
                 self.document.find_stopped(false);
                 DocumentEffect::Stay
@@ -654,6 +654,29 @@ impl Viewer {
         };
         self.finding = None;
         let _clipboard = self.effect(effect);
+    }
+
+    /// 裏の検索の答えを渡す。見つけたセルを、開いている検索と置換の箱の下に隠さない：表を送り、表の端で送れなければ
+    /// 箱を反対の端（上なら窓の下、下なら上）へ寄せる（GitHub Issue #286）。
+    fn reveal_found(&mut self, found: Option<(u64, usize)>, view: WindowView) -> DocumentEffect {
+        self.document.set_cover(self.find_cover(view));
+        let effect = self.document.found(found, view);
+        let hidden = self.document.cover_hides_cursor(view);
+        if let Some(open) = self.palette.as_mut().filter(|_| hidden) {
+            let low = open.state().is_low();
+            open.state_mut().set_low(!low);
+        }
+        effect
+    }
+
+    /// 開いている検索と置換の箱の面（窓の座標）。ほかの段と、閉じていれば `None`。
+    fn find_cover(&self, view: WindowView) -> Option<PixelRect> {
+        let open = self.palette.as_ref()?;
+        matches!(
+            open.state().mode(),
+            PaletteMode::Find | PaletteMode::Replace { .. }
+        )
+        .then(|| PaletteLayout::new(view, open.state()).panel())
     }
 
     /// 裏の集計の今の知らせ。終わっていれば結果、まだなら進み具合。仕事が無ければ `None`。
