@@ -68,6 +68,51 @@ fn appended((width, column): (usize, usize), text: &str, delimiter: char) -> Str
     out
 }
 
+/// [`edited_row`] の行を、最初の `kept` 個のセルまでにした行（後ろの余計なセルを消す・ADR 0024 の追記・GitHub
+/// Issue #413）。`kept` 番目より前のセルの書き換えは `edited_row` と同じ。`kept` 個目のセルの終わりから行の終わり
+/// （終わり方の前）までを写さず、終わり方は原本のまま。`kept` が 0 か、行のセルの数より少なくなければ `edited_row`
+/// と同じ。
+///
+/// # Errors
+///
+/// 番号が昇順でないか、`kept` 番目以降のセルを書き換えている（[`RowWriteFailure::Unordered`]）。
+pub fn trimmed_row(
+    record: &Record,
+    edits: Vec<(usize, String)>,
+    delimiter: char,
+    kept: usize,
+) -> Result<Vec<RowPiece>, RowWriteFailure> {
+    let fields = record.fields();
+    let Some(last) = kept.checked_sub(1).and_then(|last| fields.get(last)) else {
+        return edited_row(record, edits, delimiter);
+    };
+    if kept >= fields.len() {
+        return edited_row(record, edits, delimiter);
+    }
+    if let Some(&(column, _)) = edits.iter().find(|&&(column, _)| column >= kept) {
+        return Err(RowWriteFailure::Unordered(column));
+    }
+    // 書き換えはどれも残すセルの中なので、残す最後のセルの終わり `cut` より後ろは写した区間だけ。そこを落とし、
+    // 終わり方を原本のまま付ける。
+    let cut = last.raw().end();
+    let mut pieces = Vec::new();
+    for piece in edited_row(record, edits, delimiter)? {
+        match piece {
+            RowPiece::Source(range) => {
+                push_source(&mut pieces, range.start(), range.end().min(cut));
+            }
+            RowPiece::Text(text) => pieces.push(RowPiece::Text(text)),
+        }
+    }
+    let line_end = record.raw().end();
+    push_source(
+        &mut pieces,
+        line_end,
+        line_end.saturating_add(record.terminator().len()),
+    );
+    Ok(pieces)
+}
+
 /// 列の構造が変わった行（列を足し消しした表・ADR 0027 の決定 5）。`columns` は表の列の順の同一性、`values` は
 /// 書いた文字列（書き換えたセルと足した列のセル。`cell_writing::written_cell` で書いたもの）。
 ///
@@ -237,5 +282,32 @@ mod tests {
         let tab_record = Records::new(tab, dialect).next().unwrap();
         let tabbed = edited_row(&tab_record, vec![(2, String::from("\"q,\""))], '\t').unwrap();
         assert_eq!(assembled(tab, &tabbed), b"a\tb\t\"q,\"");
+    }
+
+    /// 後ろの余計なセルを消した行は、残すセルまでを原本のまま写し、終わり方を原本のまま付ける（GitHub Issue #413）。
+    #[test]
+    fn a_trimmed_row_keeps_the_first_cells_and_the_line_ending() {
+        let input = b"a,\"b\",c,extra,more\r\nnext\n";
+        let record = first_record(input);
+        let pieces = trimmed_row(&record, Vec::new(), ',', 3).unwrap();
+        assert_eq!(assembled(input, &pieces), b"a,\"b\",c\r\n");
+        let edited = trimmed_row(&record, vec![(1, String::from("B"))], ',', 3).unwrap();
+        assert_eq!(assembled(input, &edited), b"a,B,c\r\n");
+        let last_edited = trimmed_row(&record, vec![(2, String::from("C"))], ',', 3).unwrap();
+        assert_eq!(assembled(input, &last_edited), b"a,\"b\",C\r\n");
+        // 行のセルより多く残すなら、今までの書き方と同じ。消す所を書き換えていれば書けない。
+        assert_eq!(
+            trimmed_row(&record, Vec::new(), ',', 9).unwrap(),
+            edited_row(&record, Vec::new(), ',').unwrap()
+        );
+        assert_eq!(
+            trimmed_row(&record, vec![(3, String::from("x"))], ',', 3),
+            Err(RowWriteFailure::Unordered(3))
+        );
+        let no_end = first_record(b"1,2,3");
+        assert_eq!(
+            assembled(b"1,2,3", &trimmed_row(&no_end, Vec::new(), ',', 1).unwrap()),
+            b"1"
+        );
     }
 }

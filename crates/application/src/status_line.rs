@@ -286,11 +286,7 @@ pub fn notice_status(notice: Notice) -> String {
         Notice::Frozen { columns } => {
             format!("左の {columns} 列を固定しました（横に動いても残ります）")
         }
-        Notice::Saved {
-            cells,
-            arranged,
-            format,
-        } => saved_status(cells, arranged, format),
+        saved @ Notice::Saved { .. } => saved_status(saved),
         Notice::Undone(cells) => format!("元に戻しました（{cells} セル）"),
         Notice::Redone(cells) => format!("やり直しました（{cells} セル）"),
         Notice::NothingToUndo => String::from("元に戻すものがありません"),
@@ -321,6 +317,7 @@ pub fn notice_status(notice: Notice) -> String {
         Notice::EditMissingCell => String::from("この行には、この列のセルがありません"),
         Notice::DialectUnsure { top, rival } => dialect_unsure_status(top, rival),
         Notice::Unrepresentable(found) => unrepresentable_status(found),
+        Notice::Trim(trimmed) => trim_status(trimmed),
     }
 }
 
@@ -340,8 +337,27 @@ fn unrepresentable_status(found: UnrepresentableNotice) -> String {
     )
 }
 
+/// 行の後ろの余計なセルを消した文言（GitHub Issue #413）。
+fn trim_status(trimmed: Option<usize>) -> String {
+    match trimmed {
+        None => String::from("見出しの行が無いか列を足し消ししたので、余計なセルを比べられません"),
+        Some(0) => String::from("この行に見出しより後ろのセルはありません"),
+        Some(cells) => format!(
+            "見出しより後ろのセル {cells} 個を消しました（Ctrl+Z で戻す · 保存で行が短くなります）"
+        ),
+    }
+}
+
 /// 保存した文言。書き換えたセルの数と、書いた読み方（開いたときのまま）を言う（GitHub Issue #397）。
-fn saved_status(cells: u64, arranged: bool, format: FormatSummary) -> String {
+fn saved_status(notice: Notice) -> String {
+    let Notice::Saved {
+        cells,
+        arranged,
+        format,
+    } = notice
+    else {
+        return String::from("保存しました");
+    };
     let rows = if arranged {
         " · 行と列の並びも"
     } else {

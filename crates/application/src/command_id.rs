@@ -103,6 +103,8 @@ pub enum CommandId {
     InsertColumnsRight,
     /// 選んだ範囲にかかる列を消す。
     RemoveColumns,
+    /// カーソルの行の、見出しより後ろの余計なセルを消す（GitHub Issue #413）。
+    TrimExtraCells,
     /// キーの一覧を見る（2 段目・Issue #63）。
     ShowKeys,
     /// このアプリについて（版・著作権・ライセンス・2 段目・ADR 0032）。
@@ -111,7 +113,7 @@ pub enum CommandId {
 
 impl CommandId {
     /// すべての操作（何も打たないときの順）。
-    pub const ALL: [Self; 46] = [
+    pub const ALL: [Self; 47] = [
         Self::Top,
         Self::Bottom,
         Self::GoTo,
@@ -155,6 +157,7 @@ impl CommandId {
         Self::InsertColumnsLeft,
         Self::InsertColumnsRight,
         Self::RemoveColumns,
+        Self::TrimExtraCells,
         Self::ToggleReadOnly,
         Self::ShowKeys,
         Self::ShowAbout,
@@ -212,6 +215,7 @@ impl CommandId {
             Self::InsertColumnsLeft => "左に列を足す",
             Self::InsertColumnsRight => "右に列を足す",
             Self::RemoveColumns => "列を消す",
+            Self::TrimExtraCells => "この行の見出しより後ろのセルを消す",
             Self::ShowKeys => "キーの一覧を見る…",
             Self::ShowAbout => "このアプリについて…",
         }
@@ -265,6 +269,7 @@ impl CommandId {
             Self::InsertColumnsLeft => "ひだりにれつをたす",
             Self::InsertColumnsRight => "みぎにれつをたす",
             Self::RemoveColumns => "れつをけす",
+            Self::TrimExtraCells => "このぎょうのみだしよりうしろのせるをけす",
             Self::ShowKeys => "きーのいちらんをみる",
             Self::ShowAbout => "このあぷりについて",
         }
@@ -325,6 +330,7 @@ impl CommandId {
             Self::InsertColumnsLeft => &["insert column left", "add column", "new column"],
             Self::InsertColumnsRight => &["insert column right", "add column", "new column"],
             Self::RemoveColumns => &["delete column", "remove column"],
+            Self::TrimExtraCells => &["trim", "extra cell", "ragged", "broken row"],
             Self::ShowKeys => &["keys", "shortcuts", "keyboard", "help"],
             Self::ShowAbout => &["about", "version", "license", "kono", "apuri"],
         }
@@ -370,6 +376,7 @@ impl CommandId {
             Self::RemoveRows => &["行の削除", "削除"],
             Self::InsertColumnsLeft | Self::InsertColumnsRight => &["列の挿入", "追加"],
             Self::RemoveColumns => &["列の削除", "削除"],
+            Self::TrimExtraCells => &["余計なセル", "壊れた行", "列の数", "はみ出し"],
             Self::ShowKeys => &["ショートカット", "キーボード", "ヘルプ"],
             Self::ShowAbout => &["バージョン", "ライセンス", "版"],
         }
@@ -407,7 +414,8 @@ impl CommandId {
             | Self::ShowAbout
             | Self::InsertRowsBelow
             | Self::AppendRow
-            | Self::InsertColumnsRight => None,
+            | Self::InsertColumnsRight
+            | Self::TrimExtraCells => None,
             // Ctrl++ と Ctrl+- は、列全体を選んでいれば列に、そうでなければ行に効く（ADR 0027 の決定 2）。
             Self::InsertRowsAbove | Self::InsertColumnsLeft => Some("Ctrl+Plus"),
             Self::RemoveRows | Self::RemoveColumns => Some("Ctrl+Minus"),
@@ -476,6 +484,7 @@ impl CommandId {
             | Self::InsertColumnsLeft
             | Self::InsertColumnsRight
             | Self::RemoveColumns
+            | Self::TrimExtraCells
             | Self::ShowKeys
             | Self::ShowAbout => None,
         }
@@ -537,6 +546,7 @@ impl CommandId {
             Self::InsertColumnsLeft => Some(Intent::InsertColumns(ColumnPlace::Left)),
             Self::InsertColumnsRight => Some(Intent::InsertColumns(ColumnPlace::Right)),
             Self::RemoveColumns => Some(Intent::RemoveColumns),
+            Self::TrimExtraCells => Some(Intent::TrimExtraCells),
         }
     }
 }

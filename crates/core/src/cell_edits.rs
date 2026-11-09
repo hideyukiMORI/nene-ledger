@@ -47,6 +47,19 @@ impl CellEdits {
             .is_some_and(|(&(found, _), _)| found == row)
     }
 
+    /// セルが `width` 個の原本の行 `row` の、後ろの余計なセルを消した（「セルが無い」にした）後のセルの数（GitHub
+    /// Issue #413）。
+    #[must_use]
+    pub fn kept_width(&self, row: RowId, width: usize) -> usize {
+        let trimmed = (0..width)
+            .rev()
+            .take_while(|&column| {
+                self.get(row, ColumnId::Source(column)) == Some(&CellValue::Absent)
+            })
+            .count();
+        width.saturating_sub(trimmed)
+    }
+
     /// 書き換えが 1 つも無いか。
     #[must_use]
     pub fn is_empty(&self) -> bool {

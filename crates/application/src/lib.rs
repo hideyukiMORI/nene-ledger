@@ -131,6 +131,7 @@ pub mod thumb_state;
 pub mod ticker;
 pub mod totals_request;
 pub mod track_side;
+pub mod trim_change;
 pub mod tsv;
 pub mod unrepresentable_notice;
 pub mod view_row;

@@ -377,7 +377,8 @@ impl CommandPalette {
             | Intent::InsertColumns(_)
             | Intent::RemoveColumns
             | Intent::InsertHere
-            | Intent::RemoveHere => PaletteOutcome::Stay,
+            | Intent::RemoveHere
+            | Intent::TrimExtraCells => PaletteOutcome::Stay,
         }
     }
 
@@ -498,7 +499,8 @@ impl CommandPalette {
             | Intent::InsertColumns(_)
             | Intent::RemoveColumns
             | Intent::InsertHere
-            | Intent::RemoveHere => return None,
+            | Intent::RemoveHere
+            | Intent::TrimExtraCells => return None,
         }
         Some(PaletteOutcome::Stay)
     }

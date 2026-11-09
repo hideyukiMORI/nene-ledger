@@ -96,6 +96,7 @@ use crate::table_view::TableView;
 use crate::thumb_state::ThumbState;
 use crate::totals_request::TotalsRequest;
 use crate::track_side::TrackSide;
+use crate::trim_change::TrimChange;
 use crate::tsv::{parse_tsv, tsv};
 use crate::unrepresentable_notice::UnrepresentableNotice;
 use crate::view_row::ViewRow;
@@ -467,7 +468,8 @@ impl Document {
             | Intent::InsertColumns(_)
             | Intent::RemoveColumns
             | Intent::InsertHere
-            | Intent::RemoveHere => None,
+            | Intent::RemoveHere
+            | Intent::TrimExtraCells => None,
         };
         Some(choice.map_or(DocumentEffect::Stay, |choice| self.choose_close(choice)))
     }
@@ -1076,7 +1078,8 @@ impl Document {
             | Intent::InsertColumns(_)
             | Intent::RemoveColumns
             | Intent::InsertHere
-            | Intent::RemoveHere => current,
+            | Intent::RemoveHere
+            | Intent::TrimExtraCells => current,
             Intent::SelectAll
             | Intent::SelectRows
             | Intent::SelectColumns
@@ -1170,6 +1173,7 @@ impl Document {
             Intent::RemoveColumns => Some(self.remove_columns(window)),
             Intent::RemoveHere if self.columns_chosen() => Some(self.remove_columns(window)),
             Intent::RemoveRows | Intent::RemoveHere => Some(self.remove_rows(window)),
+            Intent::TrimExtraCells => Some(self.trim_extra_cells(window)),
             Intent::InsertHere if self.columns_chosen() => {
                 Some(self.insert_columns(ColumnPlace::Left, window))
             }
@@ -1264,6 +1268,7 @@ impl Document {
             | Intent::RemoveColumns
             | Intent::InsertHere
             | Intent::RemoveHere
+            | Intent::TrimExtraCells
             | Intent::Point { .. }
             | Intent::DoubleClick { .. }
             | Intent::GoTo(_)
@@ -1389,7 +1394,8 @@ impl Document {
             | Intent::InsertColumns(_)
             | Intent::RemoveColumns
             | Intent::InsertHere
-            | Intent::RemoveHere => Some(intent),
+            | Intent::RemoveHere
+            | Intent::TrimExtraCells => Some(intent),
         }
     }
 
@@ -2795,6 +2801,14 @@ impl Document {
                 self.after_columns_changed(change.at(), window)
             }
             Some(EditStep::Batch(steps)) => self.batch_undone(&steps, redo, window),
+            Some(EditStep::Trim(change)) => {
+                self.notice = Some(if redo {
+                    Notice::Redone(change.count())
+                } else {
+                    Notice::Undone(change.count())
+                });
+                DocumentEffect::Stay
+            }
             Some(EditStep::Rows(change)) => {
                 let body = body_of(change.at(), self.header_line());
                 self.notice = Some(if redo {
@@ -3042,6 +3056,32 @@ impl Document {
 
     /// 選んだ範囲にかかる行を消す（尋ねない・ADR 0027 の決定 4）。見出しの行は消さない（前書きと本体にまたがる
     /// 範囲は、見出しの前と後ろを別の手として消す）。
+    /// カーソルの行の、見出しより後ろの余計なセルを「セルが無い」にする（1 手・Ctrl+Z で戻す・保存で行が短くなる・GitHub
+    /// Issue #413）。見出しが無いか列を足し消ししていれば、比べる列の数が無いので消さない。見出しより多くなければ何もしない。
+    fn trim_extra_cells(&mut self, _window: WindowView) -> DocumentEffect {
+        let Some(expected) = self.expected_columns() else {
+            self.notice = Some(Notice::Trim(None));
+            return DocumentEffect::Stay;
+        };
+        let line = self.line_of(self.selection.cursor().body());
+        let cells = self
+            .view
+            .rows()
+            .iter()
+            .find(|row| row.line() == line && matches!(row.row(), RowId::Source(_)))
+            .map(|row| (row.row(), row.cells().len()));
+        let Some((row, width)) = cells.filter(|&(_, width)| width > expected) else {
+            self.notice = Some(Notice::Trim(Some(0)));
+            return DocumentEffect::Stay;
+        };
+        let columns: Vec<ColumnId> = (expected..width).map(ColumnId::Source).collect();
+        let change = TrimChange::new(row, &columns, &self.edits);
+        let count = change.count();
+        self.history.record_trim(change, &mut self.edits);
+        self.notice = Some(Notice::Trim(Some(count)));
+        DocumentEffect::Stay
+    }
+
     fn remove_rows(&mut self, window: WindowView) -> DocumentEffect {
         let to_end = self
             .ranges()
@@ -3212,7 +3252,8 @@ impl Document {
             | Intent::InsertColumns(_)
             | Intent::RemoveColumns
             | Intent::InsertHere
-            | Intent::RemoveHere => {}
+            | Intent::RemoveHere
+            | Intent::TrimExtraCells => {}
         }
         self.view.first_body()
     }
@@ -3431,7 +3472,8 @@ impl Document {
             | Intent::InsertColumns(_)
             | Intent::RemoveColumns
             | Intent::InsertHere
-            | Intent::RemoveHere => None,
+            | Intent::RemoveHere
+            | Intent::TrimExtraCells => None,
         }
     }
 
@@ -4979,7 +5021,7 @@ impl Document {
         let shape = self.expected_columns().and_then(|expected| {
             self.view_row(cursor.body())
                 .filter(|row| matches!(row.row(), RowId::Source(_)))
-                .map(|row| row.cells().len())
+                .map(|row| self.edits.kept_width(row.row(), row.cells().len()))
                 .filter(|&cells| cells != expected)
                 .map(|cells| (cells, expected))
         });
@@ -5444,6 +5486,7 @@ fn changes_the_table(intent: Intent) -> bool {
             | Intent::RemoveColumns
             | Intent::InsertHere
             | Intent::RemoveHere
+            | Intent::TrimExtraCells
     )
 }
 
@@ -5469,6 +5512,7 @@ const fn changes_when_writable(intent: Intent) -> bool {
             | Intent::RemoveColumns
             | Intent::InsertHere
             | Intent::RemoveHere
+            | Intent::TrimExtraCells
     )
 }
 
@@ -5523,7 +5567,8 @@ const fn keeps_cut(intent: Intent) -> bool {
         | Intent::InsertColumns(_)
         | Intent::RemoveColumns
         | Intent::InsertHere
-        | Intent::RemoveHere => false,
+        | Intent::RemoveHere
+        | Intent::TrimExtraCells => false,
     }
 }
 
@@ -5533,7 +5578,9 @@ fn flattened(steps: &[EditStep]) -> Vec<&EditStep> {
         .iter()
         .flat_map(|step| match step {
             EditStep::Batch(inner) => flattened(inner),
-            EditStep::Cells(_) | EditStep::Rows(_) | EditStep::Columns(_) => vec![step],
+            EditStep::Cells(_) | EditStep::Rows(_) | EditStep::Columns(_) | EditStep::Trim(_) => {
+                vec![step]
+            }
         })
         .collect()
 }
@@ -6479,6 +6526,34 @@ mod tests {
         );
         document.apply(moving(CursorStep::Down), normal());
         assert_eq!(document.scope_find_to_selection(), None);
+    }
+
+    /// カーソルの行の見出しより後ろのセルを消す。1 手で戻せ、見出しより多くない行と見出しの無い表では消さない
+    /// （GitHub Issue #413）。
+    #[test]
+    fn extra_cells_after_the_header_are_trimmed_and_undone() {
+        let rows = table(&[&["a", "b"], &["1", "2", "x", "y"], &["3", "4"]]);
+        let mut document = opened_with(&rows);
+        document.apply(Intent::TrimExtraCells, normal());
+        assert_eq!(
+            document.edits().get(RowId::Source(1), ColumnId::Source(2)),
+            Some(&CellValue::Absent)
+        );
+        assert_eq!(
+            document.edits().get(RowId::Source(1), ColumnId::Source(3)),
+            Some(&CellValue::Absent)
+        );
+        assert_eq!(document.notice, Some(Notice::Trim(Some(2))));
+        assert!(document.has_unsaved());
+        document.apply(Intent::Undo, normal());
+        assert!(document.edits().is_empty());
+        document.apply(moving(CursorStep::Down), normal());
+        document.apply(Intent::TrimExtraCells, normal());
+        assert_eq!(document.notice, Some(Notice::Trim(Some(0))));
+        assert!(document.edits().is_empty());
+        let mut headless = editable();
+        headless.apply(Intent::TrimExtraCells, normal());
+        assert_eq!(headless.notice, Some(Notice::Trim(None)));
     }
 
     fn opened_with(rows: &[CellRow]) -> Document {
@@ -9614,9 +9689,8 @@ mod tests {
         ));
         let says = |frame: &Frame| {
             frame.commands().iter().any(|command| match command {
-                DrawCommand::Text { text, .. } => {
-                    text.contains("3 行目（列の数が違う：3 列・見出しは 2 列）")
-                }
+                DrawCommand::Text { text, .. } => text
+                    .contains("3 行目（3 列・見出しは 2 列 · Ctrl+Shift+P「余計なセル」で消せる）"),
                 DrawCommand::Fill { .. }
                 | DrawCommand::Line { .. }
                 | DrawCommand::TextSpan { .. } => false,

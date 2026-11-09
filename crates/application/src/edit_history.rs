@@ -21,6 +21,7 @@ use nene_ledger_core::row_order::RowOrder;
 use crate::column_change::ColumnChange;
 use crate::edit_step::EditStep;
 use crate::row_change::RowChange;
+use crate::trim_change::TrimChange;
 
 /// 元に戻す・やり直すの履歴と、触ったセルのファイルの値。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -59,6 +60,14 @@ impl EditHistory {
     /// 行の足し消し `change`（並びにはもう行った）を 1 手として積む。やり直しの列は捨てる。
     pub fn record_rows(&mut self, change: RowChange) {
         self.done.push(EditStep::Rows(change));
+        self.undone.clear();
+        self.advance();
+    }
+
+    /// 行の後ろの余計なセルを消す `change` を差分 `edits` に行い、1 手として積む（GitHub Issue #413）。やり直しの列は捨てる。
+    pub fn record_trim(&mut self, change: TrimChange, edits: &mut CellEdits) {
+        change.redo(edits);
+        self.done.push(EditStep::Trim(change));
         self.undone.clear();
         self.advance();
     }
@@ -149,6 +158,10 @@ impl EditHistory {
                 change.undo(columns);
                 step.clone()
             }
+            EditStep::Trim(change) => {
+                change.undo(edits);
+                step.clone()
+            }
             EditStep::Batch(steps) => EditStep::Batch(
                 steps
                     .iter()
@@ -173,6 +186,7 @@ impl EditHistory {
             }
             EditStep::Rows(change) => change.redo(order),
             EditStep::Columns(change) => change.redo(columns),
+            EditStep::Trim(change) => change.redo(edits),
             EditStep::Batch(steps) => {
                 for inner in steps {
                     self.redo_step(inner, (&mut *edits, &mut *order, &mut *columns));
@@ -238,7 +252,8 @@ impl EditHistory {
 /// 手 `step` が行か列の足し消しを含むか（束は中を見る）。
 fn changes_order(step: &EditStep) -> bool {
     match step {
-        EditStep::Rows(_) | EditStep::Columns(_) => true,
+        // 消したセルは保存すると原本から無くなり、列の番号が行の終わりを越えるので、履歴を残せない。
+        EditStep::Rows(_) | EditStep::Columns(_) | EditStep::Trim(_) => true,
         EditStep::Cells(_) => false,
         EditStep::Batch(steps) => steps.iter().any(changes_order),
     }
