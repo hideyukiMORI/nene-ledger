@@ -511,6 +511,11 @@ impl Document {
     /// カーソルと表示の位置は保ち、今の位置から読み直させる。
     pub fn saved(&mut self) -> DocumentEffect {
         self.saving = false;
+        let written = self.edits.rows().iter().fold(0_u64, |sum, (_, columns)| {
+            sum.saturating_add(u64::try_from(columns.len()).unwrap_or(u64::MAX))
+        });
+        let arranged = self.rows.runs() != self.baseline.0.as_slice()
+            || self.columns.runs() != self.baseline.1.as_slice();
         // 履歴は残し、触ったセルのファイルの値を保存した値に進める（保存の後も元に戻せる）。
         // 行を足し消しした手があれば、保存の後は原本のレコードの番号が変わるので、履歴を残せない（ADR 0027）。
         if self.history.has_row_steps() || !self.rows.is_whole() || !self.columns.is_whole() {
@@ -545,7 +550,11 @@ impl Document {
         self.index = JobState::Waiting;
         // 保存したファイルの索引を作り終えたら数え直す（GitHub Issue #391）。
         self.ragged = RaggedCount::Unasked;
-        self.notice = Some(Notice::Saved);
+        self.notice = Some(Notice::Saved {
+            cells: written,
+            arranged,
+            format: self.format,
+        });
         if self.closing == CloseState::AfterSave {
             self.closing = CloseState::Finished;
         }
@@ -8440,7 +8449,11 @@ mod tests {
         assert!(document.edits().is_empty());
         assert_eq!(document.index(), JobState::Waiting);
         let frame = document.frame(normal(), palette());
-        text_at(&frame, "保存しました");
+        // 書き換えたセルの数と、開いたときのままの読み方を言う（GitHub Issue #397）。
+        text_at(
+            &frame,
+            "保存しました（1 セル · UTF-8 · カンマ区切り · LF のまま）",
+        );
         text_at(&frame, "e.csv — NeNe Ledger");
     }
 

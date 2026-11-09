@@ -286,7 +286,11 @@ pub fn notice_status(notice: Notice) -> String {
         Notice::Frozen { columns } => {
             format!("左の {columns} 列を固定しました（横に動いても残ります）")
         }
-        Notice::Saved => String::from("保存しました"),
+        Notice::Saved {
+            cells,
+            arranged,
+            format,
+        } => saved_status(cells, arranged, format),
         Notice::Undone(cells) => format!("元に戻しました（{cells} セル）"),
         Notice::Redone(cells) => format!("やり直しました（{cells} セル）"),
         Notice::NothingToUndo => String::from("元に戻すものがありません"),
@@ -332,6 +336,20 @@ fn unrepresentable_status(found: UnrepresentableNotice) -> String {
         cursor_status(found.line, found.column),
         found.character,
         encoding_name(found.encoding)
+    )
+}
+
+/// 保存した文言。書き換えたセルの数と、書いた読み方（開いたときのまま）を言う（GitHub Issue #397）。
+fn saved_status(cells: u64, arranged: bool, format: FormatSummary) -> String {
+    let rows = if arranged {
+        " · 行と列の並びも"
+    } else {
+        ""
+    };
+    format!(
+        "保存しました（{} セル{rows} · {} のまま）",
+        group_digits(cells),
+        format_status(format)
     )
 }
 
