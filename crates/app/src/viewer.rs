@@ -56,6 +56,7 @@ use nene_ledger_store::save_job::SaveJob;
 use crate::find_fold::FindFold;
 use crate::open_palette::OpenPalette;
 use crate::preferences::Preferences;
+use crate::ragged_fold::RaggedFold;
 use crate::reader::Reader;
 use crate::replace_fold::ReplaceFold;
 use crate::rows::WINDOW_RECORDS;
@@ -78,6 +79,8 @@ pub(crate) struct Viewer {
     preferences: Preferences,
     palette: Option<OpenPalette>,
     totals: Option<RangeJob<TotalsFold>>,
+    /// 裏で数えている、ファイル全体の列の数が見出しと違う行（GitHub Issue #391）。
+    ragged: Option<RangeJob<RaggedFold>>,
     /// 裏で回っている検索の 1 回分（ADR 0030 の決定 4）。
     finding: Option<SplitJob<FindFold>>,
     /// 裏で回っている全部の置換の数え（ADR 0030 の決定 6）。
@@ -118,6 +121,7 @@ impl Viewer {
             preferences,
             palette: None,
             totals: None,
+            ragged: None,
             finding: None,
             replacing: None,
             replacement: String::new(),
@@ -268,6 +272,7 @@ impl Viewer {
         // 前の索引の仕事と集計は、置き換える前のファイルのもの。捨ててから開き直す。名前を付けて保存したなら、
         // 開けたときだけ窓は保存先を指す（題名も替える・ADR 0028 の決定 5）。
         self.totals = None;
+        self.ragged = None;
         let title = saved_as.as_deref().map(crate::opening::title_of);
         match self.reader.reopen_saved(saved_as) {
             Ok(job) => {
@@ -723,6 +728,31 @@ impl Viewer {
         .then(|| PaletteLayout::new(view, open.state()).panel())
     }
 
+    /// 索引を作り終えたら、ファイル全体の列の数が見出しと違う行を裏で 1 度だけ数え、数え終えたら画面に渡す
+    /// （GitHub Issue #391）。始められなければ何も出さない（F8 と範囲の集計は今までどおり使える）。
+    fn refresh_ragged(&mut self) {
+        if self.trial.is_none()
+            && let Some((records, header, expected)) = self.document.ragged_scope()
+            && let Ok(count) = usize::try_from(records)
+        {
+            self.ragged = self
+                .reader
+                .spawn_fold(0, count, RaggedFold::new(header, expected))
+                .ok();
+        }
+        let Some(job) = self.ragged.as_mut() else {
+            return;
+        };
+        match job.take_result() {
+            Some(Ok(RangeOutcome::Finished(fold))) => self.document.ragged_report(fold.rows()),
+            // 中止か読めなかったら何も出さない（F8 と範囲の集計は今までどおり使える）。
+            Some(Ok(RangeOutcome::Cancelled)) => {}
+            Some(Err(_failure)) => {}
+            None => return,
+        }
+        self.ragged = None;
+    }
+
     /// 裏の集計の今の知らせ。終わっていれば結果、まだなら進み具合。仕事が無ければ `None`。
     fn totals_report(&mut self) -> Option<SelectionTotals> {
         let job = self.totals.as_mut()?;
@@ -946,6 +976,7 @@ impl Viewer {
                 self.job = job;
                 self.trial = None;
                 self.totals = None;
+                self.ragged = None;
             }
             Err(_failure) => {
                 if let Some(original) = self.trial.take() {
@@ -1116,6 +1147,7 @@ impl Session for Viewer {
         self.effect(reread);
         // 索引を作り終えたら、ファイルの終わりまでの選択を数え直す（変わっていなければ何もしない）。
         self.refresh_totals();
+        self.refresh_ragged();
         if let Some(totals) = self.totals_report() {
             self.document.totals_report(totals);
         }

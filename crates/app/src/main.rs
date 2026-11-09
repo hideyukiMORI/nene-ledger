@@ -14,6 +14,7 @@ mod open_failure;
 mod open_palette;
 mod opening;
 mod preferences;
+mod ragged_fold;
 mod reader;
 mod replace_fold;
 mod rows;

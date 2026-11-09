@@ -186,6 +186,14 @@ pub fn width_status(columns: usize, expected: Option<usize>) -> String {
     }
 }
 
+/// ファイル全体の、列の数が見出しと違う行の数の文言（GitHub Issue #391）。前に ` · ` を付ける。無ければ空。
+/// F8 で 1 つずつ飛べることを添える。
+#[must_use]
+pub fn ragged_status(rows: Option<u64>) -> String {
+    rows.map(|rows| format!(" · {RAGGED_TOTALS} {}（F8）", group_digits(rows)))
+        .unwrap_or_default()
+}
+
 /// 読み方の文言（文字コード · 区切り · 引用の扱い · 改行）。引用の扱いは既定（RFC 4180）でないときだけ（Issue #68）。
 /// 🔴 表示言語の文言の表（ADR 0011）を入れるまでの仮の日本語。
 #[must_use]
@@ -774,6 +782,13 @@ mod tests {
             index_status(JobState::Waiting, Some(HeaderRows::single(0))),
             "索引を作る準備をしています"
         );
+    }
+
+    /// ファイル全体の列の数が違う行は、数えてあれば F8 を添えて言う（GitHub Issue #391）。
+    #[test]
+    fn ragged_rows_of_the_whole_file_are_counted_with_the_key() {
+        assert_eq!(ragged_status(Some(1_234)), " · 列の数が違う行 1,234（F8）");
+        assert_eq!(ragged_status(None), "");
     }
 
     /// 見出しより多い列の行があれば、見出しの列の数と最大を分ける（GitHub Issue #383）。

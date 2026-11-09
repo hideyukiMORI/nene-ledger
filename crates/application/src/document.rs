@@ -65,6 +65,7 @@ use crate::pending_paste::PendingPaste;
 use crate::pointer_hold::PointerHold;
 use crate::pointer_shape::PointerShape;
 use crate::press_kind::PressKind;
+use crate::ragged_count::RaggedCount;
 use crate::ranges::Ranges;
 use crate::read_only_notice::ReadOnlyNotice;
 use crate::replace_failure::ReplaceFailure;
@@ -87,7 +88,7 @@ use crate::selection_stats::SelectionStats;
 use crate::selection_totals::SelectionTotals;
 use crate::status_line::{
     RAGGED_TOTALS, cursor_status, format_status, group_digits, index_status, notice_status,
-    skipped_note, totals_status, width_status,
+    ragged_status, skipped_note, totals_status, width_status,
 };
 use crate::table_changes::TableChanges;
 use crate::table_extent::TableExtent;
@@ -143,6 +144,8 @@ pub struct Document {
     /// 見えている行のうち、上限で切り詰めたレコード（GitHub Issue #36）。
     cuts: Vec<CutRecord>,
     totals: SelectionTotals,
+    /// ファイル全体の、列の数が見出しと違う行の数（索引の後に裏で数える・GitHub Issue #391）。数え始めたら `asked`。
+    ragged: RaggedCount,
     others: Vec<Selection>,
     order: Vec<usize>,
     counted: Option<Vec<Selection>>,
@@ -287,6 +290,7 @@ impl Document {
             notice: None,
             cuts: Vec::new(),
             totals: SelectionTotals::Hidden,
+            ragged: RaggedCount::Unasked,
             others: Vec::new(),
             order: Vec::new(),
             counted: None,
@@ -538,6 +542,8 @@ impl Document {
         self.baseline = (self.rows.runs().to_vec(), self.columns.runs().to_vec());
         self.editor = None;
         self.index = JobState::Waiting;
+        // 保存したファイルの索引を作り終えたら数え直す（GitHub Issue #391）。
+        self.ragged = RaggedCount::Unasked;
         self.notice = Some(Notice::Saved);
         if self.closing == CloseState::AfterSave {
             self.closing = CloseState::Finished;
@@ -4922,10 +4928,11 @@ impl Document {
     fn status(&self) -> String {
         let cursor = self.selection.cursor();
         format!(
-            "{} · {} · {} · {}",
+            "{} · {} · {}{} · {}",
             index_status(self.shown_index(), self.header_line()),
             format_status(self.format),
             width_status(self.widths.columns().len(), self.expected_columns()),
+            ragged_status(self.shown_ragged()),
             cursor_status(
                 self.line_of(cursor.body()),
                 self.source_column(cursor.column())
@@ -5080,6 +5087,41 @@ impl Document {
 
     /// 本体の行が持つはずのセルの数（GitHub Issue #317）。見出しの行（の 1 行目）のセルの数。見出しが無いか、列を足し消し
     /// していれば `None`（並べ直した行のセルの数は原本の数と違う）。
+    /// ファイル全体の、列の数が見出しと違う行を裏で数える範囲（GitHub Issue #391）。索引を作り終え、見出しがあり、行と列を
+    /// 足し消ししていないとき 1 度だけ：レコードの数・見出しのレコード（それより前の前書きと見出しは数えない）・見出しの
+    /// セルの数。返したら、もう返さない。
+    pub fn ragged_scope(&mut self) -> Option<(u64, HeaderRows, usize)> {
+        if self.ragged != RaggedCount::Unasked || !self.rows.is_whole() {
+            return None;
+        }
+        let records = self.records()?;
+        let header = self.header_record()?;
+        let expected = self.expected_columns()?;
+        self.ragged = RaggedCount::Counting;
+        Some((records, header, expected))
+    }
+
+    /// 裏で数えた、列の数が見出しと違う行の数 `rows`（GitHub Issue #391）。
+    pub fn ragged_report(&mut self, rows: u64) {
+        self.ragged = RaggedCount::Counted(rows);
+    }
+
+    /// 状態の行に出す、列の数が見出しと違う行の数。数えた後で、まだ直していない（保存していない変更が無い・行と列を
+    /// 足し消ししていない）ときだけ。直した後はファイルの数と違いうるので出さない。
+    fn shown_ragged(&self) -> Option<u64> {
+        match self.ragged {
+            RaggedCount::Counted(rows)
+                if rows > 0
+                    && !self.has_unsaved()
+                    && self.rows.is_whole()
+                    && self.columns.is_whole() =>
+            {
+                Some(rows)
+            }
+            RaggedCount::Counted(_) | RaggedCount::Unasked | RaggedCount::Counting => None,
+        }
+    }
+
     fn expected_columns(&self) -> Option<usize> {
         if !self.columns.is_whole() {
             return None;
@@ -6263,6 +6305,30 @@ mod tests {
         // 行を差し替えると、切り詰めの印は外れる（読み直した行の分を app が渡し直す）。
         document.show(1, rows[1..].to_vec());
         assert!(!texts(&document).iter().any(|text| text.contains(cut_line)));
+    }
+
+    /// 索引を作り終えたら 1 度だけ数える範囲を渡し、数えた行の数を状態の行に F8 と出す。行を足すと出さない（直した後の
+    /// 数はファイルと違いうる）。数えた数が 0 なら出さない（GitHub Issue #391）。
+    #[test]
+    fn ragged_rows_of_the_whole_file_are_counted_once_and_shown_until_edited() {
+        let rows = table(&[&["a", "b", "c"], &["1", "2"], &["3", "4", "5"]]);
+        let mut document = opened_with(&rows);
+        assert_eq!(document.ragged_scope(), None);
+        document.report(JobReport::Finished(IndexSummary::new(3, None)));
+        assert_eq!(document.ragged_scope(), Some((3, HeaderRows::single(0), 3)));
+        assert_eq!(document.ragged_scope(), None);
+        assert!(!document.status().contains("（F8）"));
+        document.ragged_report(1);
+        assert!(
+            document.status().contains(" · 列の数が違う行 1（F8） · "),
+            "{}",
+            document.status()
+        );
+        document.apply(Intent::InsertRows(RowPlace::Below), normal());
+        assert!(!document.status().contains("（F8）"));
+        let mut clean = opened_with(&rows);
+        clean.ragged_report(0);
+        assert!(!clean.status().contains("（F8）"));
     }
 
     fn opened_with(rows: &[CellRow]) -> Document {
