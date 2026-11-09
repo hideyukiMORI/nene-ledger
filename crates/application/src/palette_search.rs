@@ -11,6 +11,7 @@ use nene_ledger_core::theme_catalog::SEEDS;
 use crate::command_id::CommandId;
 use crate::detail_pane::DetailPane;
 use crate::key_guide::KeyGuide;
+use crate::palette_heading::PaletteHeading;
 use crate::palette_item::PaletteItem;
 use crate::reading_aspect::ReadingAspect;
 use crate::reading_choice::ReadingChoice;
@@ -35,26 +36,38 @@ pub fn commands(query: &str) -> Vec<PaletteItem> {
         .collect()
 }
 
-/// 操作の候補に、最近使った操作 `recent`（新しい順）を足したもの。何も打っていなければ最近使った操作を上に並べ、残りは
-/// 固定の順（同じ操作は 1 度だけ・GitHub Issue #309）。打てば [`commands`] のまま（合う度合いの順）。
+/// 操作の候補。何も打っていなければ、見出しを付けて「最近使った操作」（新しい順）→「よく使う」（固定・最近と同じ操作は
+/// 除く）→ 分類ごとの全部の操作（分類の中は決まった順）と並べる。初めての人が何ができるかを一目で分かり、最初の数行に
+/// 開く・保存・探す・置換が入る（GitHub Issue #309・#420）。打てば [`commands`] のまま（合う度合いの順・見出し無し）。
 #[must_use]
 pub fn commands_with_recent(query: &str, recent: &[CommandId]) -> Vec<PaletteItem> {
-    let all = commands(query);
-    if !query.trim().is_empty() || recent.is_empty() {
-        return all;
+    if !query.trim().is_empty() {
+        return commands(query);
     }
-    recent
+    let mut items = Vec::new();
+    if !recent.is_empty() {
+        items.push(PaletteItem::Heading(PaletteHeading::Recent));
+        items.extend(recent.iter().map(|&command| PaletteItem::Command(command)));
+    }
+    let frequent: Vec<PaletteItem> = CommandId::FREQUENT
         .iter()
+        .filter(|command| !recent.contains(command))
         .map(|&command| PaletteItem::Command(command))
-        .chain(all.into_iter().filter(|item| match item {
-            PaletteItem::Command(command) => !recent.contains(command),
-            PaletteItem::Theme(_)
-            | PaletteItem::Reading(_)
-            | PaletteItem::Key(_)
-            | PaletteItem::About(_)
-            | PaletteItem::Candidate(_) => true,
-        }))
-        .collect()
+        .collect();
+    if !frequent.is_empty() {
+        items.push(PaletteItem::Heading(PaletteHeading::Frequent));
+        items.extend(frequent);
+    }
+    for section in PaletteHeading::SECTIONS {
+        items.push(PaletteItem::Heading(section));
+        items.extend(
+            CommandId::ALL
+                .iter()
+                .filter(|command| command.section() == section)
+                .map(|&command| PaletteItem::Command(command)),
+        );
+    }
+    items
 }
 
 /// 操作 `command` が検索 `raw`（小文字）・`folded`（寄せた形）に合う度合い（小さいほど上）。合わなければ `None`。
@@ -280,6 +293,7 @@ mod tests {
                 | PaletteItem::Reading(_)
                 | PaletteItem::Key(_)
                 | PaletteItem::About(_)
+                | PaletteItem::Heading(_)
                 | PaletteItem::Candidate(_) => None,
             })
             .collect()
@@ -399,19 +413,58 @@ mod tests {
         assert!(candidates(&list, "xyz").is_empty());
     }
 
-    /// 何も打っていない一覧は、最近使った操作を上に並べ、残りは固定の順で 1 度ずつ。打てば合う度合いの順のまま
-    /// （GitHub Issue #309）。
+    /// 何も打っていない一覧は「最近使った操作」→「よく使う」（最近と重ねない）→ 分類ごとの全部（どの操作も 1 度ずつ）。
+    /// 打てば見出しの無い、合う度合いの順のまま（GitHub Issue #309・#420）。
     #[test]
-    fn recent_commands_come_first_only_before_typing() {
+    fn an_empty_list_is_a_catalogue_with_headings() {
         let recent = [CommandId::Replace, CommandId::ChooseTheme];
-        let listed = ids(&commands_with_recent("", &recent));
-        assert_eq!(&listed[..2], &recent);
-        assert_eq!(listed.len(), CommandId::ALL.len());
+        let listed = commands_with_recent("", &recent);
+        assert_eq!(listed[0], PaletteItem::Heading(PaletteHeading::Recent));
+        assert_eq!(&ids(&listed[1..3]), &recent);
+        assert_eq!(listed[3], PaletteItem::Heading(PaletteHeading::Frequent));
         assert_eq!(
-            ids(&commands_with_recent("kensaku", &recent)),
-            ids(&commands("kensaku"))
+            ids(&listed[4..8]),
+            [
+                CommandId::OpenFile,
+                CommandId::Save,
+                CommandId::Find,
+                CommandId::Undo
+            ]
         );
-        assert_eq!(ids(&commands_with_recent("", &[])), ids(&commands("")));
+        let sections = &listed[8..];
+        let headings: Vec<PaletteItem> = sections
+            .iter()
+            .copied()
+            .filter(|item| matches!(item, PaletteItem::Heading(_)))
+            .collect();
+        assert_eq!(
+            headings,
+            PaletteHeading::SECTIONS.map(PaletteItem::Heading).to_vec()
+        );
+        let mut every = ids(sections);
+        assert_eq!(every.len(), CommandId::ALL.len());
+        every.sort_by_key(|command| CommandId::ALL.iter().position(|other| other == command));
+        assert_eq!(every, CommandId::ALL.to_vec());
+        // 最近の履歴が無くても、最初の行は「よく使う」。
+        assert_eq!(
+            commands_with_recent("", &[])[0],
+            PaletteItem::Heading(PaletteHeading::Frequent)
+        );
+    }
+
+    /// 打てば見出しの無い、合う度合いの順のまま（GitHub Issue #420）。
+    #[test]
+    fn typed_lists_have_no_headings() {
+        let recent = [CommandId::Replace, CommandId::ChooseTheme];
+        assert_eq!(
+            commands_with_recent("kensaku", &recent),
+            commands("kensaku")
+        );
+        assert!(
+            !commands("kensaku")
+                .iter()
+                .any(|item| matches!(item, PaletteItem::Heading(_)))
+        );
     }
 
     /// 見出しの行の段は、行の番号を打てばそこから始まる見出しに、`2-3` と打てばその範囲だけに絞る（GitHub Issue #315）。
@@ -426,6 +479,7 @@ mod tests {
                     | PaletteItem::Theme(_)
                     | PaletteItem::Key(_)
                     | PaletteItem::About(_)
+                    | PaletteItem::Heading(_)
                     | PaletteItem::Candidate(_) => None,
                 })
                 .collect()
