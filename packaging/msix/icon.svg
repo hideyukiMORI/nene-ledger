@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <!-- NeNe Ledger のアイコン（GitHub Issue #342）。既定の配色 neutral-light の強調の色 #E95420 の角丸の四角に、
+       見出しの行を塗った白い表の格子。小さく出しても読めるよう線は太く、列は 3 つ・本体の行は 3 つ。 -->
+  <rect x="8" y="8" width="240" height="240" rx="48" fill="#E95420"/>
+  <rect x="44" y="52" width="168" height="152" rx="14" fill="none" stroke="#FFFFFF" stroke-width="14"/>
+  <rect x="44" y="52" width="168" height="44" rx="14" fill="#FFFFFF"/>
+  <rect x="44" y="82" width="168" height="14" fill="#FFFFFF"/>
+  <line x1="100" y1="96" x2="100" y2="204" stroke="#FFFFFF" stroke-width="10"/>
+  <line x1="156" y1="96" x2="156" y2="204" stroke="#FFFFFF" stroke-width="10"/>
+  <line x1="44" y1="132" x2="212" y2="132" stroke="#FFFFFF" stroke-width="10"/>
+  <line x1="44" y1="168" x2="212" y2="168" stroke="#FFFFFF" stroke-width="10"/>
+</svg>
