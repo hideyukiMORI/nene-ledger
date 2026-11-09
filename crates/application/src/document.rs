@@ -147,6 +147,9 @@ pub struct Document {
     totals: SelectionTotals,
     /// ファイル全体の、列の数が見出しと違う行の数（索引の後に裏で数える・GitHub Issue #391）。数え始めたら `asked`。
     ragged: RaggedCount,
+    /// 列の数が見出しと違う行のレコードの番号（昇順・裏で数えたもの）。数えた数より少なければ覚えきれなかった
+    /// （GitHub Issue #415）。
+    ragged_positions: Vec<u64>,
     /// 検索と置換で照らす表示の列（列を選んで欄を開いたとき・GitHub Issue #411）。`None` なら全部の列。
     find_within: Option<Range<usize>>,
     others: Vec<Selection>,
@@ -294,6 +297,7 @@ impl Document {
             cuts: Vec::new(),
             totals: SelectionTotals::Hidden,
             ragged: RaggedCount::Unasked,
+            ragged_positions: Vec::new(),
             find_within: None,
             others: Vec::new(),
             order: Vec::new(),
@@ -553,6 +557,7 @@ impl Document {
         self.index = JobState::Waiting;
         // 保存したファイルの索引を作り終えたら数え直す（GitHub Issue #391）。
         self.ragged = RaggedCount::Unasked;
+        self.ragged_positions.clear();
         self.notice = Some(Notice::Saved {
             cells: written,
             arranged,
@@ -5015,7 +5020,10 @@ impl Document {
             // 壊れた行の数は行の数のすぐ後ろ（狭い窓で後ろの項目から落としても残す・GitHub Issue #409）。
             "{}{} · {} · {} · {}",
             index_status(self.shown_index(), self.header_line()),
-            ragged_status(self.shown_ragged()),
+            ragged_status(
+                self.shown_ragged()
+                    .map(|rows| (rows, self.ragged_place(rows)))
+            ),
             format_status(self.format),
             width_status(self.widths.columns().len(), self.expected_columns()),
             cursor_status(
@@ -5191,9 +5199,25 @@ impl Document {
         Some((records, header, expected))
     }
 
-    /// 裏で数えた、列の数が見出しと違う行の数 `rows`（GitHub Issue #391）。
-    pub fn ragged_report(&mut self, rows: u64) {
+    /// 裏で数えた、列の数が見出しと違う行の数 `rows` と、そのレコードの番号 `positions`（昇順・覚えきれなければ途中まで・
+    /// GitHub Issue #391・#415）。
+    pub fn ragged_report(&mut self, rows: u64, positions: Vec<u64>) {
         self.ragged = RaggedCount::Counted(rows);
+        self.ragged_positions = positions;
+    }
+
+    /// カーソルの行が、列の数が見出しと違う行の何件目か（1 始まり・GitHub Issue #415）。位置を覚えきれていない・
+    /// カーソルの行が壊れた行でなければ `None`。
+    fn ragged_place(&self, rows: u64) -> Option<u64> {
+        if u64::try_from(self.ragged_positions.len()).ok()? != rows {
+            return None;
+        }
+        let line = self.line_of(self.selection.cursor().body());
+        let RowId::Source(record) = self.rows.row_at(line)? else {
+            return None;
+        };
+        let index = self.ragged_positions.binary_search(&record).ok()?;
+        u64::try_from(index).ok()?.checked_add(1)
     }
 
     /// 状態の行に出す、列の数が見出しと違う行の数。数えた後で、まだ直していない（保存していない変更が無い・行と列を
@@ -6426,7 +6450,16 @@ mod tests {
         assert_eq!(document.ragged_scope(), Some((3, HeaderRows::single(0), 3)));
         assert_eq!(document.ragged_scope(), None);
         assert!(!document.status().contains("（F8）"));
-        document.ragged_report(1);
+        document.ragged_report(1, vec![1]);
+        // カーソルは壊れた行（データの 1 行目）なので、何件目かも言う（GitHub Issue #415）。
+        assert!(
+            document
+                .status()
+                .contains("行） · 列の数が違う行 1 / 1（F8） · "),
+            "{}",
+            document.status()
+        );
+        document.apply(moving(CursorStep::Down), normal());
         assert!(
             document
                 .status()
@@ -6437,7 +6470,7 @@ mod tests {
         document.apply(Intent::InsertRows(RowPlace::Below), normal());
         assert!(!document.status().contains("（F8）"));
         let mut clean = opened_with(&rows);
-        clean.ragged_report(0);
+        clean.ragged_report(0, Vec::new());
         assert!(!clean.status().contains("（F8）"));
     }
 

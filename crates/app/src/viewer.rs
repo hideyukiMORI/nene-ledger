@@ -746,7 +746,10 @@ impl Viewer {
             return;
         };
         match job.take_result() {
-            Some(Ok(RangeOutcome::Finished(fold))) => self.document.ragged_report(fold.rows()),
+            Some(Ok(RangeOutcome::Finished(fold))) => {
+                let rows = fold.rows();
+                self.document.ragged_report(rows, fold.into_positions());
+            }
             // 中止か読めなかったら何も出さない（F8 と範囲の集計は今までどおり使える）。
             Some(Ok(RangeOutcome::Cancelled)) => {}
             Some(Err(_failure)) => {}
