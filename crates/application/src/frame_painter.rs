@@ -784,51 +784,20 @@ impl<'view> FramePainter<'view> {
         let within = self.expected.is_none_or(|expected| source < expected);
         if within && matches!(mark, CellMark::Unselected | CellMark::Band) {
             let missing = self.palette.gutter();
-            self.hatch(rect, self.palette.gutter_text().mixed(missing, HATCH_FADE));
+            self.checker(
+                rect,
+                self.palette.gutter_text().mixed(missing, CHECKER_FADE),
+            );
         }
     }
 
-    /// `rect` の面全体に、45° の斜線の網（「セルが無い」の印）。どの幅のセルでも同じ角度と間隔（列の幅で傾きの変わる
-    /// 1 本の斜線は描き損じに見えた・施主と /design の評価・GitHub Issue #436）。線は `rect` の中で切る。
-    fn hatch(&mut self, rect: PixelRect, color: Color) {
-        let (left, top) = (i64::from(rect.origin().x()), i64::from(rect.origin().y()));
-        let (width, height) = (
-            i64::from(rect.size().width()),
-            i64::from(rect.size().height()),
-        );
-        if width < 2 || height < 2 {
-            return;
-        }
-        let (right, bottom) = (left + width - 1, top + height - 1);
-        let step = i64::from(self.metrics.px(HATCH_STEP).max(2));
-        let line_width = self.metrics.px(1);
-        // 「/」の向きの線は x + y が一定。左上の角から右下の角まで、間隔ごとに 1 本。
-        let mut sum = left + top + step;
-        while sum < right + bottom {
-            let (start_x, start_y) = if sum - bottom >= left {
-                (sum - bottom, bottom)
-            } else {
-                (left, sum - left)
-            };
-            let (end_x, end_y) = if sum - top <= right {
-                (sum - top, top)
-            } else {
-                (right, sum - right)
-            };
-            if let (Ok(from_x), Ok(from_y), Ok(to_x), Ok(to_y)) = (
-                u32::try_from(start_x),
-                u32::try_from(start_y),
-                u32::try_from(end_x),
-                u32::try_from(end_y),
-            ) {
-                self.commands.push(DrawCommand::Line {
-                    from: PixelPoint::new(from_x, from_y),
-                    to: PixelPoint::new(to_x, to_y),
-                    width: line_width,
-                    color,
-                });
-            }
-            sum += step;
+    /// `rect` の面全体に、市松模様（画像の編集の道具の「透明」・「セルが無い」の印）。升目は窓の格子にそろえるので、
+    /// 隣り合う「セルが無い」所の模様がつながる。軸にそった塗りだけなので、斜めの線よりにじまず軽い（施主・GitHub Issue
+    /// #436・#438）。
+    fn checker(&mut self, rect: PixelRect, color: Color) {
+        let size = self.metrics.px(CHECKER).max(2);
+        for square in checker_squares(rect, size) {
+            self.fill(square, color);
         }
     }
 
@@ -885,9 +854,35 @@ fn scrolled_to_caret(text: &str, caret: u32, room: u32) -> (String, u32) {
 /// 見えない字の印の字の色を、字の色からセルの背景へ寄せる割合（百分率・GitHub Issue #269）。
 pub(crate) const MARK_FADE: u8 = 50;
 
-/// 「セルが無い」の斜線の網の間隔（論理 px）と、字の色から塗りの色へ寄せる割合（薄く・GitHub Issue #436）。
-const HATCH_STEP: u32 = 6;
-const HATCH_FADE: u8 = 72;
+/// 矩形 `rect` の中の、窓の格子にそろえた大きさ `size` の市松の濃い升目（`rect` で切る）。
+fn checker_squares(rect: PixelRect, size: u32) -> Vec<PixelRect> {
+    let (left, top) = (rect.origin().x(), rect.origin().y());
+    let (right, bottom) = (
+        left.saturating_add(rect.size().width()),
+        top.saturating_add(rect.size().height()),
+    );
+    let starts =
+        |from: u32, to: u32| (from / size..to.div_ceil(size)).map(move |index| index * size);
+    starts(top, bottom)
+        .flat_map(|y| starts(left, right).map(move |x| (x, y)))
+        .filter(|&(x, y)| (x / size + y / size).is_multiple_of(2))
+        .map(|(x, y)| {
+            let (from_x, from_y) = (x.max(left), y.max(top));
+            let (to_x, to_y) = (
+                x.saturating_add(size).min(right),
+                y.saturating_add(size).min(bottom),
+            );
+            PixelRect::new(
+                PixelPoint::new(from_x, from_y),
+                PixelSize::new(to_x.saturating_sub(from_x), to_y.saturating_sub(from_y)),
+            )
+        })
+        .collect()
+}
+
+/// 「セルが無い」の市松の升目の大きさ（論理 px）と、字の色から塗りの色へ寄せる割合（薄く・GitHub Issue #438）。
+const CHECKER: u32 = 8;
+const CHECKER_FADE: u8 = 88;
 
 /// 元の値 `value` を表示の 1 行にしたときの、見えない字の印の範囲（長い値は数えない・当たった字と同じ約束）。
 fn marks_in(value: &str) -> Vec<Range<usize>> {
@@ -1131,56 +1126,69 @@ mod tests {
         assert!(fills_of(&painted(None), palette().danger()).is_empty());
     }
 
-    /// 「セルが無い」所には、空のセルと見分ける 45° の斜線の網を面全体に描く。空のセルには描かない（GitHub Issue #401・
-    /// #436）。見出しのセルの数が分かれば、それより後ろの列には描かない（GitHub Issue #405）。
+    /// 「セルが無い」所には、空のセルと見分ける市松を面全体に描く。空のセルには描かない（GitHub Issue #401・#438）。
+    /// 見出しのセルの数が分かれば、それより後ろの列には描かない（GitHub Issue #405）。
     #[test]
-    fn missing_cells_are_hatched_and_empty_cells_are_not() {
+    fn missing_cells_are_checkered_and_empty_cells_are_not() {
         let rows = [row(1, &["1", "", "3"]), row(2, &["1"])];
         let owned: Vec<Vec<String>> = rows.iter().map(|row| row.cells().to_strings()).collect();
         let cells: Vec<&[String]> = owned.iter().map(Vec::as_slice).collect();
         let layout = TableLayout::new(&ColumnWidths::fit(&cells), 0, 2, metrics());
-        let lines_in = |commands: &[DrawCommand]| -> Vec<(PixelPoint, PixelPoint)> {
-            commands
-                .iter()
-                .filter_map(|command| match command {
-                    DrawCommand::Line { from, to, .. } => Some((*from, *to)),
-                    DrawCommand::Text { .. }
-                    | DrawCommand::Fill { .. }
-                    | DrawCommand::TextSpan { .. } => None,
-                })
-                .collect()
+        let ink = palette()
+            .gutter_text()
+            .mixed(palette().gutter(), CHECKER_FADE);
+        let in_cell = |line: usize, column: usize, square: &PixelRect| {
+            let cell = layout.cell_rect(line, column).unwrap();
+            square.origin().x() >= cell.origin().x()
+                && square.origin().y() >= cell.origin().y()
+                && square.origin().x() + square.size().width()
+                    <= cell.origin().x() + cell.size().width()
+                && square.origin().y() + square.size().height()
+                    <= cell.origin().y() + cell.size().height()
         };
-        let lines = lines_in(
+        let all = fills_of(
             &FramePainter::new(&layout, metrics(), palette(), PixelSize::new(800, 600)).paint(
                 &[],
                 None,
                 &view(&rows),
             ),
+            ink,
         );
-        // 2 行目の 2・3 列目だけ（1 行目の空のセルには描かない）。どの線もそのセルの中で、左下から右上へ 45°。
-        let in_cell = |column: usize, (from, to): (PixelPoint, PixelPoint)| {
-            let cell = layout.cell_rect(1, column).unwrap();
-            let (left, top) = (cell.origin().x(), cell.origin().y());
-            let (right, bottom) = (left + cell.size().width(), top + cell.size().height());
-            [from, to].iter().all(|point| {
-                (left..right).contains(&point.x()) && (top..bottom).contains(&point.y())
-            })
-        };
-        let (second, third): (Vec<_>, Vec<_>) =
-            lines.iter().copied().partition(|&line| in_cell(1, line));
-        assert!(second.len() > 3, "{second:?}");
-        assert!(third.iter().all(|&line| in_cell(2, line)));
-        assert!(!third.is_empty());
-        for (from, to) in &lines {
-            assert!(from.y() > to.y());
-            assert_eq!(to.x() - from.x(), from.y() - to.y());
-        }
-        let within = lines_in(
+        // 2 行目の 2・3 列目だけ（1 行目の空のセルには描かない）。
+        assert!(
+            all.iter()
+                .all(|square| in_cell(1, 1, square) || in_cell(1, 2, square))
+        );
+        assert!(all.iter().any(|square| in_cell(1, 1, square)));
+        assert!(all.iter().any(|square| in_cell(1, 2, square)));
+        assert!(!all.iter().any(|square| in_cell(0, 1, square)));
+        let within = fills_of(
             &FramePainter::new(&layout, metrics(), palette(), PixelSize::new(800, 600))
                 .with_expected(Some(2))
                 .paint(&[], None, &view(&rows)),
+            ink,
         );
-        assert_eq!(within, second);
+        assert!(within.iter().all(|square| in_cell(1, 1, square)) && !within.is_empty());
+    }
+
+    /// 市松の升目は窓の格子にそろえ、矩形で切る。隣り合う矩形の模様がつながる（GitHub Issue #438）。
+    #[test]
+    fn checker_squares_follow_the_window_grid() {
+        let rect = |x, y, w, h| PixelRect::new(PixelPoint::new(x, y), PixelSize::new(w, h));
+        let squares = checker_squares(rect(5, 3, 12, 6), 4);
+        // 升目 (4..8, 0..4) は (1+0) で淡い、(8..12, 0..4) は (2+0) で濃い … を矩形で切る。
+        assert!(squares.contains(&rect(8, 3, 4, 1)));
+        assert!(squares.contains(&rect(5, 4, 3, 4)));
+        assert!(squares.iter().all(|square| {
+            square.origin().x() >= 5
+                && square.origin().y() >= 3
+                && square.origin().x() + square.size().width() <= 17
+                && square.origin().y() + square.size().height() <= 9
+        }));
+        // 隣の矩形に続く升目は、同じ格子の上で同じ濃さ。
+        let left = checker_squares(rect(0, 0, 10, 8), 4);
+        let right = checker_squares(rect(10, 0, 10, 8), 4);
+        assert!(left.contains(&rect(8, 0, 2, 4)) && right.contains(&rect(10, 0, 2, 4)));
     }
 
     #[test]
