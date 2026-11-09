@@ -1,12 +1,11 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
-  <!-- NeNe Ledger のアイコン（GitHub Issue #342）。既定の配色 neutral-light の強調の色 #E95420 の角丸の四角に、
-       見出しの行を塗った白い表の格子。小さく出しても読めるよう線は太く、列は 3 つ・本体の行は 3 つ。 -->
-  <rect x="8" y="8" width="240" height="240" rx="48" fill="#E95420"/>
-  <rect x="44" y="52" width="168" height="152" rx="14" fill="none" stroke="#FFFFFF" stroke-width="14"/>
-  <rect x="44" y="52" width="168" height="44" rx="14" fill="#FFFFFF"/>
-  <rect x="44" y="82" width="168" height="14" fill="#FFFFFF"/>
-  <line x1="100" y1="96" x2="100" y2="204" stroke="#FFFFFF" stroke-width="10"/>
-  <line x1="156" y1="96" x2="156" y2="204" stroke="#FFFFFF" stroke-width="10"/>
-  <line x1="44" y1="132" x2="212" y2="132" stroke="#FFFFFF" stroke-width="10"/>
-  <line x1="44" y1="168" x2="212" y2="168" stroke="#FFFFFF" stroke-width="10"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <title>NeNe Ledger application icon</title>
+  <desc>NeNe Ledger application icon: a charcoal value block followed by a large amber comma (the CSV delimiter: "value,"), on a cream rounded tile with a charcoal outline. Colors are the NeNe Clock palette (charcoal #1A1917, cream #F5F2EB, amber #D08C3F). Corners outside rx=24 are fully transparent.</desc>
+  <rect width="256" height="256" rx="24" fill="#F5F2EB"/>
+  <rect x="1.5" y="1.5" width="253" height="253" rx="22.5" fill="none" stroke="#1A1917" stroke-width="3"/>
+  <rect x="48" y="50" width="84" height="104" rx="12" fill="#1A1917"/>
+  <g transform="translate(176 134) scale(1.5)" fill="#D08C3F">
+    <circle cx="0" cy="0" r="20"/>
+    <path d="M18 8 C19 32 8 50 -14 60 L-20 50 C-6 42 0 30 -2 16 Z"/>
+  </g>
 </svg>
