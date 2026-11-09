@@ -5,7 +5,7 @@ members = ["crates/adapters-windows", "crates/adapters-x11", "crates/app", "crat
 
 [workspace.package]
 # 版はここが唯一の出どころ。画面の表示はこれをビルド時に受け取る。
-version = "0.1.0-preview.1"
+version = "0.1.0-preview.2"
 edition = "2024"
 # 独自のライセンス（LICENSE・ADR 0009）。SPDX では LicenseRef で表す。
 license = "LicenseRef-NeNe-Ledger-1.0"
