@@ -6,7 +6,7 @@
 #    全件は限定した検証で影響を覆えない理由を REASON= に添えたときだけ回す（QLT-001 / ADR 0003）。
 CARGO ?= cargo
 
-.PHONY: all dist test-windows notices notices-check check ci fmt fmt-check lint lint-windows build-windows test conformance validate-git coverage deny doc-check build prove screenshot bench-pollock fetch-corpus bench-corpus doctor clean
+.PHONY: all dist msix msix-check test-windows notices notices-check check ci fmt fmt-check lint lint-windows build-windows test conformance validate-git coverage deny doc-check build prove screenshot bench-pollock fetch-corpus bench-corpus doctor clean
 
 all: doctor
 
@@ -17,7 +17,7 @@ check:
 	  exit 2; \
 	fi
 	@echo "全件検証: $(REASON)"
-	$(MAKE) fmt-check lint test conformance deny doc-check notices-check build
+	$(MAKE) fmt-check lint test conformance deny doc-check notices-check msix-check build
 
 ## ci — CI の必須 check。Git 規約・PR の検証記録・絶対パス・差分の空白だけを見る（QLT-005 / QLT-012・ADR 0021）。
 ## 手元でも同じ 1 行で走る（origin/main が要る）。
@@ -64,6 +64,14 @@ conformance:
 ## dist — 配る zip（Windows の exe・LICENSE・著作権表示・説明書・見本）を dist/ に作る（ADR 0032）。release の workflow も同じ入口。
 dist:
 	bash tools/dist.sh
+
+## msix — Microsoft Store に出す MSIX を out/msix/ に作る（ADR 0035）。WSL の相互運用で Windows SDK の makeappx.exe を呼ぶ。
+## msix-check — Cargo.toml の SemVer を MSIX の 4 桁の版に写す規則を確かめる（Windows が無くても走る）。
+msix:
+	bash tools/msix.sh
+
+msix-check:
+	@bash tools/msix-check.sh
 
 ## notices — 配る exe に入る外部クレートの著作権表示の一覧（THIRD-PARTY-NOTICES.txt）を Cargo.lock から作り直す（ADR 0032）。
 ## notices-check — 一覧が Cargo.lock の依存と食い違えば落とす。依存を変えたら notices で作り直す。
