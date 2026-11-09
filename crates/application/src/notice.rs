@@ -4,6 +4,7 @@ use nene_ledger_core::dialect::Dialect;
 
 use crate::columns_notice::ColumnsNotice;
 use crate::find_notice::FindNotice;
+use crate::format_summary::FormatSummary;
 use crate::paste_notice::PasteNotice;
 use crate::read_only_notice::ReadOnlyNotice;
 use crate::replace_notice::ReplaceNotice;
@@ -50,8 +51,17 @@ pub enum Notice {
         /// 固定した列の数。
         columns: usize,
     },
-    /// 保存した。
-    Saved,
+    /// 保存した。書き換えたセルの数 `cells`、行か列の並びも変えたか `arranged`、書いた読み方 `format`（文字コード・区切り・
+    /// 改行は開いたときのまま）を言う。取り込み先へ上げる前に、形が変わっていないと確かめられる（EC のペルソナの相談・
+    /// GitHub Issue #397）。
+    Saved {
+        /// 書き換えたセルの数。
+        cells: u64,
+        /// 行か列を足し消し・並べ替えたか。
+        arranged: bool,
+        /// 書いた読み方。
+        format: FormatSummary,
+    },
     /// 1 手元に戻した（書き換えたセルの数）。
     Undone(usize),
     /// 1 手やり直した（書き換えたセルの数）。
