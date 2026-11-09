@@ -4820,11 +4820,19 @@ impl Document {
     ) -> Vec<DrawCommand> {
         let cursor = self.selection.cursor();
         let name = self.column_name(self.source_column(cursor.column()));
+        let shape = self.expected_columns().and_then(|expected| {
+            self.view_row(cursor.body())
+                .filter(|row| matches!(row.row(), RowId::Source(_)))
+                .map(|row| row.cells().len())
+                .filter(|&cells| cells != expected)
+                .map(|cells| (cells, expected))
+        });
         let place = DetailPlace::new(
             self.line_of(cursor.body()),
             self.source_column(cursor.column()),
             name.as_deref(),
-        );
+        )
+        .with_shape(shape);
         DetailPainter::new(pane, metrics, palette, self.format.format().encoding())
             .paint(place, self.detail_content())
     }
@@ -4989,7 +4997,17 @@ impl Document {
             .with_edits(&self.edits)
             .with_editing(editing.as_ref())
             .with_found(found)
+            .with_expected(self.expected_columns())
             .paint(self.header(), self.column_numbers().as_ref(), &self.view)
+    }
+
+    /// 本体の行が持つはずのセルの数（GitHub Issue #317）。見出しの行（の 1 行目）のセルの数。見出しが無いか、列を足し消し
+    /// していれば `None`（並べ直した行のセルの数は原本の数と違う）。
+    fn expected_columns(&self) -> Option<usize> {
+        if !self.columns.is_whole() {
+            return None;
+        }
+        self.header.first().map(|row| row.cells().len())
     }
 
     /// まだ使える切り取りの範囲（その後に表が変わっていない）。
@@ -9207,6 +9225,32 @@ mod tests {
     fn again(document: &mut Document, forward: bool) {
         let effect = document.apply(Intent::FindAgain { forward }, normal());
         finish_finding(document, effect);
+    }
+
+    /// 列の数が見出しと違う行にカーソルがあれば、詳細ペインの見出しにそう出す（GitHub Issue #317）。
+    #[test]
+    fn the_detail_pane_says_when_a_row_has_another_number_of_cells() {
+        let rows = table(&[&["id", "name"], &["1", "a"], &["2", "b", "extra"]]);
+        let mut document = closed(Document::open(
+            String::from("t"),
+            summary(),
+            Some(HeaderRows::single(0)),
+            rows,
+        ));
+        let says = |frame: &Frame| {
+            frame.commands().iter().any(|command| match command {
+                DrawCommand::Text { text, .. } => {
+                    text.contains("3 行目（列の数が違う：3 列・見出しは 2 列）")
+                }
+                DrawCommand::Fill { .. }
+                | DrawCommand::Line { .. }
+                | DrawCommand::TextSpan { .. } => false,
+            })
+        };
+        document.detail = DetailPane::Open;
+        assert!(!says(&document.frame(normal(), palette())));
+        document.apply(moving(CursorStep::Down), normal());
+        assert!(says(&document.frame(normal(), palette())));
     }
 
     /// 見つけたセルが表に重なった面（開いている検索の箱）の下に入るなら、面の下へ出るまで表を送る。面と横に重ならない

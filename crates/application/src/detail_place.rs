@@ -7,6 +7,8 @@ pub(crate) struct DetailPlace<'header> {
     record: u64,
     column: usize,
     name: Option<&'header str>,
+    /// 行のセルの数が見出しと違えば（この行のセルの数・見出しのセルの数）（GitHub Issue #317）。
+    shape: Option<(usize, usize)>,
 }
 
 impl<'header> DetailPlace<'header> {
@@ -15,7 +17,17 @@ impl<'header> DetailPlace<'header> {
             record,
             column,
             name,
+            shape: None,
         }
+    }
+
+    /// 行のセルの数 `cells` が見出しのセルの数 `expected` と違うことを添える。
+    pub(crate) fn with_shape(self, shape: Option<(usize, usize)>) -> Self {
+        Self { shape, ..self }
+    }
+
+    pub(crate) fn shape(self) -> Option<(usize, usize)> {
+        self.shape
     }
 
     pub(crate) fn record(self) -> u64 {
