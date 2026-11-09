@@ -5,6 +5,7 @@ use core::ops::Range;
 use nene_ledger_application::cell_row::CellRow;
 use nene_ledger_application::clipboard_text::ClipboardText;
 use nene_ledger_application::close_state::CloseState;
+use nene_ledger_application::command_id::CommandId;
 use nene_ledger_application::command_palette::CommandPalette;
 use nene_ledger_application::cut_record::CutRecord;
 use nene_ledger_application::document::{Document, MAX_PASTE_CELLS};
@@ -81,6 +82,8 @@ pub(crate) struct Viewer {
     replacing: Option<SplitJob<ReplaceFold>>,
     /// 前に置き換えた文字（次に置換の欄を開くときに入れておく）。
     replacement: String,
+    /// パレットで最近使った操作（新しい順・この窓の間だけ・GitHub Issue #309）。
+    recent_commands: Vec<CommandId>,
     /// 検索と置換の欄が開いている間の、表の印の問い（欄の文字と条件が変わったときだけ作り直す・描くたびに正規表現を
     /// 組み立てない・GitHub Issue #189）。
     found: Option<FindQuery>,
@@ -116,6 +119,7 @@ impl Viewer {
             finding: None,
             replacing: None,
             replacement: String::new(),
+            recent_commands: Vec::new(),
             found: None,
             trial: None,
             saving: None,
@@ -525,7 +529,10 @@ impl Viewer {
         } else if intent == Intent::OpenGoTo {
             self.palette = Some(OpenPalette::new(CommandPalette::open_go_to(), colors));
         } else if intent == Intent::OpenPalette {
-            self.palette = Some(OpenPalette::new(CommandPalette::open(), colors));
+            self.palette = Some(OpenPalette::new(
+                CommandPalette::open_with_recent(&self.recent_commands),
+                colors,
+            ));
         } else {
             return false;
         }
@@ -738,6 +745,11 @@ impl Viewer {
         let open = self.palette.as_mut()?;
         let before = open.state().find_options();
         let outcome = palette_outcome(open, intent, view, current);
+        // 決めた操作を覚えておく（次に開く一覧の上・GitHub Issue #309）。
+        // 最近使った操作は一覧から開いたパレットだけが持つ（Ctrl+F などで開いたものは空なので写さない）。
+        if !open.state().recent().is_empty() {
+            self.recent_commands = open.state().recent().to_vec();
+        }
         // 検索の条件が変わったら、次の起動でも同じ条件にする（ADR 0030 の決定 3・GitHub Issue #213）。条件を変えられるのは
         // 検索と置換の段だけなので、ほかの段の Alt+C などで既定に戻ることはない。
         let after = open.state().find_options();

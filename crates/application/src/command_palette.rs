@@ -20,7 +20,7 @@ use crate::palette_layout::PaletteLayout;
 use crate::palette_mode::PaletteMode;
 use crate::palette_outcome::PaletteOutcome;
 use crate::palette_painter::PalettePainter;
-use crate::palette_search::{self, commands, key_list, readings, themes};
+use crate::palette_search::{self, commands_with_recent, key_list, readings, themes};
 use crate::reading_aspect::ReadingAspect;
 use crate::reading_choice::ReadingChoice;
 use crate::window_view::WindowView;
@@ -45,7 +45,12 @@ pub struct CommandPalette {
     /// 探す欄の文字を全部選んでいるか（前に探した文字を入れて開いたとき）。打てば置き換わり、Backspace で消える
     /// （Excel・VS Code と同じ・GitHub Issue #287）。ほかのキーで選びを外す。
     whole_selected: bool,
+    /// 最近使った操作（新しい順・多くて `RECENT` 個・GitHub Issue #309）。何も打っていない操作の一覧の上に出す。
+    recent: Vec<CommandId>,
 }
+
+/// 覚えておく最近使った操作の数。
+pub const RECENT: usize = 5;
 
 impl CommandPalette {
     /// 飛ぶ先を打つ段で開く（Ctrl+G・Issue #54）。
@@ -60,6 +65,7 @@ impl CommandPalette {
             replacement: String::new(),
             low: false,
             whole_selected: false,
+            recent: Vec::new(),
         }
     }
 
@@ -76,6 +82,7 @@ impl CommandPalette {
             replacement: String::new(),
             low: false,
             whole_selected: !text.is_empty(),
+            recent: Vec::new(),
         }
     }
 
@@ -93,6 +100,7 @@ impl CommandPalette {
             replacement: String::from(replacement),
             low: false,
             whole_selected: !text.is_empty(),
+            recent: Vec::new(),
         }
     }
 
@@ -116,6 +124,21 @@ impl CommandPalette {
         ) {
             self.whole_selected = false;
         }
+    }
+
+    /// 操作の一覧で開く（Ctrl+Shift+P）。最近使った操作 `recent`（新しい順）を、何も打っていない一覧の上に出す
+    /// （GitHub Issue #309）。
+    #[must_use]
+    pub fn open_with_recent(recent: &[CommandId]) -> Self {
+        let mut palette = Self::open();
+        palette.recent = recent.iter().copied().take(RECENT).collect();
+        palette
+    }
+
+    /// 最近使った操作（新しい順）。決めた操作を頭に足したもの。合成ルートが次に開くときに渡す。
+    #[must_use]
+    pub fn recent(&self) -> &[CommandId] {
+        &self.recent
     }
 
     /// 欄を押した（`with` は置換の段の置き換える欄）。置換の段ならその欄へ打つ先を移し、全部の選びを外す
@@ -202,6 +225,7 @@ impl CommandPalette {
             replacement: String::new(),
             low: false,
             whole_selected: false,
+            recent: Vec::new(),
         }
     }
 
@@ -225,6 +249,7 @@ impl CommandPalette {
             replacement: String::new(),
             low: false,
             whole_selected: false,
+            recent: Vec::new(),
         }
     }
 
@@ -244,7 +269,7 @@ impl CommandPalette {
     #[must_use]
     pub fn items(&self) -> Vec<PaletteItem> {
         match self.mode {
-            PaletteMode::Commands => commands(&self.query),
+            PaletteMode::Commands => commands_with_recent(&self.query, &self.recent),
             // 飛ぶ先は候補ではなく、打った番号そのもの。
             // 飛ぶ先と保存先は候補ではなく、打った文字列そのもの。
             PaletteMode::GoTo
@@ -678,6 +703,10 @@ impl CommandPalette {
 
     /// 操作 `command` で決める。意図があれば実行し、2 段目のある操作はその段へ入る（読み方と判別の候補は合成ルートが候補を渡す）。
     fn choose(&mut self, command: CommandId, current_theme: usize) -> PaletteOutcome {
+        // 最近使った操作の頭へ（同じ操作は 1 つだけ・GitHub Issue #309）。
+        self.recent.retain(|&seen| seen != command);
+        self.recent.insert(0, command);
+        self.recent.truncate(RECENT);
         if let Some(intent) = command.intent() {
             return PaletteOutcome::Run(intent);
         }
@@ -910,6 +939,40 @@ mod tests {
         );
         // 開いている間の他のキーは表に届かない。
         assert_eq!(palette.handle(Intent::Copy, 0), PaletteOutcome::Stay);
+    }
+
+    /// 決めた操作は最近使った操作の頭へ入り（同じ操作は 1 つ・多くて 5 つ）、次に開いた一覧の上に出る（GitHub Issue #309）。
+    #[test]
+    fn chosen_commands_become_recent() {
+        let mut palette = CommandPalette::open_with_recent(&[CommandId::Copy, CommandId::Undo]);
+        typed(&mut palette, "chikan");
+        assert!(matches!(
+            palette.handle(Intent::Confirm, 0),
+            PaletteOutcome::Run(_)
+        ));
+        assert_eq!(
+            palette.recent(),
+            &[CommandId::Replace, CommandId::Copy, CommandId::Undo]
+        );
+        let many = [
+            CommandId::Top,
+            CommandId::Bottom,
+            CommandId::GoTo,
+            CommandId::SelectAll,
+            CommandId::SelectRows,
+            CommandId::Copy,
+        ];
+        let mut full = CommandPalette::open_with_recent(&many);
+        assert_eq!(full.recent().len(), RECENT);
+        typed(&mut full, "copy");
+        let _run = full.handle(Intent::Confirm, 0);
+        assert_eq!(full.recent().first(), Some(&CommandId::Copy));
+        assert_eq!(full.recent().len(), RECENT);
+        let again = CommandPalette::open_with_recent(full.recent());
+        assert_eq!(
+            again.items().first(),
+            Some(&PaletteItem::Command(CommandId::Copy))
+        );
     }
 
     /// 今の段を開くキーは閉じ、ほかの段のキーは閉じずにその段で開き直す（GitHub Issue #290）。

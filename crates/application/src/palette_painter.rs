@@ -488,6 +488,18 @@ impl<'state> PalettePainter<'state> {
         self.text_at(from_left(row, left), text, color);
     }
 
+    /// 操作の行の右の字：キー。何も打っていない一覧の上の最近使った操作には「最近」を添える（GitHub Issue #309）。
+    fn command_aside(&self, command: CommandId) -> String {
+        let keys = command.keys().unwrap_or("");
+        let recent =
+            self.palette.query().trim().is_empty() && self.palette.recent().contains(&command);
+        match (recent, keys.is_empty()) {
+            (true, true) => String::from("最近"),
+            (true, false) => format!("最近 · {keys}"),
+            (false, _) => String::from(keys),
+        }
+    }
+
     /// 候補の 1 行。選んでいれば選択の色で塗り、左に強調の色の帯（色だけに頼らない）。
     fn row(&mut self, slot: usize, item: PaletteItem, detail: DetailPane) {
         let row = self.layout.row(slot);
@@ -505,7 +517,7 @@ impl<'state> PalettePainter<'state> {
         let (name, aside) = match item {
             PaletteItem::Command(command) => (
                 String::from(command.name(detail)),
-                String::from(command.keys().unwrap_or("")),
+                self.command_aside(command),
             ),
             PaletteItem::Reading(choice) => (
                 choice.name(),
