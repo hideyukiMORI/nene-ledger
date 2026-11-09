@@ -5830,9 +5830,13 @@ mod tests {
         let frame = document().frame(normal(), palette());
         assert_eq!(fills(&frame, palette().title_bar()).len(), 1);
         let (baseline, clip) = text_at(&frame, "a.csv — NeNe Ledger");
-        // 題名は左から半角 1.5 字。縦は 28 の余り 12 の半分 6 ＋ ascent 12。ボタン 3 つ（42 × 3）と右の縁の線の左で切る。
-        assert_eq!(baseline, PixelPoint::new(12, 6 + 12));
-        assert_eq!(clip.size(), PixelSize::new(400 - 1 - 126, 28));
+        // 左端に「≡ 操作」（半角 9 桁＝72・字は左から半角 1.5 字）。題名はその右から半角 1.5 字。縦は 28 の余り 12 の
+        // 半分 6 ＋ ascent 12。ボタン 3 つ（42 × 3）と右の縁の線の左で切る（GitHub Issue #446）。
+        let (menu, menu_clip) = text_at(&frame, crate::chrome_painter::MENU_LABEL);
+        assert_eq!(menu, PixelPoint::new(12, 6 + 12));
+        assert_eq!(menu_clip.size(), PixelSize::new(72, 28));
+        assert_eq!(baseline, PixelPoint::new(72 + 12, 6 + 12));
+        assert_eq!(clip.size(), PixelSize::new(400 - 1 - 126 - 72, 28));
         // 印の線は最小化 1・最大化 4・閉じる 2。指が乗っていないので背景を塗らない。
         assert_eq!(line_colors(&frame), vec![palette().title_text(); 7]);
         assert!(fills(&frame, palette().button_hover()).is_empty());
@@ -6707,13 +6711,14 @@ mod tests {
     fn rules_separate_the_title_bar_and_the_status_line() {
         let frame = document().frame(normal(), palette());
         // タイトルバー（高さ 28）の最後の 1 画素に区切り。状態の行（中身の下・y = 274）の上端に罫線。
+        // 「≡ 操作」と題名の間の縦の線（上下 7 を空ける・GitHub Issue #446）も同じ色。
         let title = fills(&frame, palette().chrome_rule());
         assert_eq!(
             title,
-            vec![PixelRect::new(
-                PixelPoint::new(0, 27),
-                PixelSize::new(400, 1)
-            )]
+            vec![
+                PixelRect::new(PixelPoint::new(71, 7), PixelSize::new(1, 14)),
+                PixelRect::new(PixelPoint::new(0, 27), PixelSize::new(400, 1))
+            ]
         );
         assert!(fills(&frame, palette().grid()).contains(&PixelRect::new(
             PixelPoint::new(1, 274),

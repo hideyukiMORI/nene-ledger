@@ -17,6 +17,8 @@ use crate::chrome_icon::ChromeIcon;
 
 /// タイトルバーの下の区切りの線の太さ（画素・100% のとき）。
 const TITLE_RULE: u32 = 1;
+/// タイトルバーの左端の、操作の一覧を開くボタンの字（GitHub Issue #446）。
+pub(crate) const MENU_LABEL: &str = "≡ 操作";
 use crate::window_view::WindowView;
 
 /// 窓の飾りの描画命令を、描く順に積む。
@@ -47,10 +49,16 @@ impl ChromePainter {
         });
         let metrics = self.view.metrics();
         let spare = band.size().height().saturating_sub(metrics.line_height());
+        let baseline_y = (spare / 2).saturating_add(metrics.ascent());
+        self.menu(baseline_y);
+        let caption = self.chrome.caption();
         self.commands.push(DrawCommand::Text {
             baseline: PixelPoint::new(
-                metrics.half_width().saturating_mul(3) / 2,
-                (spare / 2).saturating_add(metrics.ascent()),
+                caption
+                    .origin()
+                    .x()
+                    .saturating_add(metrics.half_width().saturating_mul(3) / 2),
+                baseline_y,
             ),
             text: String::from(title),
             color: self.palette.title_text(),
@@ -71,6 +79,45 @@ impl ChromePainter {
             color: self.palette.chrome_rule(),
         });
         self.commands
+    }
+
+    /// 左端の「≡ 操作」のボタン（押せば操作の一覧を開く・GitHub Issue #446）。右に題名との区切りの細い線。
+    fn menu(&mut self, baseline_y: u32) {
+        let metrics = self.view.metrics();
+        let menu = self.chrome.menu();
+        if menu.size().width() == 0 {
+            return;
+        }
+        self.commands.push(DrawCommand::Text {
+            baseline: PixelPoint::new(
+                menu.origin()
+                    .x()
+                    .saturating_add(metrics.half_width().saturating_mul(3) / 2),
+                baseline_y,
+            ),
+            text: String::from(MENU_LABEL),
+            color: self.palette.title_text(),
+            clip: menu,
+            role: TextRole::Chrome,
+        });
+        let line = metrics.px(TITLE_RULE);
+        let inset = menu.size().height() / 4;
+        self.commands.push(DrawCommand::Fill {
+            rect: PixelRect::new(
+                PixelPoint::new(
+                    menu.origin()
+                        .x()
+                        .saturating_add(menu.size().width())
+                        .saturating_sub(line),
+                    inset,
+                ),
+                PixelSize::new(
+                    line,
+                    menu.size().height().saturating_sub(inset.saturating_mul(2)),
+                ),
+            ),
+            color: self.palette.chrome_rule(),
+        });
     }
 
     /// 窓の縁の線の命令。最大化している間は無い。中身の後に重ねる。

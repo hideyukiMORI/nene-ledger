@@ -17,6 +17,8 @@ pub const RESIZE_EDGE: u32 = 6;
 pub const RESIZE_CORNER: u32 = 16;
 /// 窓の縁の線の太さ（物理画素）。最大化している間は引かない。
 pub const BORDER_LINE: u32 = 1;
+/// 「≡ 操作」の表示の桁（半角）。
+const MENU_COLUMNS: u32 = 6;
 
 /// 窓の飾りの配置。上にタイトルバー（右端に最小化・最大化・閉じる）、その下が中身。縁は中身の内側に重なる見えない帯（ADR 0013）。
 ///
@@ -26,6 +28,8 @@ pub struct WindowChrome {
     size: PixelSize,
     title_height: u32,
     button_width: u32,
+    /// 左端の「≡ 操作」のボタンの幅（GitHub Issue #446）。
+    menu_width: u32,
     placement: WindowPlacement,
     scale: DisplayScale,
 }
@@ -43,6 +47,11 @@ impl WindowChrome {
             size,
             title_height,
             button_width: title_height.saturating_mul(3).div_ceil(2),
+            // 「≡ 操作」は半角 6 桁。左右に半角 1.5 桁ずつの余白。
+            menu_width: metrics
+                .half_width()
+                .saturating_mul(MENU_COLUMNS + 3)
+                .min(size.width() / 3),
             placement,
             scale: metrics.scale(),
         }
@@ -78,13 +87,24 @@ impl WindowChrome {
         )
     }
 
-    /// 題名を書く所（タイトルバーの、ボタンより左）。
+    /// 題名を書く所（タイトルバーの、左の「≡ 操作」より右で、ボタンより左）。
     #[must_use]
     pub fn caption(self) -> PixelRect {
+        let left = self.menu().size().width();
         let left_of_buttons = self.button(ChromeButton::Minimize).origin().x();
         PixelRect::new(
+            PixelPoint::new(left, 0),
+            PixelSize::new(left_of_buttons.saturating_sub(left), self.title_height),
+        )
+    }
+
+    /// タイトルバーの左端の「≡ 操作」のボタン（押せば操作の一覧を開く・マウスで探す人の入口・施主・GitHub Issue
+    /// #446）。OS のボタンではないので、当たり判定は中身（`ChromeHit::Client`）で、押した所をアプリが判じる。
+    #[must_use]
+    pub fn menu(self) -> PixelRect {
+        PixelRect::new(
             PixelPoint::new(0, 0),
-            PixelSize::new(left_of_buttons, self.title_height),
+            PixelSize::new(self.menu_width, self.title_height),
         )
     }
 
@@ -143,11 +163,20 @@ impl WindowChrome {
         if point.y() >= self.title_height {
             return ChromeHit::Client;
         }
+        // 狭い窓で重なれば右のボタンが勝つ。左端の「≡ 操作」は中身として当てる（アプリが判じる）。
+        let menu = contains(self.menu(), point);
         ChromeButton::ALL
             .into_iter()
             .rev()
             .find(|&button| contains(self.button(button), point))
-            .map_or(ChromeHit::Caption, ChromeHit::Button)
+            .map_or(
+                if menu {
+                    ChromeHit::Client
+                } else {
+                    ChromeHit::Caption
+                },
+                ChromeHit::Button,
+            )
     }
 
     /// `point` が見えない縁に当たれば、その向き。辺の端から `RESIZE_CORNER` までは角にする。
@@ -215,7 +244,6 @@ mod tests {
             normal.button(ChromeButton::Minimize).origin().x(),
             800 - 1 - 126
         );
-        assert_eq!(normal.caption().size(), PixelSize::new(800 - 1 - 126, 28));
         let maximized = chrome(WindowPlacement::Maximized);
         assert_eq!(maximized.button(ChromeButton::Close).origin().x(), 800 - 42);
         assert_eq!(maximized.placement(), WindowPlacement::Maximized);
@@ -310,10 +338,25 @@ mod tests {
         assert_eq!(hit(normal, 2, 10), ChromeHit::Edge(ResizeEdge::TopLeft));
     }
 
+    /// 左端に「≡ 操作」（半角 9 桁＝72）。題名はその右から（GitHub Issue #446）。
+    #[test]
+    fn the_menu_sits_at_the_left_and_the_caption_follows() {
+        let normal = chrome(WindowPlacement::Normal);
+        assert_eq!(normal.menu().size(), PixelSize::new(72, 28));
+        assert_eq!(normal.caption().origin(), PixelPoint::new(72, 0));
+        assert_eq!(
+            normal.caption().size(),
+            PixelSize::new(800 - 1 - 126 - 72, 28)
+        );
+    }
+
     #[test]
     fn a_maximized_window_has_no_edges() {
         let maximized = chrome(WindowPlacement::Maximized);
-        assert_eq!(hit(maximized, 0, 0), ChromeHit::Caption);
+        // 左端の「≡ 操作」は中身として当たり、その右からがタイトルバー（GitHub Issue #446）。
+        assert_eq!(hit(maximized, 0, 0), ChromeHit::Client);
+        assert_eq!(hit(maximized, 71, 27), ChromeHit::Client);
+        assert_eq!(hit(maximized, 72, 0), ChromeHit::Caption);
         assert_eq!(
             hit(maximized, 799, 2),
             ChromeHit::Button(ChromeButton::Close)
