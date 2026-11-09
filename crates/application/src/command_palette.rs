@@ -2,6 +2,7 @@
 
 use alloc::string::String;
 use alloc::vec::Vec;
+use core::cell::Cell;
 
 use nene_ledger_core::dialect_candidate::DialectCandidate;
 use nene_ledger_core::draw_command::DrawCommand;
@@ -51,6 +52,9 @@ pub struct CommandPalette {
     recent: Vec<CommandId>,
     /// 検索と置換で照らす列の名札（「範囲：販売価格」・列を選んで開いたとき・GitHub Issue #411）。
     scope: Option<String>,
+    /// 見せている最初の候補の番目（前に描いたときのもの）。選びが見せている所の中にある間は動かさない。配置
+    /// （`PaletteLayout`）が描くたびに直して覚え直す（GitHub Issue #434）。
+    top: Cell<usize>,
 }
 
 /// 候補 `items` の `index` 番目から、`forward` の向きに見て最初の選べる候補（見出しでない）の番目。無ければ `None`。
@@ -83,6 +87,7 @@ impl CommandPalette {
             whole_selected: false,
             recent: Vec::new(),
             scope: None,
+            top: Cell::new(0),
         }
     }
 
@@ -101,6 +106,7 @@ impl CommandPalette {
             whole_selected: !text.is_empty(),
             recent: Vec::new(),
             scope: None,
+            top: Cell::new(0),
         }
     }
 
@@ -120,6 +126,7 @@ impl CommandPalette {
             whole_selected: !text.is_empty(),
             recent: Vec::new(),
             scope: None,
+            top: Cell::new(0),
         }
     }
 
@@ -127,6 +134,17 @@ impl CommandPalette {
     pub fn set_replacement(&mut self, text: &str) {
         self.replacement.clear();
         self.replacement.push_str(text);
+    }
+
+    /// 前に描いたときに見せていた最初の候補の番目（GitHub Issue #434）。
+    #[must_use]
+    pub fn top(&self) -> usize {
+        self.top.get()
+    }
+
+    /// 見せている最初の候補の番目を覚える（配置が決めた値・GitHub Issue #434）。
+    pub fn remember_top(&self, first: usize) {
+        self.top.set(first);
     }
 
     /// 検索と置換で照らす列の名札（`None` なら全部の列）。
@@ -257,6 +275,7 @@ impl CommandPalette {
             whole_selected: false,
             recent: Vec::new(),
             scope: None,
+            top: Cell::new(0),
         }
     }
 
@@ -282,6 +301,7 @@ impl CommandPalette {
             whole_selected: false,
             recent: Vec::new(),
             scope: None,
+            top: Cell::new(0),
         }
     }
 
@@ -650,8 +670,8 @@ impl CommandPalette {
         self.landed(&items, current, wanted)
     }
 
-    /// ホイール `scroll` で選びを行の数だけ動かす（見えている所は選びに付いてくる）。端で止まり、回らない。横のホイールは
-    /// 何もしない（GitHub Issue #432）。
+    /// ホイール `scroll` で選びを行の数だけ動かす（見えている所は、選びが外へ出たときだけ送る）。端でいったん止まり、端で
+    /// もう 1 度回せば反対の端へ回る。横のホイールは何もしない（GitHub Issue #432・#434）。
     fn wheel(&mut self, scroll: Scroll) -> PaletteOutcome {
         let (rows, down) = match scroll {
             Scroll::Up { rows } => (rows, false),
@@ -660,6 +680,15 @@ impl CommandPalette {
         };
         let items = self.items();
         let current = self.selected();
+        // 端にいるときにもう 1 度回したら反対の端へ回る。勢いで回っても端でいったん止まる（施主・GitHub Issue #434）。
+        let first = selectable_from(&items, 0, true).unwrap_or(0);
+        let final_item = selectable_from(&items, items.len().saturating_sub(1), false).unwrap_or(0);
+        if down && current >= final_item {
+            return self.retarget(first);
+        }
+        if !down && current <= first {
+            return self.retarget(final_item);
+        }
         let rows = usize::try_from(rows).unwrap_or(usize::MAX);
         let wanted = if down {
             current
@@ -1270,7 +1299,7 @@ mod tests {
         assert_eq!(palette.click(0, 0), PaletteOutcome::Stay);
     }
 
-    /// ホイールは選びを行の数だけ動かし、見出しを飛ばし、端で止まって回らない（GitHub Issue #432）。
+    /// ホイールは選びを行の数だけ動かし、見出しを飛ばし、端でいったん止まってから回る（GitHub Issue #432・#434）。
     #[test]
     fn the_wheel_moves_the_selection_and_stops_at_the_ends() {
         let mut palette = CommandPalette::open();
@@ -1287,13 +1316,14 @@ mod tests {
         // 横のホイールは何もしない。
         palette.handle(Intent::Scroll(Scroll::Right { columns: 3 }), 0);
         assert_eq!(palette.selected(), 7);
+        // 勢いよく回しても端でいったん止まり、端でもう 1 度回せば反対の端へ（GitHub Issue #434）。
         palette.handle(Intent::Scroll(Scroll::Down { rows: 1_000 }), 0);
         assert_eq!(palette.selected(), last);
         palette.handle(Intent::Scroll(Scroll::Down { rows: 3 }), 0);
-        assert_eq!(palette.selected(), last);
-        palette.handle(Intent::Scroll(Scroll::Up { rows: 1_000 }), 0);
         assert_eq!(palette.selected(), 1);
         palette.handle(Intent::Scroll(Scroll::Up { rows: 3 }), 0);
+        assert_eq!(palette.selected(), last);
+        palette.handle(Intent::Scroll(Scroll::Up { rows: 1_000 }), 0);
         assert_eq!(palette.selected(), 1);
     }
 
