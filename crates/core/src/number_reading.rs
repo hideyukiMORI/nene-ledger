@@ -46,6 +46,19 @@ pub fn read_number(text: &str) -> Option<Decimal> {
     Some(if negative { negate(number) } else { number })
 }
 
+/// 値 `text` が、書き換えずにそのまま数と読める素の形か（`-12`・`0012`・`3.5`：半角の数字と、頭の `-` 1 つと、小数点
+/// 1 つだけ）。[`read_number`] が数と読む値のうちこれでないもの（`¥3`・`1,200`・`1.5e3`・`▲100`・全角）は、書き方を
+/// 読み替えて数にした値（集計がそう添える・GitHub Issue #319）。
+#[must_use]
+pub fn is_plain_number(text: &str) -> bool {
+    let digits = text.strip_prefix('-').unwrap_or(text);
+    let (whole, fraction) = digits.split_once('.').unwrap_or((digits, "0"));
+    !whole.is_empty()
+        && !fraction.is_empty()
+        && whole.bytes().all(|byte| byte.is_ascii_digit())
+        && fraction.bytes().all(|byte| byte.is_ascii_digit())
+}
+
 /// 全角の空白。
 const IDEOGRAPHIC_SPACE: char = '\u{3000}';
 
@@ -248,5 +261,23 @@ mod tests {
         // 38 桁を超える数は読まない。
         assert_eq!(read_number(&"9".repeat(39)), None);
         assert!(read_number(&"9".repeat(38)).is_some());
+    }
+
+    /// 素の数の形と、読み替えて数にする形を分ける（GitHub Issue #319）。
+    #[test]
+    fn plain_numbers_are_told_apart_from_rewritten_ones() {
+        for plain in ["0", "-12", "0012", "3.5", "-0.25"] {
+            assert!(is_plain_number(plain), "{plain}");
+            assert!(read_number(plain).is_some());
+        }
+        for rewritten in [
+            "¥3", "1,200", "1.5e3", "▲100", "(100)", "１２", " 12", "+5", "12円",
+        ] {
+            assert!(!is_plain_number(rewritten), "{rewritten}");
+            assert!(read_number(rewritten).is_some(), "{rewritten}");
+        }
+        for neither in ["", "-", ".5", "5.", "abc", "1.2.3"] {
+            assert!(!is_plain_number(neither), "{neither}");
+        }
     }
 }
