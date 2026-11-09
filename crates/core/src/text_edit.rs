@@ -120,6 +120,15 @@ impl TextEdit {
         self.with_caret(TextCaret::new(cursor, anchor))
     }
 
+    /// カーソルを `index` 字目の前（値の字の数までに収める）へ置いた状態。`extend` なら起点を残して選択を広げ、
+    /// そうでなければ畳む（押した所・Shift+押す・ドラッグ・GitHub Issue #460）。
+    #[must_use]
+    pub fn placed(&self, index: usize, extend: bool) -> Self {
+        let cursor = index.min(self.char_count());
+        let anchor = if extend { self.caret.anchor() } else { cursor };
+        self.with_caret(TextCaret::new(cursor, anchor))
+    }
+
     /// Backspace。選択があればそれを、無ければカーソルの左の 1 字を消した状態。
     #[must_use]
     pub fn backspaced(&self) -> Self {
@@ -366,6 +375,17 @@ mod tests {
         let edit = TextEdit::showing("ab").typed('\n').typed('c');
         assert_eq!(edit.text(), "ab\nc");
         assert_eq!(edit.line_count(), 2);
+    }
+
+    /// 押した所へ置く：値の字の数までに収め、Shift なら起点を残して広げる（GitHub Issue #460）。
+    #[test]
+    fn the_caret_is_placed_where_pressed_and_can_extend() {
+        let edit = TextEdit::showing("abcdef");
+        let placed = edit.placed(2, false);
+        assert_eq!(placed.caret(), TextCaret::new(2, 2));
+        let extended = placed.placed(5, true);
+        assert_eq!(extended.caret(), TextCaret::new(5, 2));
+        assert_eq!(extended.placed(99, false).caret(), TextCaret::new(6, 6));
     }
 
     #[test]

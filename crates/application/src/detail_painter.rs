@@ -14,6 +14,7 @@ use nene_ledger_core::pixel_point::PixelPoint;
 use nene_ledger_core::pixel_rect::PixelRect;
 use nene_ledger_core::pixel_size::PixelSize;
 use nene_ledger_core::table_layout::{GRID_LINE, TableLayout};
+use nene_ledger_core::text_caret::TextCaret;
 use nene_ledger_core::text_encoding::TextEncoding;
 use nene_ledger_core::text_role::TextRole;
 
@@ -23,7 +24,7 @@ use crate::detail_content::DetailContent;
 use crate::detail_place::DetailPlace;
 use crate::shown_body::ShownBody;
 use crate::status_line::{byte_encoding_name, group_digits};
-use crate::text_wrap::{caret_place, wrap};
+use crate::text_wrap::{caret_place, index_at, wrap};
 
 /// 本文の左の帯の太さ（カーソルの枠と同じ青。このペインがカーソルのセルの拡大だと示す）。
 const BAR: u32 = 3;
@@ -51,8 +52,8 @@ pub(crate) struct DetailPainter {
     commands: Vec<DrawCommand>,
     /// 本文の見せる最初の行（折り返した行の番目・GitHub Issue #454）。
     scroll: usize,
-    /// ペインで直している間の、カーソルの棒の前の字の数（本文の値の中・GitHub Issue #458）。
-    caret: Option<usize>,
+    /// ペインで直している間のカーソル（棒の前の字の数と選択・本文の値の中・GitHub Issue #458・#460）。
+    caret: Option<TextCaret>,
 }
 
 impl DetailPainter {
@@ -74,9 +75,9 @@ impl DetailPainter {
         }
     }
 
-    /// ペインで直している：本文の `caret` 字目の前にカーソルの棒を描き、棒が見えるように本文を動かし、見出しの行に
-    /// 直し方を出す（GitHub Issue #458）。
-    pub(crate) fn with_caret(self, caret: Option<usize>) -> Self {
+    /// ペインで直している：本文の `caret` の字の前にカーソルの棒を描き、選んだ字の下を選択の色で塗り、棒が見えるように
+    /// 本文を動かし、見出しの行に直し方を出す（GitHub Issue #458・#460）。
+    pub(crate) fn with_caret(self, caret: Option<TextCaret>) -> Self {
         Self { caret, ..self }
     }
 
@@ -178,30 +179,25 @@ impl DetailPainter {
     /// 本文。値を折り返して、`scroll` 行目からペインの高さに入る行の数まで（`ClientBands::body_lines`）。下に続きが
     /// あれば最後の行で残りの行の数を言い、右にスクロールバーを出す（GitHub Issue #454）。値が無いときは断り書き。
     fn body(&mut self, top: u32, content: DetailContent<'_>) {
-        let width = self.pane.size().width();
-        let text_width = width
-            .saturating_sub(self.metrics.px(TEXT_LEFT))
-            .saturating_sub(self.metrics.px(RIGHT_PADDING));
-        let columns = text_width / self.metrics.half_width().max(1);
+        let text_width = text_width(self.pane, self.metrics);
+        let columns = text_columns(self.pane, self.metrics);
         let room = ClientBands::body_lines(self.pane.size().height(), self.metrics);
         let limit = usize::try_from(room).unwrap_or(usize::MAX);
         // 直している間は、カーソルの棒の行が見えるように本文を動かす。
-        let caret_place = self.caret.and_then(|caret| match content {
-            DetailContent::Value(value) => Some(caret_place(value, columns, caret)),
+        let editing = self.caret.zip(match content {
+            DetailContent::Value(value) => Some(value),
             DetailContent::Cut { .. }
             | DetailContent::OutOfView
             | DetailContent::Missing
             | DetailContent::NoRows => None,
         });
-        let scroll = caret_place.map_or(self.scroll, |(row, _)| {
-            self.scroll
-                .min(row)
-                .max(row.saturating_add(1).saturating_sub(limit))
-        });
-        let shown = if caret_place.is_some() {
-            body_lines_for_editing(content, columns, limit, scroll)
-        } else {
-            body_lines(content, columns, limit, scroll)
+        let shown = match editing {
+            Some((caret, value)) => {
+                let first =
+                    editing_first(value, columns, limit, (self.scroll, Some(caret.cursor())));
+                body_lines_for_editing(content, columns, limit, first)
+            }
+            None => body_lines(content, columns, limit, self.scroll),
         };
         let (total, first) = (shown.total(), shown.first());
         let (lines, note) = shown.into_lines();
@@ -211,6 +207,11 @@ impl DetailPainter {
             .x()
             .saturating_add(self.metrics.px(TEXT_LEFT));
         let line = ClientBands::body_line(self.metrics);
+        if let Some((caret, value)) = editing.filter(|(caret, _)| caret.has_selection()) {
+            let start = caret_place(value, columns, caret.start());
+            let end = caret_place(value, columns, caret.end());
+            self.selection_fills((left, top, line), (&lines, first), (start, end));
+        }
         let mut row_top = top;
         for text in lines {
             self.text_in(
@@ -227,12 +228,45 @@ impl DetailPainter {
                 self.palette.gutter_text(),
             );
         }
-        if let Some(place) = caret_place {
+        if let Some((caret, value)) = editing {
+            let place = caret_place(value, columns, caret.cursor());
             self.caret_bar((left, top, line), place, first);
         }
-
         if total > limit {
             self.scrollbar(top, line.saturating_mul(room), (first, limit, total));
+        }
+    }
+
+    /// 選んだ字（折り返した `start` から `end` の前まで）の下を選択の色で塗る。見せている行 `lines`（`first` 行目から）
+    /// の中だけ。次の行へ続く行は、右に半角 1 つ分も塗る（改行も選んでいる印・GitHub Issue #460）。
+    fn selection_fills(
+        &mut self,
+        (left, top, line): (u32, u32, u32),
+        (lines, first): (&[String], usize),
+        ((start_row, start_column), (end_row, end_column)): ((usize, u32), (usize, u32)),
+    ) {
+        let half = self.metrics.half_width();
+        for (offset, text) in lines.iter().enumerate() {
+            let row = first.saturating_add(offset);
+            if !(start_row..=end_row).contains(&row) {
+                continue;
+            }
+            let from = if row == start_row { start_column } else { 0 };
+            let to = if row == end_row {
+                end_column
+            } else {
+                display_columns(text).saturating_add(1)
+            };
+            let visible = u32::try_from(offset).unwrap_or(u32::MAX);
+            self.fill(
+                area(
+                    left.saturating_add(from.saturating_mul(half)),
+                    top.saturating_add(line.saturating_mul(visible)),
+                    to.saturating_sub(from).saturating_mul(half),
+                    line,
+                ),
+                self.palette.selection(),
+            );
         }
     }
 
@@ -395,15 +429,89 @@ pub(crate) fn body_extent(
     metrics: GlyphMetrics,
     content: DetailContent<'_>,
 ) -> (usize, usize) {
-    let text_width = pane
-        .size()
-        .width()
-        .saturating_sub(metrics.px(TEXT_LEFT))
-        .saturating_sub(metrics.px(RIGHT_PADDING));
-    let columns = text_width / metrics.half_width().max(1);
+    let columns = text_columns(pane, metrics);
     let room = usize::try_from(ClientBands::body_lines(pane.size().height(), metrics))
         .unwrap_or(usize::MAX);
     (body_lines(content, columns, room, 0).total(), room)
+}
+
+/// 直している値 `value` を詳細ペイン（矩形 `pane`）に見せているとき、窓の中の `at`（左・上）に近い字の境目が何字目か
+/// と、見せている最初の行。本文は `scroll` 行目から、カーソルの棒 `caret`（直していなければ `None`）が見えるように
+/// 動かしてある（描くのと同じ規則）。本文より上・下は、見せている行の前・後の行（ドラッグで動かす・GitHub Issue #460）。
+pub(crate) fn pane_index_at(
+    (pane, metrics): (PixelRect, GlyphMetrics),
+    value: &str,
+    shown: (usize, Option<usize>),
+    (x, y): (i64, i64),
+) -> (usize, usize) {
+    let columns = text_columns(pane, metrics);
+    let limit = usize::try_from(ClientBands::body_lines(pane.size().height(), metrics))
+        .unwrap_or(usize::MAX);
+    let first = editing_first(value, columns, limit, shown);
+    let (left, top) = body_origin(pane, metrics);
+    let line = i64::from(ClientBands::body_line(metrics).max(1));
+    let half = i64::from(metrics.half_width().max(1));
+    let rows = y.saturating_sub(i64::from(top)).div_euclid(line);
+    let row = i64::try_from(first)
+        .unwrap_or(i64::MAX)
+        .saturating_add(rows)
+        .max(0);
+    // 字の境目に近い桁（半角の半分で丸める）。
+    let column = x
+        .saturating_sub(i64::from(left))
+        .saturating_add(half / 2)
+        .div_euclid(half)
+        .max(0);
+    let index = index_at(
+        value,
+        columns,
+        usize::try_from(row).unwrap_or(0),
+        u32::try_from(column).unwrap_or(u32::MAX),
+    );
+    (index, first)
+}
+
+/// 直している間に見せる最初の行：`scroll` 行目から、カーソルの棒 `caret` の行が `limit` 行の中に入るよう動かし、
+/// 最後の画面に収める（描くのと押した所を探すのとで同じ・GitHub Issue #458・#460）。
+fn editing_first(
+    value: &str,
+    columns: u32,
+    limit: usize,
+    (scroll, caret): (usize, Option<usize>),
+) -> usize {
+    let total = wrap(value, columns, usize::MAX).lines().len();
+    let scroll = caret.map_or(scroll, |caret| {
+        let (row, _) = caret_place(value, columns, caret);
+        scroll
+            .min(row)
+            .max(row.saturating_add(1).saturating_sub(limit))
+    });
+    scroll.min(total.saturating_sub(limit))
+}
+
+/// 本文の字の左端と、最初の行の上端（窓の中）。
+fn body_origin(pane: PixelRect, metrics: GlyphMetrics) -> (u32, u32) {
+    (
+        pane.origin().x().saturating_add(metrics.px(TEXT_LEFT)),
+        pane.origin()
+            .y()
+            .saturating_add(metrics.px(DETAIL_RULE))
+            .saturating_add(TableLayout::row_height_for(metrics))
+            .saturating_add(metrics.px(DETAIL_PADDING)),
+    )
+}
+
+/// 本文の字を書く幅（画素）。
+fn text_width(pane: PixelRect, metrics: GlyphMetrics) -> u32 {
+    pane.size()
+        .width()
+        .saturating_sub(metrics.px(TEXT_LEFT))
+        .saturating_sub(metrics.px(RIGHT_PADDING))
+}
+
+/// 本文を折り返す幅（半角の字数）。
+fn text_columns(pane: PixelRect, metrics: GlyphMetrics) -> u32 {
+    text_width(pane, metrics) / metrics.half_width().max(1)
 }
 
 /// 見出しの行の補助の情報。行（と見出しがあれば列）の番号、値があれば文字数とファイルの文字コード `encoding` での

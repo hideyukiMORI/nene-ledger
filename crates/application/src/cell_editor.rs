@@ -138,8 +138,15 @@ impl CellEditor {
     }
 
     /// 字を打っている所を詳細ペインへ移す（値はそのまま・GitHub Issue #458）。
+    /// ペインでは矢印で欄の中を動く（Excel の数式バーを押したときと同じく編集の状態にする・GitHub Issue #460）。
     pub fn type_in_pane(&mut self) {
         self.surface = EditSurface::Pane;
+        self.mode = EditMode::Editing;
+    }
+
+    /// カーソルを `index` 字目の前へ置く。`extend` なら選択を広げる（ペインを押した所・GitHub Issue #460）。
+    pub fn place_caret(&mut self, index: usize, extend: bool) {
+        self.field = self.field.placed(index, extend);
     }
 
     /// Ctrl+A。欄の字をすべて選ぶ。

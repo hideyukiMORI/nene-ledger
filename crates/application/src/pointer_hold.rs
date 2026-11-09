@@ -51,6 +51,8 @@ pub enum PointerHold {
         /// 押したときのペインの本文の行の数。
         start: u32,
     },
+    /// 詳細ペインの本文を押した（動かせば欄の中の選択を広げる・GitHub Issue #460）。
+    PaneText,
     /// セル・行番号・見出しの上で押した（しきい値を超えて動かせば範囲を広げるドラッグ）。
     Cells {
         /// 何を広げるか。
@@ -74,7 +76,10 @@ impl PointerHold {
     pub fn orientation(self) -> Option<ScrollOrientation> {
         match self {
             Self::Thumb { orientation, .. } | Self::Track { orientation, .. } => Some(orientation),
-            Self::Cells { .. } | Self::ColumnWidth { .. } | Self::PaneHeight { .. } => None,
+            Self::Cells { .. }
+            | Self::ColumnWidth { .. }
+            | Self::PaneHeight { .. }
+            | Self::PaneText => None,
         }
     }
 
@@ -86,7 +91,8 @@ impl PointerHold {
             Self::Thumb { .. }
             | Self::Track { .. }
             | Self::ColumnWidth { .. }
-            | Self::PaneHeight { .. } => false,
+            | Self::PaneHeight { .. }
+            | Self::PaneText => false,
         }
     }
 }
