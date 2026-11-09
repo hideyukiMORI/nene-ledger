@@ -1106,6 +1106,19 @@ Windows の exe の `--version`（コマンドプロンプトに結んで書く�
 
 当たり判定とメッセージの渡し方は Microsoft の説明どおりで、違いは DWM の枠を中身へ広げるかだけだった。GitHub Issue #282 で C と同じ変更を入れた（ui-win32 の `decorate`）。Windows 11 は角丸（`DWMWA_WINDOW_CORNER_PREFERENCE`）の窓に影を付けるので、影は残る。Windows 10 の影は確かめていない。
 
+## 101. 保存先のロックと置き換えの再試行 — Windows の上の単体テスト（GitHub Issue #336・FILE-04・ADR 0025 の施主の判断 3）
+
+`make test-windows`（WSL の相互運用で Windows 11 の上で直に走らせる・GitHub Issue #211）で、`adapters-windows` の `file_replacing` の試験を走らせた（2026-11-09・積んだ枝 #335 の上）。
+
+| 試験 | 何を確かめたか | 結果 |
+| --- | --- | --- |
+| `an_unheld_file_is_replaced` | 掴まれていない原本は `ReplaceFileW` で一時ファイルの中身に置き換わり、一時ファイルは無くなる | ok |
+| `a_file_held_without_sharing_stays_and_is_reported_locked` | ほかのアプリが共有の指定なし（`share_mode(0)`）で掴んでいる原本は、再試行（50・100・200・400・800 ms）の後に `Locked`。原本は元のまま、一時ファイルも残る。放せばもう一度で置き換わる | ok |
+
+`nene_ledger_adapters_windows` の 7 件が 1.56 秒で通った（再試行の待ちの合計 1.55 秒と合う・時間は試験では見ていない）。
+
+🔴 **正直に:** Excel そのものでの確かめは第 60 節の 3（2026-11-05・施主の実機・書き始めない確かめと閉じてからの再保存）。新しい知らせの文言（「閉じてから Ctrl+S · 別名は Ctrl+Shift+S」）は実機でまだ見ていない。
+
 ## 7. active の規則と、その証明
 
 CNF-009 は active の規則ごとに `| ID |` で始まる行がここにあることを要求する。

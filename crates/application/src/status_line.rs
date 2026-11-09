@@ -344,7 +344,21 @@ fn save_problem_status(problem: SaveProblem) -> String {
         ),
         SaveProblem::Other => String::from("保存できませんでした"),
     };
-    format!("{reason}（直した値は残っています）")
+    // ほかのアプリが開いているなら、どうすればよいか（閉じてからもう一度・別名で保存）を添える（ADR 0025 の施主の判断 3
+    // 「再試行・別名で保存・やめるを選ばせる」・FILE-04・GitHub Issue #336）。
+    match problem {
+        SaveProblem::Locked => {
+            format!("{reason}（直した値は残っています · 閉じてから Ctrl+S · 別名は Ctrl+Shift+S）")
+        }
+        SaveProblem::ChangedOutside
+        | SaveProblem::Unrepresentable(_)
+        | SaveProblem::HardLinked
+        | SaveProblem::Interrupted
+        | SaveProblem::Unplannable
+        | SaveProblem::Cancelled
+        | SaveProblem::Untitled
+        | SaveProblem::Other => format!("{reason}（直した値は残っています）"),
+    }
 }
 
 /// 選んだ範囲の集計の文言。出さないなら `None`。数として読めないセルの数は必ず出す。
@@ -561,6 +575,22 @@ mod tests {
         assert_eq!(
             totals_status(SelectionTotals::Counted(stats)).as_deref(),
             Some("列の数が違う行 2 を含む · 件数 2 · 合計 3 · 平均 1.5 · 数でない 0")
+        );
+    }
+
+    /// ほかのアプリが開いていて保存できなければ、閉じてからもう一度・別名で保存のキーを添える。ほかの理由は値が残ることだけ
+    /// （ADR 0025 の施主の判断 3・GitHub Issue #336）。
+    #[test]
+    fn a_locked_save_says_how_to_retry_or_save_elsewhere() {
+        use crate::notice::Notice;
+        use crate::save_problem::SaveProblem;
+        assert_eq!(
+            notice_status(Notice::SaveFailed(SaveProblem::Locked)),
+            "ほかのアプリがファイルを開いているので保存できませんでした（直した値は残っています · 閉じてから Ctrl+S · 別名は Ctrl+Shift+S）"
+        );
+        assert_eq!(
+            notice_status(Notice::SaveFailed(SaveProblem::Other)),
+            "保存できませんでした（直した値は残っています）"
         );
     }
 
