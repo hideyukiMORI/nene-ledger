@@ -50,6 +50,7 @@ ADR は「なぜそう決めたか」「何を却下したか」を書く。
 | [0032](0032-preview-release-on-github.md) | プレビュー版（0.1.0-preview.1）を、Windows の exe の zip だけで GitHub Releases に置く | 受理 |
 | [0033](0033-window-keeps-visible-columns.md) | 窓の行は見えている列の範囲だけを持ち、レコードは読みながら行にする | 受理 |
 | [0034](0034-header-spans-rows.md) | 見出しは続いた 1〜3 行の範囲で、列の名前は「 / 」でつなぐ | 受理 |
+| [0035](0035-microsoft-store-msix.md) | Microsoft Store には、Win32 の exe をそのまま MSIX に包んで出す。署名はストアに任せ、版は 4 桁に写す | 提案 |
 
 ## これから書くもの（Issue が立ったら）
 
