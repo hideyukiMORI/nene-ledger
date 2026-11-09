@@ -296,11 +296,27 @@ fn aux_text(
             } else {
                 format!("　{legend}")
             };
+            // 必ず表せない字があれば、バイト数の代わりにそう言う（保存で止まる・GitHub Issue #395）。
+            let bytes = encoding.surely_unrepresentable(value).map_or_else(
+                || {
+                    format!(
+                        "{} で {} バイト",
+                        byte_encoding_name(encoding),
+                        group_digits(encoding.encoded_length(value))
+                    )
+                },
+                |character| {
+                    // 字体に無い字（絵文字）は豆腐になるので、符号の位置も添える。
+                    format!(
+                        "{} で表せない字「{character}」U+{:04X} あり",
+                        byte_encoding_name(encoding),
+                        u32::from(character)
+                    )
+                },
+            );
             format!(
-                "{position}　{} 文字　{} で {} バイト{json}{marks}",
-                group_digits(characters),
-                byte_encoding_name(encoding),
-                group_digits(encoding.encoded_length(value))
+                "{position}　{} 文字　{bytes}{json}{marks}",
+                group_digits(characters)
             )
         }
         // 切り詰めた行の値は先頭の部分だけなので、文字数とバイト数の代わりに切り詰めたことと全体の大きさを出す（GitHub Issue #36）。

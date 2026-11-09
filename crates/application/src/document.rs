@@ -6507,6 +6507,12 @@ mod tests {
         text_at(&utf16, "2 行目　1 列目　4 文字　UTF-16LE で 8 バイト");
         let sjis = framed_as(TextEncoding::ShiftJis, &[&["名"], &["山田ｱ"]]);
         text_at(&sjis, "2 行目　1 列目　3 文字　Shift_JIS で 5 バイト");
+        // 絵文字や 𠮷 は Shift_JIS で必ず表せないので、バイト数の代わりにそう言う（GitHub Issue #395）。
+        let emoji = framed_as(TextEncoding::ShiftJis, &[&["名"], &["𠮷田😀"]]);
+        text_at(
+            &emoji,
+            "2 行目　1 列目　3 文字　Shift_JIS で表せない字「𠮷」U+20BB7 あり",
+        );
     }
 
     #[test]
