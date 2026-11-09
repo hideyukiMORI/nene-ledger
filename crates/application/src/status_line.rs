@@ -332,9 +332,10 @@ fn unrepresentable_status(found: UnrepresentableNotice) -> String {
         String::new()
     };
     format!(
-        "{} の「{}」は {} で表せないので保存できませんでした（{others}直してから Ctrl+S · 直した値は残っています）",
+        "{} の「{}」U+{:04X} は {} で表せないので保存できませんでした（{others}直してから Ctrl+S · 直した値は残っています）",
         cursor_status(found.line, found.column),
         found.character,
+        u32::from(found.character),
         encoding_name(found.encoding)
     )
 }
@@ -998,7 +999,7 @@ mod tests {
         };
         assert_eq!(
             notice(3),
-            "5 行目 · 2 列目 の「𠮷」は Shift_JIS（CP932） で表せないので保存できませんでした（この字のセル 3 · 直してから Ctrl+S · 直した値は残っています）"
+            "5 行目 · 2 列目 の「𠮷」U+20BB7 は Shift_JIS（CP932） で表せないので保存できませんでした（この字のセル 3 · 直してから Ctrl+S · 直した値は残っています）"
         );
         assert!(!notice(1).contains("この字のセル"));
     }

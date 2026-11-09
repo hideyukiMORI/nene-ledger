@@ -8471,7 +8471,7 @@ mod tests {
         let frame = document.frame(normal(), palette());
         text_at(
             &frame,
-            "2 行目 · 1 列目 の「𠮷」は UTF-8 で表せないので保存できませんでした（この字のセル 2 · 直してから Ctrl+S · 直した値は残っています）",
+            "2 行目 · 1 列目 の「𠮷」U+20BB7 は UTF-8 で表せないので保存できませんでした（この字のセル 2 · 直してから Ctrl+S · 直した値は残っています）",
         );
     }
 
