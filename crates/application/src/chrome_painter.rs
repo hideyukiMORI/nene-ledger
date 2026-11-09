@@ -28,6 +28,8 @@ pub(crate) struct ChromePainter {
     chrome: WindowChrome,
     palette: Palette,
     commands: Vec<DrawCommand>,
+    /// 指が「≡ 操作」に乗っているか（GitHub Issue #448）。
+    menu_hovered: bool,
 }
 
 impl ChromePainter {
@@ -37,6 +39,15 @@ impl ChromePainter {
             chrome: view.chrome(),
             palette,
             commands: Vec::new(),
+            menu_hovered: false,
+        }
+    }
+
+    /// 指が「≡ 操作」に乗っていれば、ほかのボタンと同じ色で背景を塗る（GitHub Issue #448）。
+    pub(crate) fn with_menu_hovered(self, menu_hovered: bool) -> Self {
+        Self {
+            menu_hovered,
+            ..self
         }
     }
 
@@ -87,6 +98,12 @@ impl ChromePainter {
         let menu = self.chrome.menu();
         if menu.size().width() == 0 {
             return;
+        }
+        if self.menu_hovered {
+            self.commands.push(DrawCommand::Fill {
+                rect: menu,
+                color: self.palette.button_hover(),
+            });
         }
         self.commands.push(DrawCommand::Text {
             baseline: PixelPoint::new(
