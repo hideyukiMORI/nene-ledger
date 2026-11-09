@@ -9293,7 +9293,7 @@ mod tests {
         finish_finding(document, effect);
     }
 
-    /// 書き換えたセルは、右上に強調の色の小さな印が付く。書き換えていなければ無い（GitHub Issue #323）。
+    /// 書き換えたセルは、左の端に済んだの色（緑）の縦の帯が付く。書き換えていなければ無い（GitHub Issue #323・#331）。
     #[test]
     fn edited_cells_get_a_small_mark() {
         let mut document = indexed_editable();
@@ -9304,9 +9304,9 @@ mod tests {
                 .iter()
                 .filter(|command| match command {
                     DrawCommand::Fill { rect, color } => {
-                        *color == palette().cursor()
-                            && rect.size().width() == 5
-                            && rect.size().height() == 5
+                        *color == palette().success()
+                            && rect.size().width() == 3
+                            && rect.size().height() > 3
                     }
                     DrawCommand::Text { .. }
                     | DrawCommand::Line { .. }
