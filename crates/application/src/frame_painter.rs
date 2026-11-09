@@ -651,6 +651,11 @@ impl<'view> FramePainter<'view> {
         };
         let Some(text) = cell else {
             self.fill(rect, missing);
+            // 本体の「セルが無い」所は、空のセルと見分けられるよう斜めの線を 1 本引く（色だけに頼らない・RS-004・
+            // データエンジニアのペルソナの相談・GitHub Issue #401）。
+            if matches!(mark, CellMark::Unselected | CellMark::Band) {
+                self.slash(rect, self.palette.gutter_text().mixed(missing, MARK_FADE));
+            }
             return;
         };
         let background = match mark {
@@ -740,6 +745,25 @@ impl<'view> FramePainter<'view> {
     /// 矩形を塗る。
     fn fill(&mut self, rect: PixelRect, color: Color) {
         self.commands.push(DrawCommand::Fill { rect, color });
+    }
+
+    /// `rect` の左下から右上へ、余白を空けた斜めの線（「セルが無い」の印）。
+    fn slash(&mut self, rect: PixelRect, color: Color) {
+        let inset = self.layout.padding();
+        let (left, top) = (rect.origin().x(), rect.origin().y());
+        let (right, bottom) = (
+            left.saturating_add(rect.size().width()),
+            top.saturating_add(rect.size().height()),
+        );
+        if right.saturating_sub(left) <= inset.saturating_mul(2) {
+            return;
+        }
+        self.commands.push(DrawCommand::Line {
+            from: PixelPoint::new(left.saturating_add(inset), bottom.saturating_sub(inset)),
+            to: PixelPoint::new(right.saturating_sub(inset), top.saturating_add(inset)),
+            width: self.metrics.px(1),
+            color,
+        });
     }
 
     /// `rect` の中に、左の余白を空けて縦の真ん中に文字を書く。左右の余白の内に収まらなければ `…` で省略し
@@ -1035,6 +1059,35 @@ mod tests {
         assert_eq!(danger_texts, vec!["3", "4"]);
         assert_eq!(fills_of(&marked, palette().danger()).len(), 2);
         assert!(fills_of(&painted(None), palette().danger()).is_empty());
+    }
+
+    /// 「セルが無い」所には、空のセルと見分ける斜めの線を引く。空のセルには引かない（GitHub Issue #401）。
+    #[test]
+    fn missing_cells_are_slashed_and_empty_cells_are_not() {
+        let rows = [row(1, &["1", "", "3"]), row(2, &["1"])];
+        let owned: Vec<Vec<String>> = rows.iter().map(|row| row.cells().to_strings()).collect();
+        let cells: Vec<&[String]> = owned.iter().map(Vec::as_slice).collect();
+        let layout = TableLayout::new(&ColumnWidths::fit(&cells), 0, 2, metrics());
+        let commands = FramePainter::new(&layout, metrics(), palette(), PixelSize::new(800, 600))
+            .paint(&[], None, &view(&rows));
+        let lines: Vec<(PixelPoint, PixelPoint)> = commands
+            .iter()
+            .filter_map(|command| match command {
+                DrawCommand::Line { from, to, .. } => Some((*from, *to)),
+                DrawCommand::Text { .. }
+                | DrawCommand::Fill { .. }
+                | DrawCommand::TextSpan { .. } => None,
+            })
+            .collect();
+        // 2 行目の 2・3 列目だけ（1 行目の空のセルには引かない）。左下から右上へ、セルの中に収まる。
+        assert_eq!(lines.len(), 2);
+        for (column, (from, to)) in (1..=2).zip(lines) {
+            let cell = layout.cell_rect(1, column).unwrap();
+            assert!(
+                from.x() > cell.origin().x() && to.x() < cell.origin().x() + cell.size().width()
+            );
+            assert!(from.y() > to.y());
+        }
     }
 
     #[test]
