@@ -24,6 +24,11 @@ use crate::command_palette::CommandPalette;
 use crate::detail_pane::DetailPane;
 use crate::find_toggle::FindToggle;
 use crate::go_to_target::GoToTarget;
+/// 候補の行のスクロールバーの幅・行との隙間・つまみの最小の長さ（論理 px・パレットの余白 12 の中に収める）。
+const SCROLLBAR: u32 = 4;
+const SCROLLBAR_GAP: u32 = 4;
+const SCROLLBAR_MIN: u32 = 12;
+
 /// 操作の行の右の字：キー（最近使った操作は見出しで分かるので印を付けない・GitHub Issue #420）。
 fn command_aside(command: CommandId) -> String {
     String::from(command.keys().unwrap_or(""))
@@ -121,7 +126,60 @@ impl<'state> PalettePainter<'state> {
                 self.row(slot, item, detail);
             }
         }
+        self.scrollbar(items.len());
         self.commands
+    }
+
+    /// 候補が見せている数より多ければ、候補の行の右の余白に細いスクロールバー（下にまだ続くことと、今どこかを見せる・
+    /// 専門家ペルソナと文献の相談・GitHub Issue #424）。押せない（↑↓・PageUp/Down・ホイールで動く）。
+    fn scrollbar(&mut self, total: usize) {
+        let visible = self.layout.visible();
+        if total <= visible || visible == 0 {
+            return;
+        }
+        let top_row = self.layout.row(0);
+        let bottom_row = self.layout.row(visible.saturating_sub(1));
+        let track_top = top_row.origin().y();
+        let track_height = bottom_row
+            .origin()
+            .y()
+            .saturating_add(bottom_row.size().height())
+            .saturating_sub(track_top);
+        let part = |count: usize| {
+            u32::try_from(
+                u64::from(track_height)
+                    .saturating_mul(u64::try_from(count).unwrap_or(u64::MAX))
+                    .checked_div(u64::try_from(total).unwrap_or(u64::MAX))
+                    .unwrap_or(0),
+            )
+            .unwrap_or(track_height)
+        };
+        let width = self.px(SCROLLBAR);
+        let left = top_row
+            .origin()
+            .x()
+            .saturating_add(top_row.size().width())
+            .saturating_add(self.px(SCROLLBAR_GAP));
+        self.fill(
+            PixelRect::new(
+                PixelPoint::new(left, track_top),
+                PixelSize::new(width, track_height),
+            ),
+            self.colors.grid(),
+        );
+        let thumb_height = part(visible).max(self.px(SCROLLBAR_MIN)).min(track_height);
+        let thumb_top = track_top.saturating_add(part(self.layout.first())).min(
+            track_top
+                .saturating_add(track_height)
+                .saturating_sub(thumb_height),
+        );
+        self.fill(
+            PixelRect::new(
+                PixelPoint::new(left, thumb_top),
+                PixelSize::new(width, thumb_height),
+            ),
+            self.colors.gutter_text(),
+        );
     }
 
     /// 表から浮かせる外側の空き（背景）・縁（窓の縁）・面・上辺の強調の線。下の表は暗くしない。
@@ -923,6 +981,38 @@ mod tests {
             DrawCommand::Fill { .. } | DrawCommand::Line { .. } | DrawCommand::TextSpan { .. } =>
                 true,
         }));
+    }
+
+    /// 候補が見せている数より多ければ、行の右の余白にスクロールバー。下へ動けばつまみも下がる。絞って収まれば出さない
+    /// （GitHub Issue #424）。
+    #[test]
+    fn a_long_list_has_a_scrollbar_beside_the_rows() {
+        let thumb = |palette: &CommandPalette| -> Option<PixelRect> {
+            let row = PaletteLayout::new(view(), palette).row(0);
+            let right = row.origin().x() + row.size().width();
+            fills(
+                &palette.paint(view(), colors(), DetailPane::Open),
+                colors().gutter_text(),
+            )
+            .into_iter()
+            .find(|rect| rect.origin().x() > right)
+        };
+        let mut palette = CommandPalette::open();
+        let top = thumb(&palette).unwrap();
+        palette.handle(
+            Intent::Move {
+                step: CursorStep::Bottom,
+                mode: crate::selection_mode::SelectionMode::Collapse,
+            },
+            0,
+        );
+        let bottom = thumb(&palette).unwrap();
+        assert!(bottom.origin().y() > top.origin().y());
+        assert_eq!(bottom.size(), top.size());
+        for character in "hozon".chars() {
+            palette.handle(Intent::Type(character), 0);
+        }
+        assert_eq!(thumb(&palette), None);
     }
 
     #[test]
