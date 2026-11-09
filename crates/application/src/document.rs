@@ -147,6 +147,8 @@ pub struct Document {
     totals: SelectionTotals,
     /// ファイル全体の、列の数が見出しと違う行の数（索引の後に裏で数える・GitHub Issue #391）。数え始めたら `asked`。
     ragged: RaggedCount,
+    /// 検索と置換で照らす表示の列（列を選んで欄を開いたとき・GitHub Issue #411）。`None` なら全部の列。
+    find_within: Option<Range<usize>>,
     others: Vec<Selection>,
     order: Vec<usize>,
     counted: Option<Vec<Selection>>,
@@ -292,6 +294,7 @@ impl Document {
             cuts: Vec::new(),
             totals: SelectionTotals::Hidden,
             ragged: RaggedCount::Unasked,
+            find_within: None,
             others: Vec::new(),
             order: Vec::new(),
             counted: None,
@@ -2001,7 +2004,31 @@ impl Document {
         let columns = (0..self.widths.columns().len())
             .map(|display| self.column_id(self.source_column(display)))
             .collect();
-        FindScope::new(query, columns, self.edits.clone())
+        FindScope::new(query, columns, self.edits.clone()).within(self.find_within.clone())
+    }
+
+    /// 検索か置換の欄を開くとき：列全体を選んでいれば、照らす列をその列に限り、欄に出す名札（「範囲：販売価格」）を返す。
+    /// 列全体を選んでいなければ全部の列に戻して `None`（EC のペルソナの相談「説明文を巻き込まない」・GitHub Issue #411）。
+    pub fn scope_find_to_selection(&mut self) -> Option<String> {
+        let (top, bottom) = (self.selection.top_left(), self.selection.bottom_right());
+        let whole = top.body() == 0 && bottom.body() == TO_END && self.others.is_empty();
+        self.find_within = whole.then(|| top.column()..bottom.column().saturating_add(1));
+        let within = self.find_within.clone()?;
+        let name = |display: usize| {
+            let source = self.source_column(display);
+            self.column_name(source)
+                .unwrap_or_else(|| format!("{} 列目", source.saturating_add(1)))
+        };
+        let first = name(within.start);
+        Some(if within.len() == 1 {
+            format!("範囲：{first}")
+        } else {
+            format!(
+                "範囲：{first}〜{}（{} 列）",
+                name(within.end.saturating_sub(1)),
+                within.len()
+            )
+        })
     }
 
     /// 置換の段の Enter：カーソルのセルが `query` に当たれば、当たった所を `replacement` に置き換えて（1 手）、次を探す。
@@ -5137,6 +5164,7 @@ impl Document {
             .with_edits(&self.edits)
             .with_editing(editing.as_ref())
             .with_found(found)
+            .with_found_within(self.find_within.clone())
             .with_expected(self.expected_columns())
             .with_row_bands(!self.columns_selected())
             .paint(self.header(), self.column_numbers().as_ref(), &self.view)
@@ -6424,6 +6452,33 @@ mod tests {
         );
         assert_eq!(fitted_status(status, 20), "データ 300 行 · …");
         assert_eq!(fitted_status(status, 5), status);
+    }
+
+    /// 列全体を選んで検索・置換の欄を開くと、照らす列をその列に限り、名札を返す。選びを替えて開き直せば全部に戻る
+    /// （GitHub Issue #411）。
+    #[test]
+    fn find_and_replace_are_scoped_to_whole_selected_columns() {
+        let rows = table(&[&["sku", "name", "note"], &["1", "free", "free"]]);
+        let mut document = opened_with(&rows);
+        document.report(JobReport::Finished(IndexSummary::new(2, None)));
+        assert_eq!(document.scope_find_to_selection(), None);
+        document.apply(moving(CursorStep::Right), normal());
+        document.apply(Intent::SelectColumns, normal());
+        assert_eq!(
+            document.scope_find_to_selection().as_deref(),
+            Some("範囲：name")
+        );
+        let scope = document.find_scope(FindQuery::new("free", FindOptions::standard()));
+        let source = |index: usize| ["1", "free", "free"].get(index).map(|v| String::from(*v));
+        assert_eq!(scope.first_in_row(RowId::Source(1), 0..3, source), Some(1));
+        assert_eq!(scope.last_in_row(RowId::Source(1), 0..3, source), Some(1));
+        document.apply(extending(CursorStep::Right), normal());
+        assert_eq!(
+            document.scope_find_to_selection().as_deref(),
+            Some("範囲：name〜note（2 列）")
+        );
+        document.apply(moving(CursorStep::Down), normal());
+        assert_eq!(document.scope_find_to_selection(), None);
     }
 
     fn opened_with(rows: &[CellRow]) -> Document {

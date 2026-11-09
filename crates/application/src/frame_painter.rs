@@ -43,6 +43,8 @@ pub(crate) struct FramePainter<'view> {
     edits: Option<&'view CellEdits>,
     editing: Option<&'view EditingCell>,
     found: Option<&'view FindQuery>,
+    /// 当たりの印を付ける表示の列（検索と置換を列に限ったとき・GitHub Issue #411）。`None` なら全部の列。
+    found_within: Option<Range<usize>>,
     /// 本体の行が持つはずのセルの数（見出しの行のセルの数・GitHub Issue #317）。
     expected: Option<usize>,
     /// 選んだ行の帯を描くか。列全体を選んだときは、どの行も選んだ行なので帯を描かない（表が一面に染まり、どの列を
@@ -99,6 +101,7 @@ impl<'view> FramePainter<'view> {
             edits: None,
             editing: None,
             found: None,
+            found_within: None,
             expected: None,
             editing_wide: None,
             row_bands: true,
@@ -157,6 +160,14 @@ impl<'view> FramePainter<'view> {
 
     pub(crate) fn with_found(self, found: Option<&'view FindQuery>) -> Self {
         Self { found, ..self }
+    }
+
+    /// 当たりの印を表示の列 `within` に限る（照らす列と同じ・GitHub Issue #411）。
+    pub(crate) fn with_found_within(self, found_within: Option<Range<usize>>) -> Self {
+        Self {
+            found_within,
+            ..self
+        }
     }
 
     pub(crate) fn with_ranges(self, ranges: Ranges<'view>) -> Self {
@@ -294,7 +305,17 @@ impl<'view> FramePainter<'view> {
             }
             let mark = self.mark(style, column);
             let source = self.order.get(column).copied().unwrap_or(column);
+            // 照らさない列には当たりの印を付けない（問いを外して描き、戻す）。
+            let found = self.found;
+            if self
+                .found_within
+                .as_ref()
+                .is_some_and(|within| !within.contains(&column))
+            {
+                self.found = None;
+            }
             self.paint_shown_cell(rect, (row, style, source), mark);
+            self.found = found;
             if let RowStyle::Body(body) = style {
                 self.edges(rect, body, column);
                 self.cut_edges(rect, body, column);
