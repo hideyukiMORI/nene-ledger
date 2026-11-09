@@ -21,6 +21,7 @@ use crate::cell_display::mark_legend;
 use crate::client_bands::{ClientBands, DETAIL_PADDING, DETAIL_RULE};
 use crate::detail_content::DetailContent;
 use crate::detail_place::DetailPlace;
+use crate::shown_body::ShownBody;
 use crate::status_line::{byte_encoding_name, group_digits};
 use crate::text_wrap::wrap;
 
@@ -166,6 +167,8 @@ impl DetailPainter {
         let room = ClientBands::body_lines(self.pane.size().height(), self.metrics);
         let limit = usize::try_from(room).unwrap_or(usize::MAX);
         let shown = body_lines(content, columns, limit, self.scroll);
+        let (total, first) = (shown.total(), shown.first());
+        let (lines, note) = shown.into_lines();
         let left = self
             .pane
             .origin()
@@ -173,7 +176,7 @@ impl DetailPainter {
             .saturating_add(self.metrics.px(TEXT_LEFT));
         let line = ClientBands::body_line(self.metrics);
         let mut row_top = top;
-        for text in shown.lines {
+        for text in lines {
             self.text_in(
                 area(left, row_top, text_width, line),
                 text,
@@ -181,19 +184,15 @@ impl DetailPainter {
             );
             row_top = row_top.saturating_add(line);
         }
-        if let Some(text) = shown.note {
+        if let Some(text) = note {
             self.text_in(
                 area(left, row_top, text_width, line),
                 text,
                 self.palette.gutter_text(),
             );
         }
-        if shown.total > limit {
-            self.scrollbar(
-                top,
-                line.saturating_mul(room),
-                (shown.first, limit, shown.total),
-            );
+        if total > limit {
+            self.scrollbar(top, line.saturating_mul(room), (first, limit, total));
         }
     }
 
@@ -259,22 +258,9 @@ impl DetailPainter {
     }
 }
 
-/// 本文の見せる行（`scroll` 行目から）と、最後に添える断り書き（値が無い・あと N 行）、折り返した行の全部の数、見せる最初の行。
-struct ShownBody {
-    lines: Vec<String>,
-    note: Option<String>,
-    total: usize,
-    first: usize,
-}
-
 /// 本文の行（幅 `columns` で折り返し、`scroll` 行目から `limit` 行まで）。`scroll` は最後の画面に収める。
 fn body_lines(content: DetailContent<'_>, columns: u32, limit: usize, scroll: usize) -> ShownBody {
-    let note_only = |note: &str| ShownBody {
-        lines: Vec::new(),
-        note: Some(String::from(note)),
-        total: 0,
-        first: 0,
-    };
+    let note_only = ShownBody::note_only;
     let value = match content {
         DetailContent::OutOfView => return note_only("〈カーソルの行は見えている範囲の外〉"),
         DetailContent::Missing => return note_only("〈この行にはこの列のセルが無い〉"),
@@ -297,28 +283,27 @@ fn body_lines(content: DetailContent<'_>, columns: u32, limit: usize, scroll: us
     let first = scroll.min(total.saturating_sub(limit));
     let rest = total.saturating_sub(first);
     if rest <= limit {
-        return ShownBody {
-            lines: all.lines().get(first..).unwrap_or_default().to_vec(),
-            note: None,
+        return ShownBody::new(
+            all.lines().get(first..).unwrap_or_default().to_vec(),
+            None,
             total,
             first,
-        };
+        );
     }
     // 下に続きがあれば、最後の 1 行で残りの行の数を言う。
     let shown = limit.saturating_sub(1);
-    ShownBody {
-        lines: all
-            .lines()
+    ShownBody::new(
+        all.lines()
             .get(first..first.saturating_add(shown))
             .unwrap_or_default()
             .to_vec(),
-        note: Some(format!(
+        Some(format!(
             "〈あと {} 行〉",
             group_digits(u64::try_from(rest.saturating_sub(shown)).unwrap_or(u64::MAX))
         )),
         total,
         first,
-    }
+    )
 }
 
 /// 本文を幅 `pane`・字の寸法 `metrics` で折り返したときの、全部の行の数と、見せられる行の数（ホイールで動かせる範囲を
@@ -336,7 +321,7 @@ pub(crate) fn body_extent(
     let columns = text_width / metrics.half_width().max(1);
     let room = usize::try_from(ClientBands::body_lines(pane.size().height(), metrics))
         .unwrap_or(usize::MAX);
-    (body_lines(content, columns, room, 0).total, room)
+    (body_lines(content, columns, room, 0).total(), room)
 }
 
 /// 見出しの行の補助の情報。行（と見出しがあれば列）の番号、値があれば文字数とファイルの文字コード `encoding` での

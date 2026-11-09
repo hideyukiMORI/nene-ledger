@@ -121,6 +121,7 @@ pub mod settings;
 pub mod settings_failure;
 pub mod settings_file;
 pub mod settings_port;
+pub mod shown_body;
 pub mod source_bytes;
 pub mod status_line;
 pub mod table_changes;
