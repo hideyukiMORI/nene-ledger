@@ -4,6 +4,7 @@ use nene_ledger_application::column_shift::ColumnShift;
 use nene_ledger_application::cursor_step::CursorStep;
 use nene_ledger_application::find_toggle::FindToggle;
 use nene_ledger_application::intent::Intent;
+use nene_ledger_application::root_command::RootCommand;
 use nene_ledger_application::scroll::Scroll;
 use nene_ledger_application::selection_mode::SelectionMode;
 use nene_ledger_application::theme_step::ThemeStep;
@@ -42,6 +43,7 @@ const XK_H: u32 = 0x68;
 const XK_W: u32 = 0x77;
 const XK_R: u32 = 0x72;
 const XK_F3: u32 = 0xffc0;
+const XK_F8: u32 = 0xffc5;
 const XK_U: u32 = 0x75;
 const XK_T: u32 = 0x74;
 const XK_P: u32 = 0x70;
@@ -209,6 +211,8 @@ fn editing_intent(keysym: u32, typed: Option<char>, state: KeyButMask) -> Option
         XK_F2 => Some(Intent::Edit),
         XK_F3 if shift => Some(Intent::FindAgain { forward: false }),
         XK_F3 => Some(Intent::FindAgain { forward: true }),
+        // 列の数が見出しと違う次の・前の行へ（VS Code の「次の問題へ」と同じ F8・GitHub Issue #377）。
+        XK_F8 => Some(Intent::Root(RootCommand::FindRagged { forward: !shift })),
         XK_ESCAPE => Some(Intent::Cancel),
         XK_RETURN | XK_KP_ENTER => Some(return_intent(state)),
         XK_TAB if shift => Some(Intent::Advance(CursorStep::Left)),
@@ -246,8 +250,8 @@ fn line_intent(keysym: u32, control: bool, shift: bool) -> Option<Intent> {
 fn save_intent(keysym: u32, shift: bool) -> Option<Intent> {
     match (keysym, shift) {
         (XK_S, false) => Some(Intent::Save),
-        (XK_N, false) => Some(Intent::NewTable),
-        (XK_O, false) => Some(Intent::OpenFile),
+        (XK_N, false) => Some(Intent::Root(RootCommand::NewTable)),
+        (XK_O, false) => Some(Intent::Root(RootCommand::OpenFile)),
         (XK_V, false) => Some(Intent::Paste),
         (XK_F, false) => Some(Intent::OpenFind { replace: false }),
         (XK_H, false) => Some(Intent::OpenFind { replace: true }),
@@ -686,7 +690,7 @@ mod tests {
         );
         assert_eq!(
             key_intent(XK_N, Some('n'), KeyButMask::CONTROL),
-            Some(Intent::NewTable)
+            Some(Intent::Root(RootCommand::NewTable))
         );
         assert_eq!(
             key_intent(XK_V, Some('v'), KeyButMask::CONTROL),
@@ -699,6 +703,19 @@ mod tests {
         assert_eq!(
             key_intent(XK_Z, Some('z'), plain()),
             Some(Intent::Type('z'))
+        );
+    }
+
+    /// F8・Shift+F8 は列の数が見出しと違う次の・前の行へ（GitHub Issue #377）。
+    #[test]
+    fn f8_goes_to_rows_with_another_number_of_cells() {
+        assert_eq!(
+            key_intent(XK_F8, None, plain()),
+            Some(Intent::Root(RootCommand::FindRagged { forward: true }))
+        );
+        assert_eq!(
+            key_intent(XK_F8, None, KeyButMask::SHIFT),
+            Some(Intent::Root(RootCommand::FindRagged { forward: false }))
         );
     }
 

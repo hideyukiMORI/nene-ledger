@@ -93,6 +93,7 @@ pub mod replace_notice;
 mod replace_run;
 pub mod replacing;
 pub mod romaji;
+pub mod root_command;
 pub mod row_band;
 pub mod row_change;
 pub mod row_place;

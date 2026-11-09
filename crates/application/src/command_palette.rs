@@ -350,8 +350,7 @@ impl CommandPalette {
             | Intent::Advance(_)
             | Intent::Save
             | Intent::SaveAs
-            | Intent::NewTable
-            | Intent::OpenFile
+            | Intent::Root(_)
             | Intent::Paste
             | Intent::Undo
             | Intent::Redo
@@ -472,8 +471,7 @@ impl CommandPalette {
             | Intent::Advance(_)
             | Intent::Save
             | Intent::SaveAs
-            | Intent::NewTable
-            | Intent::OpenFile
+            | Intent::Root(_)
             | Intent::Paste
             | Intent::Undo
             | Intent::Redo
@@ -722,11 +720,6 @@ impl CommandPalette {
         if command == CommandId::ChooseDialect {
             return PaletteOutcome::OpenCandidates;
         }
-        if command == CommandId::NextRaggedRow || command == CommandId::PreviousRaggedRow {
-            return PaletteOutcome::FindRagged {
-                forward: command == CommandId::NextRaggedRow,
-            };
-        }
         self.query.clear();
         if command == CommandId::ShowKeys {
             self.mode = PaletteMode::Keys;
@@ -963,7 +956,9 @@ mod tests {
         );
         assert_eq!(
             palette.handle(Intent::Confirm, 0),
-            PaletteOutcome::FindRagged { forward: true }
+            PaletteOutcome::Run(Intent::Root(crate::root_command::RootCommand::FindRagged {
+                forward: true
+            }))
         );
         let mut back = CommandPalette::open();
         typed(&mut back, "れつのかずがみだしとちがうまえ");
@@ -973,7 +968,9 @@ mod tests {
         );
         assert_eq!(
             back.handle(Intent::Confirm, 0),
-            PaletteOutcome::FindRagged { forward: false }
+            PaletteOutcome::Run(Intent::Root(crate::root_command::RootCommand::FindRagged {
+                forward: false
+            }))
         );
     }
 

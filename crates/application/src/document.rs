@@ -450,8 +450,7 @@ impl Document {
             | Intent::Advance(_)
             | Intent::Save
             | Intent::SaveAs
-            | Intent::NewTable
-            | Intent::OpenFile
+            | Intent::Root(_)
             | Intent::Paste
             | Intent::Undo
             | Intent::Redo
@@ -1002,8 +1001,7 @@ impl Document {
             | Intent::Advance(_)
             | Intent::Save
             | Intent::SaveAs
-            | Intent::NewTable
-            | Intent::OpenFile
+            | Intent::Root(_)
             | Intent::Paste
             | Intent::Undo
             | Intent::Redo
@@ -1148,8 +1146,7 @@ impl Document {
             | Intent::Advance(_)
             | Intent::Save
             | Intent::SaveAs
-            | Intent::NewTable
-            | Intent::OpenFile
+            | Intent::Root(_)
             | Intent::Paste
             | Intent::Undo
             | Intent::Redo => self.pointer_intent(intent, window),
@@ -1191,8 +1188,7 @@ impl Document {
             | Intent::FillSelection
             | Intent::Save
             | Intent::SaveAs
-            | Intent::NewTable
-            | Intent::OpenFile
+            | Intent::Root(_)
             | Intent::Paste
             | Intent::Undo
             | Intent::Redo
@@ -1318,8 +1314,7 @@ impl Document {
             | Intent::Cancel
             | Intent::Save
             | Intent::SaveAs
-            | Intent::NewTable
-            | Intent::OpenFile
+            | Intent::Root(_)
             | Intent::Paste
             | Intent::Undo
             | Intent::Redo
@@ -3118,8 +3113,7 @@ impl Document {
             | Intent::Advance(_)
             | Intent::Save
             | Intent::SaveAs
-            | Intent::NewTable
-            | Intent::OpenFile
+            | Intent::Root(_)
             | Intent::Paste
             | Intent::Undo
             | Intent::Redo
@@ -3338,8 +3332,7 @@ impl Document {
             | Intent::Advance(_)
             | Intent::Save
             | Intent::SaveAs
-            | Intent::NewTable
-            | Intent::OpenFile
+            | Intent::Root(_)
             | Intent::Paste
             | Intent::Undo
             | Intent::Redo
@@ -5309,8 +5302,7 @@ fn changes_the_table(intent: Intent) -> bool {
             | Intent::FillSelection
             | Intent::Save
             | Intent::SaveAs
-            | Intent::NewTable
-            | Intent::OpenFile
+            | Intent::Root(_)
             | Intent::Paste
             | Intent::Undo
             | Intent::Redo
@@ -5372,8 +5364,7 @@ const fn keeps_cut(intent: Intent) -> bool {
         | Intent::OpenPalette
         | Intent::Confirm
         | Intent::Advance(_)
-        | Intent::NewTable
-        | Intent::OpenFile
+        | Intent::Root(_)
         | Intent::Paste
         | Intent::OpenFind { .. }
         | Intent::FindAgain { .. }
