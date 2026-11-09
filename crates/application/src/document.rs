@@ -4985,11 +4985,12 @@ impl Document {
     fn status(&self) -> String {
         let cursor = self.selection.cursor();
         format!(
-            "{} · {} · {}{} · {}",
+            // 壊れた行の数は行の数のすぐ後ろ（狭い窓で後ろの項目から落としても残す・GitHub Issue #409）。
+            "{}{} · {} · {} · {}",
             index_status(self.shown_index(), self.header_line()),
+            ragged_status(self.shown_ragged()),
             format_status(self.format),
             width_status(self.widths.columns().len(), self.expected_columns()),
-            ragged_status(self.shown_ragged()),
             cursor_status(
                 self.line_of(cursor.body()),
                 self.source_column(cursor.column())
@@ -5038,7 +5039,11 @@ impl Document {
             },
             DrawCommand::Text {
                 baseline: PixelPoint::new(metrics.half_width(), baseline_y),
-                text: self.status(),
+                // 字の途中で切らず、後ろの項目から落として「…」を付ける（1024 幅で右の文言と詰まって見えた・GitHub Issue #409）。
+                text: fitted_status(
+                    &self.status(),
+                    left_width.checked_div(metrics.half_width()).unwrap_or(0),
+                ),
                 color: palette.gutter_text(),
                 clip: left_clip,
                 role: TextRole::Chrome,
@@ -5505,6 +5510,21 @@ fn flattened(steps: &[EditStep]) -> Vec<&EditStep> {
         .collect()
 }
 
+/// 状態の行の左の文言 `status`（` · ` で区切った項目）を、表示の桁 `columns` に収める。収まらなければ後ろの項目から
+/// 落として ` · …` を付ける（字の途中で切らない・GitHub Issue #409）。最初の項目も収まらなければそのまま（描く側が切る）。
+fn fitted_status(status: &str, columns: u32) -> String {
+    if display_columns(status) <= columns {
+        return String::from(status);
+    }
+    let parts: Vec<&str> = status.split(" · ").collect();
+    (1..parts.len())
+        .rev()
+        .filter_map(|kept| parts.get(..kept))
+        .map(|kept| format!("{} · …", kept.join(" · ")))
+        .find(|shown| display_columns(shown) <= columns)
+        .unwrap_or_else(|| String::from(status))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5640,7 +5660,10 @@ mod tests {
         // 中身は (1, 28) から 398 × 271。状態の行の高さは表の行と同じ 25 で、中身の下に寄せる。
         let (baseline, clip) = text_at(
             &frame,
-            "1 行 · UTF-8 · カンマ区切り · LF · 1 列 · 1 行目 · 1 列目",
+            &fitted_status(
+                "1 行 · UTF-8 · カンマ区切り · LF · 1 列 · 1 行目 · 1 列目",
+                22,
+            ),
         );
         // 右端に「Ctrl+Shift+P でコマンド」（23 字 × 8 ＋ 16 = 200）。左の文言はその手前（398 − 200 = 198）から、
         // さらに全角 1 字ぶん（16）手前で切る。
@@ -6377,7 +6400,9 @@ mod tests {
         assert!(!document.status().contains("（F8）"));
         document.ragged_report(1);
         assert!(
-            document.status().contains(" · 列の数が違う行 1（F8） · "),
+            document
+                .status()
+                .contains("行） · 列の数が違う行 1（F8） · "),
             "{}",
             document.status()
         );
@@ -6386,6 +6411,19 @@ mod tests {
         let mut clean = opened_with(&rows);
         clean.ragged_report(0);
         assert!(!clean.status().contains("（F8）"));
+    }
+
+    /// 状態の行の左の文言は、収まらなければ後ろの項目から落として「…」を付ける（GitHub Issue #409）。
+    #[test]
+    fn the_left_status_drops_trailing_items_to_fit() {
+        let status = "データ 300 行 · UTF-8 · タブ区切り · 2 行目 · 1 列目";
+        assert_eq!(fitted_status(status, 80), status);
+        assert_eq!(
+            fitted_status(status, 40),
+            "データ 300 行 · UTF-8 · タブ区切り · …"
+        );
+        assert_eq!(fitted_status(status, 20), "データ 300 行 · …");
+        assert_eq!(fitted_status(status, 5), status);
     }
 
     fn opened_with(rows: &[CellRow]) -> Document {
