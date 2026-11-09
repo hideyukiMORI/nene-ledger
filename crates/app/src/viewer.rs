@@ -1011,8 +1011,9 @@ impl Viewer {
         }
         // 状態の行の右端の案内（「F1 · Ctrl+Shift+P で操作の一覧」）を押したら、操作の一覧を開く（マウスで探す人の入口・
         // GitHub Issue #422）。
-        let on_hint =
-            matches!(intent, Intent::Point { at, .. } if self.document.palette_hint_hit(at, view));
+        // タイトルバーの左端の「≡ 操作」を押しても開く（GitHub Issue #446）。
+        let on_hint = matches!(intent, Intent::Point { at, .. } | Intent::DoubleClick { at }
+            if self.document.palette_hint_hit(at, view) || menu_hit(view, at));
         let intent = if on_hint { Intent::OpenPalette } else { intent };
         if self.opened_palette(intent) {
             // 検索と置換の箱を開いたら、カーソルのセルを箱の下に隠さない（GitHub Issue #300）。
@@ -1292,4 +1293,12 @@ fn palette_outcome(
     } else {
         state.handle(intent, current)
     }
+}
+
+/// 窓 `view` の点 `at` が、タイトルバーの左端の「≡ 操作」の上か（GitHub Issue #446）。
+fn menu_hit(view: WindowView, at: PixelPoint) -> bool {
+    let menu = view.chrome().menu();
+    let (left, top) = (menu.origin().x(), menu.origin().y());
+    (left..left.saturating_add(menu.size().width())).contains(&at.x())
+        && (top..top.saturating_add(menu.size().height())).contains(&at.y())
 }
