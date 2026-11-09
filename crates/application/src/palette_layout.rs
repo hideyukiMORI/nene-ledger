@@ -5,6 +5,7 @@ use nene_ledger_core::glyph_metrics::GlyphMetrics;
 use nene_ledger_core::pixel_point::PixelPoint;
 use nene_ledger_core::pixel_rect::PixelRect;
 use nene_ledger_core::pixel_size::PixelSize;
+use nene_ledger_core::table_layout::TableLayout;
 
 use crate::command_palette::CommandPalette;
 use crate::find_toggle::FindToggle;
@@ -70,11 +71,14 @@ impl PaletteLayout {
         if !palette.is_low() {
             return layout;
         }
-        // 窓の下へ寄せる（下の端との空きは上と同じ・GitHub Issue #286）。窓より高ければ上のまま。
+        // 窓の下へ寄せる（GitHub Issue #286）。状態の行（行目・列目・件数）は覆わず、その上に上と同じ空きを空ける
+        // （#300）。窓より高ければ上のまま。
         let height = layout.panel.size().height();
+        let status = TableLayout::row_height_for(metrics);
         let low = view
             .size()
             .height()
+            .saturating_sub(status)
             .saturating_sub(metrics.px(MARGIN))
             .saturating_sub(height);
         if low > top {
@@ -443,8 +447,9 @@ mod tests {
         let high = PaletteLayout::new(view(1024, 640), &palette);
         palette.set_low(true);
         let low = PaletteLayout::new(view(1024, 640), &palette);
-        // 下の端との空きは上と同じ 8。大きさと候補の数は変えない。
-        assert_eq!(bottom(low.panel()), 640 - 8);
+        // 状態の行（行の高さ）の上に、上と同じ空き 8。大きさと候補の数は変えない。
+        let status = TableLayout::row_height_for(view(1024, 640).metrics());
+        assert_eq!(bottom(low.panel()), 640 - status - 8);
         assert_eq!(low.panel().size(), high.panel().size());
         assert_eq!(low.visible(), high.visible());
         let down = low.panel().origin().y() - high.panel().origin().y();

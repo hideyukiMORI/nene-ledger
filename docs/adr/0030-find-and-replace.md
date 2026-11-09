@@ -106,6 +106,11 @@ M2 は「探して置き換え、壊れた行を直す」束を含む（ROADMAP�
 - 表の端で送れない（箱が上で表の先頭の行・箱が下で表の末尾の行）ときは、**箱を反対の端へ寄せる**（上なら窓の下・下なら上）。寄せた位置は閉じるまでそのまま
 - 試して選ばなかった形：VS Code の `editor.find.addExtraSpaceOnTop`（1 行目の上に空きを足す）。表は見出しの行と行の番号を固定して描くので、空きを足すと見出しの固定の作りに手が入る。GNOME Text Editor は同じ問題が未解決（Issue #346）
 
+#### 第 8 節の改め（2026-11-09・GitHub Issue #300・専門家ペルソナの 2 巡目）
+
+- 見つけたときだけでなく、**検索と置換の箱を開いたとき**も、カーソルのセルが箱の下にあれば箱の外へ送る（表の端なら箱を寄せる）。前は Ctrl+H で開いた時点のカーソルが箱の下に隠れたままだった
+- 下へ寄せた箱は**状態の行（行目・列目・件数）を覆わない**。状態の行の上に、上と同じ空きを空けて置く
+
 ### 9. 置換の欄は 2 つを縦に並べ、名札を付ける（2026-11-09 追記・GitHub Issue #287）
 
 > 第 8 節と同じく、専門家ペルソナ 3 人の推しで作った。施主の確認を待つ。
@@ -192,6 +197,8 @@ M2 は「探して置き換え、壊れた行を直す」束を含む（ROADMAP�
   - 見つからないことをオンの条件を添えて言い、開き直せば消える（application のテスト `nothing_found_is_said_in_place_with_the_narrowing_conditions`）。探す段は欄の右端に出す（`the_replace_step_shows_the_count_and_the_confirmation_in_place_of_its_keys`）
 - **active**（GitHub Issue #299 で入れた）:
   - 一部だけ変わる組は、少なくても必ず強調の行に出る。同じ数の組は前の値の順、答えは並びに依らない。いちばん長い行も案内の幅に収まる（application のテスト `partial_pairs_are_always_shown_apart_from_whole_cell_pairs`・`an_empty_replacement_warns_and_ties_are_stable`・`long_values_are_clipped_to_fit_the_guide`）。確かめの間の条件の切り替えでの数え直しは合成ルート（Xvfb で確かめた・自動の試験は無い）
+- **active**（GitHub Issue #300 で入れた）:
+  - 箱を開いたとき、箱の下のカーソルを箱の外へ送り、下でなければ動かさない（application のテスト `opening_the_cover_reveals_the_cursor`）。下へ寄せた箱は状態の行の上（`a_lowered_panel_sits_at_the_bottom_with_the_same_rows`）
 - **planned（実装の Issue で active にする）**:
   - 正規表現の逆戻りで止まらない（病的な式と入力の時間を測る・gate-proofs）
   - 1 GB の表で、最後の行にだけある値を見つける時間を DuckDB / qsv / EmEditor と同じファイルで記録（QLT-014。`grep` と `rg` との比べは benchmarks 第 8 節）
