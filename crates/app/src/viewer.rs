@@ -508,9 +508,14 @@ impl Viewer {
     /// （配色を試しても、パレットの色は動かない）。
     fn opened_palette(&mut self, intent: Intent) -> bool {
         let colors = self.preferences.theme().palette();
-        if let Intent::OpenFind { replace } = intent {
-            // 前の全部の置換の結果は、開き直した欄の案内に出さない（GitHub Issue #189）。
+        if matches!(
+            intent,
+            Intent::OpenFind { .. } | Intent::OpenGoTo | Intent::OpenPalette
+        ) {
+            // 前の検索と全部の置換の結果は、開き直した欄に出さない（GitHub Issue #189・#291）。
             self.document.end_replace_note();
+        }
+        if let Intent::OpenFind { replace } = intent {
             if replace {
                 self.open_replace();
             } else {

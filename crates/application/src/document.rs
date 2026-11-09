@@ -2118,10 +2118,10 @@ impl Document {
         Some((DocumentEffect::Stay, consumed))
     }
 
-    /// 全部の置換の結果の知らせ（状態の行と置換の欄の案内）を消す。欄に次の意図が来たときと、欄を開き直したとき
-    /// （古い結果で案内のキーを隠さない・GitHub Issue #189）。
+    /// 検索と全部の置換の結果の知らせ（状態の行と欄の案内）を消す。欄に次の意図が来たときと、パレットを開き直したとき
+    /// （古い結果で案内のキーを隠さない・GitHub Issue #189。行へ飛ぶ段などに前の「見つかりません」を残さない・#291）。
     pub fn end_replace_note(&mut self) {
-        if let Some(Notice::Replace(_)) = self.notice {
+        if let Some(Notice::Replace(_) | Notice::Find(_)) = self.notice {
             self.notice = None;
         }
     }
@@ -2153,13 +2153,30 @@ impl Document {
                 "{} セルを置き換えました · 表で Ctrl+Z で戻す",
                 group_digits(u64::try_from(cells).unwrap_or(u64::MAX))
             )),
-            Some(Notice::Replace(
-                ReplaceNotice::NothingToReplace { .. }
-                | ReplaceNotice::TooMany
-                | ReplaceNotice::Changed
-                | ReplaceNotice::Stopped
-                | ReplaceNotice::Failed,
-            )) => Some(String::from("置き換えませんでした（訳は下の状態の行）")),
+            // 置き換えなかった訳は、欄の中でその場に言う（目を状態の行へ送らない・GitHub Issue #291）。
+            Some(Notice::Replace(ReplaceNotice::NothingToReplace { .. })) => {
+                Some(self.nothing_found("当たるセルがありません"))
+            }
+            Some(Notice::Replace(ReplaceNotice::TooMany)) => Some(String::from(
+                "100 万セルを越えるので置き換えません（範囲や条件を狭めて）",
+            )),
+            Some(Notice::Replace(ReplaceNotice::Changed)) => Some(String::from(
+                "数えている間に表が変わりました（もう一度 Alt+A）",
+            )),
+            Some(Notice::Replace(ReplaceNotice::Stopped)) => {
+                Some(String::from("置き換えをやめました"))
+            }
+            Some(Notice::Replace(ReplaceNotice::Failed)) => {
+                Some(String::from("ファイルを読めず、置き換えをやめました"))
+            }
+            Some(Notice::Find(notice)) => Some(match notice {
+                FindNotice::NotFound => self.nothing_found("見つかりません"),
+                FindNotice::Wrapped => String::from("表の端から続けて見つけました"),
+                FindNotice::Stopped => String::from("探すのをやめました"),
+                FindNotice::Failed => String::from("ファイルを読めず、探すのをやめました"),
+                FindNotice::NothingToRepeat => String::from("続けて探すものがありません"),
+                FindNotice::BrokenPattern => String::from("正規表現の式が読めません"),
+            }),
             Some(_) | None => None,
         }
     }
@@ -2179,6 +2196,28 @@ impl Document {
                 })
             })
             .unwrap_or_default()
+    }
+
+    /// 見つからなかったときの短い知らせ `head` に、絞り込む条件のうちオンのものを添える（GitHub Issue #291）。かなの区別は
+    /// 既定でオンなので添えない。
+    fn nothing_found(&self, head: &str) -> String {
+        let Some(options) = self.find_query.as_ref().map(FindQuery::options) else {
+            return String::from(head);
+        };
+        let on: Vec<&str> = [
+            (options.match_case(), "大小を区別"),
+            (options.whole_cell(), "セル全体"),
+            (options.regex(), "正規表現"),
+            (options.match_width(), "全角半角を区別"),
+        ]
+        .into_iter()
+        .filter_map(|(on, name)| on.then_some(name))
+        .collect();
+        if on.is_empty() {
+            String::from(head)
+        } else {
+            format!("{head}（オン: {}）", on.join("・"))
+        }
     }
 
     /// 数え終えた書き換えを 1 手の束として書く（Ctrl+Z 1 回で戻る・ADR 0029 の決定 3 と同じ形）。
@@ -9323,6 +9362,28 @@ mod tests {
         assert_eq!(cell_text(&document, 1, 0), Some("b#"));
     }
 
+    /// 見つからない・置き換えなかったことは、欄の中でその場に、絞り込む条件のうちオンのものを添えて言う。パレットを開き
+    /// 直せば古い知らせは消える（GitHub Issue #291）。
+    #[test]
+    fn nothing_found_is_said_in_place_with_the_narrowing_conditions() {
+        let mut document = indexed_editable();
+        finding(&mut document, "zzz", true);
+        assert_eq!(document.replace_guide().as_deref(), Some("見つかりません"));
+        let strict = FindOptions::standard().toggled_case().toggled_whole_cell();
+        let effect = document.find(FindQuery::new("B1", strict), true);
+        finish_finding(&mut document, effect);
+        assert_eq!(
+            document.replace_guide().as_deref(),
+            Some("見つかりません（オン: 大小を区別・セル全体）")
+        );
+        document.end_replace_note();
+        assert_eq!(document.replace_guide(), None);
+        text_at(
+            &document.frame(normal(), palette()),
+            "Ctrl+Shift+P でコマンド",
+        );
+    }
+
     /// 件数を見せている間は、何が何に変わるかの内訳と、部分一致の注意を出す。置き換えれば消える（GitHub Issue #289）。
     #[test]
     fn replacing_all_shows_what_changes_into_what() {
@@ -9399,7 +9460,7 @@ mod tests {
         document.replace_counted((late, 0), false);
         assert_eq!(
             document.replace_guide().as_deref(),
-            Some("置き換えませんでした（訳は下の状態の行）")
+            Some("置き換えをやめました")
         );
         assert_eq!(document.replace_prompt_intent(Intent::Confirm), None);
         assert_eq!(document.replace_guide(), None);
@@ -9448,7 +9509,7 @@ mod tests {
         assert_eq!(cell_text(&declined, 1, 0), None);
         assert_eq!(
             declined.replace_guide().as_deref(),
-            Some("置き換えませんでした（訳は下の状態の行）")
+            Some("置き換えをやめました")
         );
         let mut escaped = indexed_editable();
         replacing_all(&mut escaped, "1", "#");
