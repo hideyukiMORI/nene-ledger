@@ -17,6 +17,8 @@ pub struct SelectionStats {
     not_numbers: u64,
     /// 数と読んだうち、書き方を読み替えたもの（`¥`・桁区切り・指数・全角など・GitHub Issue #319）。
     rewritten: u64,
+    /// 範囲に入った行のうち、列の数が見出しと違う行（ずれた値を足しているかもしれない・GitHub Issue #329）。
+    ragged_rows: u64,
 }
 
 impl SelectionStats {
@@ -41,6 +43,7 @@ impl SelectionStats {
             sum: DecimalSum::ZERO,
             not_numbers: 0,
             rewritten: 0,
+            ragged_rows: 0,
         }
     }
 
@@ -83,6 +86,20 @@ impl SelectionStats {
     #[must_use]
     pub fn rewritten(self) -> u64 {
         self.rewritten
+    }
+
+    /// 範囲に入った 1 行のセルの数 `cells` が見出しのセルの数 `expected` と違えば、列の数が違う行として数える
+    /// （GitHub Issue #329）。
+    pub fn add_shape(&mut self, cells: usize, expected: usize) {
+        if cells != expected {
+            self.ragged_rows = self.ragged_rows.saturating_add(1);
+        }
+    }
+
+    /// 範囲に入った、列の数が見出しと違う行の数。
+    #[must_use]
+    pub fn ragged_rows(self) -> u64 {
+        self.ragged_rows
     }
 
     /// 件数（空でないセル）。
