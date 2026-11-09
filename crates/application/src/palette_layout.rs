@@ -9,6 +9,7 @@ use nene_ledger_core::table_layout::TableLayout;
 
 use crate::command_palette::CommandPalette;
 use crate::find_toggle::FindToggle;
+use crate::palette_item::PaletteItem;
 use crate::palette_mode::PaletteMode;
 use crate::window_view::WindowView;
 
@@ -152,7 +153,8 @@ impl PaletteLayout {
             .unwrap_or(u32::MAX)
             .max(least_rows(palette.mode()));
         let visible = usize::try_from(count.min(fit)).unwrap_or(1);
-        let first = palette.selected().saturating_add(1).saturating_sub(visible);
+        let first = first_shown(palette, visible);
+        palette.remember_top(first);
         let list_height = row_height.saturating_mul(u32::try_from(visible).unwrap_or(1));
         let height = list_top
             .saturating_add(list_height)
@@ -320,6 +322,27 @@ impl PaletteLayout {
     pub fn contains(&self, at: PixelPoint) -> bool {
         contains(self.panel, at)
     }
+}
+
+/// 見せる最初の候補の番目。前に描いたときの先頭（`CommandPalette::top`）のまま、選びが見せている所の外へ出たときだけ
+/// 送る：上へ出れば選びが最初の行に（すぐ上が見出しなら見出しも見せる）、下へ出れば選びが最後の行に来るように。選びが
+/// 下に張り付いたまま上へ戻るとき、表示まで一緒に動かさない（施主・GitHub Issue #434）。
+fn first_shown(palette: &CommandPalette, visible: usize) -> usize {
+    let items = palette.items();
+    let selected = palette.selected();
+    let most = items.len().saturating_sub(visible);
+    let mut first = palette.top().min(most);
+    let heading_above = selected
+        .checked_sub(1)
+        .filter(|&above| matches!(items.get(above), Some(PaletteItem::Heading(_))));
+    let wanted_top = heading_above.unwrap_or(selected);
+    if wanted_top < first {
+        first = wanted_top;
+    }
+    if selected >= first.saturating_add(visible) {
+        first = selected.saturating_add(1).saturating_sub(visible);
+    }
+    first
 }
 
 /// 欄の下に置く物：置換の段の 2 つ目の欄（置き換える文字・探す欄の下に同じ大きさで・GitHub Issue #287）と、試しの
@@ -506,5 +529,33 @@ mod tests {
             assert_eq!(layout.toggle_at(chip.origin()), Some(toggle));
         }
         assert_eq!(layout.toggle_at(field.origin()), None);
+    }
+
+    /// 選びが見せている所の中にある間は、表示を動かさない。下に張り付いた後に ↑ で戻っても、選びだけが上へ動く。上へ
+    /// 出れば、すぐ上の見出しも見えるように送る（施主・GitHub Issue #434）。
+    #[test]
+    fn the_view_stays_while_the_selection_moves_inside_it() {
+        use crate::cursor_step::CursorStep;
+        use crate::intent::Intent;
+        use crate::selection_mode::SelectionMode;
+        let moving = |step| Intent::Move {
+            step,
+            mode: SelectionMode::Collapse,
+        };
+        let mut palette = CommandPalette::open();
+        let first = |open: &CommandPalette| PaletteLayout::new(view(1024, 640), open).first();
+        assert_eq!(first(&palette), 0);
+        for _ in 0..12_u32 {
+            palette.handle(moving(CursorStep::Down), 0);
+        }
+        let scrolled = first(&palette);
+        assert!(scrolled > 0);
+        let selected = palette.selected();
+        palette.handle(moving(CursorStep::Up), 0);
+        assert_eq!(first(&palette), scrolled);
+        assert!(palette.selected() < selected);
+        // 上へ出るまで戻ると、そこで送る。いちばん上の候補なら見出し（0 番目）まで見せる。
+        palette.handle(moving(CursorStep::Top), 0);
+        assert_eq!(first(&palette), 0);
     }
 }
