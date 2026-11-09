@@ -3,6 +3,7 @@
 use nene_ledger_core::find_options::FindOptions;
 use nene_ledger_core::theme_choice::ThemeChoice;
 
+use crate::client_bands::DETAIL_LINES;
 use crate::detail_pane::DetailPane;
 use crate::zoom_level::ZoomLevel;
 
@@ -15,6 +16,8 @@ pub struct Settings {
     zoom: ZoomLevel,
     detail: DetailPane,
     find: FindOptions,
+    /// 詳細ペインの本文の行の数（境の線で変える・GitHub Issue #452）。
+    detail_lines: u32,
 }
 
 impl Settings {
@@ -27,6 +30,7 @@ impl Settings {
             zoom: ZoomLevel::hundred(),
             detail: DetailPane::Open,
             find: FindOptions::standard(),
+            detail_lines: DETAIL_LINES,
         }
     }
 
@@ -70,6 +74,21 @@ impl Settings {
     #[must_use]
     pub fn with_zoom(self, zoom: ZoomLevel) -> Self {
         Self { zoom, ..self }
+    }
+
+    /// 詳細ペインの本文の行の数を替えた設定（GitHub Issue #452）。
+    #[must_use]
+    pub fn with_detail_lines(self, detail_lines: u32) -> Self {
+        Self {
+            detail_lines,
+            ..self
+        }
+    }
+
+    /// 詳細ペインの本文の行の数（GitHub Issue #452）。
+    #[must_use]
+    pub fn detail_lines(self) -> u32 {
+        self.detail_lines
     }
 
     /// 詳細ペインの開閉を替えた設定。

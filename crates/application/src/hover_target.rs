@@ -9,4 +9,6 @@ pub enum HoverTarget {
     Thumb(ScrollOrientation),
     /// タイトルバーの「≡ 操作」。
     Menu,
+    /// 表と詳細ペインの境の線（掴めば高さを変える・GitHub Issue #452）。
+    PaneGrip,
 }

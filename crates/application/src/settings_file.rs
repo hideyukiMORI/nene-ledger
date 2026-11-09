@@ -3,6 +3,8 @@
 //! 版 2: `version = 2`・`theme = system|<名前>`・`zoom = <百分率>`・`detail = open|closed`・`find = <区別する条件の並び>`
 //! （`case`・`whole`・`width`・`kana`・`regex` を空白で区切る・ADR 0030 の決定 3・GitHub Issue #213）。1 行に 1 つの
 //! `鍵 = 値`。版 1（`find` の無い版）も読む。
+//! 版 3: 版 2 に `detail_lines = <詳細ペインの本文の行の数>` を足す（GitHub Issue #452）。既定の行の数なら版 2 以下で書く
+//! （古い exe でも読める）。
 //! 形はここ（純関数）、読み書きはアダプタ。知らない版・知らない鍵・読めない値・同じ鍵の重なりは `None` で、黙って既定値へ
 //! 落とさない。無い鍵は初期値で補う。
 
@@ -12,11 +14,14 @@ use alloc::string::String;
 use nene_ledger_core::find_options::FindOptions;
 use nene_ledger_core::theme_choice::ThemeChoice;
 
+use crate::client_bands::{DETAIL_LINES, MAX_DETAIL_LINES, MIN_DETAIL_LINES};
 use crate::detail_pane::DetailPane;
 use crate::settings::Settings;
 use crate::zoom_level::ZoomLevel;
 
-/// いま書く版。
+/// 詳細ペインの行の数まで書く版（GitHub Issue #452）。
+const LINES_VERSION: &str = "3";
+/// 検索の条件まで書く版。
 const VERSION: &str = "2";
 /// 読める古い版（`find` の鍵が無い）。
 const OLD_VERSION: &str = "1";
@@ -44,8 +49,8 @@ pub fn encode(settings: &Settings) -> String {
         settings.theme().keyword(),
         settings.zoom().percent()
     );
-    // 検索の条件が既定なら版 1 のまま書く（版 1 しか読めない古い exe でも、配色と文字の大きさを失わない）。
-    if settings.find() == FindOptions::standard() {
+    // 検索の条件と詳細ペインの行の数が既定なら版 1 のまま書く（版 1 しか読めない古い exe でも、配色と文字の大きさを失わない）。
+    if settings.find() == FindOptions::standard() && settings.detail_lines() == DETAIL_LINES {
         return format!("version = {OLD_VERSION}\n{head}");
     }
     let find: alloc::vec::Vec<&str> = FIND_FLAGS
@@ -58,7 +63,13 @@ pub fn encode(settings: &Settings) -> String {
     } else {
         format!("find = {}", find.join(" "))
     };
-    format!("version = {VERSION}\n{head}{find}\n")
+    if settings.detail_lines() == DETAIL_LINES {
+        return format!("version = {VERSION}\n{head}{find}\n");
+    }
+    format!(
+        "version = {LINES_VERSION}\n{head}{find}\ndetail_lines = {}\n",
+        settings.detail_lines()
+    )
 }
 
 /// 検索の条件の鍵の言葉・入っているか・入れ替える関数。
@@ -85,6 +96,40 @@ const FIND_FLAGS: [FindFlag; 5] = [
     ("regex", FindOptions::regex, FindOptions::toggled_regex),
 ];
 
+/// まだ読んでいない鍵 `slot` に、読めた値 `value` を入れる。2 度目の鍵か、読めない値なら `None`。
+fn once<T>(slot: &mut Option<T>, value: Option<T>) -> Option<()> {
+    if slot.is_some() {
+        return None;
+    }
+    *slot = Some(value?);
+    Some(())
+}
+
+/// `detail_lines` の値を読む（上限と下限に収める）。数でなければ `None`。
+fn lines_of(value: &str) -> Option<u32> {
+    let lines: u32 = value.parse().ok()?;
+    Some(lines.clamp(MIN_DETAIL_LINES, MAX_DETAIL_LINES))
+}
+
+/// `detail` の値を読む。
+fn pane_of(value: &str) -> Option<DetailPane> {
+    match value {
+        "open" => Some(DetailPane::Open),
+        "closed" => Some(DetailPane::Closed),
+        _ => None,
+    }
+}
+
+/// `version` の値を読む（1・2・3）。知らない版は `None`。
+fn version_of(value: &str) -> Option<u8> {
+    match value {
+        OLD_VERSION => Some(1),
+        VERSION => Some(2),
+        LINES_VERSION => Some(3),
+        _ => None,
+    }
+}
+
 /// `find` の値（条件の名前の並び）を読む。どれも区別しない条件から、名前の条件を 1 つずつ入れる。知らない名前・同じ名前の
 /// 重なりは `None`。
 fn parse_find(value: &str) -> Option<FindOptions> {
@@ -98,12 +143,13 @@ fn parse_find(value: &str) -> Option<FindOptions> {
 
 /// 読み取り中の値。鍵ごとに、まだ読んでいなければ `None`。
 struct Reading {
-    /// 読んだ版（版 1 なら `false`）。
-    version: Option<bool>,
+    /// 読んだ版（1・2・3）。
+    version: Option<u8>,
     theme: Option<ThemeChoice>,
     zoom: Option<ZoomLevel>,
     detail: Option<DetailPane>,
     find: Option<FindOptions>,
+    detail_lines: Option<u32>,
 }
 
 impl Reading {
@@ -114,36 +160,31 @@ impl Reading {
             zoom: None,
             detail: None,
             find: None,
+            detail_lines: None,
         }
     }
 
     /// 1 つの `鍵 = 値` を取り込む。知らない鍵・読めない値・2 度目の鍵は `None`。
     fn take(&mut self, key: &str, value: &str) -> Option<()> {
         match key {
-            "version" if self.version.is_none() && (value == VERSION || value == OLD_VERSION) => {
-                self.version = Some(value == VERSION);
-            }
-            "find" if self.find.is_none() => self.find = Some(parse_find(value)?),
-            "theme" if self.theme.is_none() => self.theme = Some(ThemeChoice::from_keyword(value)?),
-            "zoom" if self.zoom.is_none() => {
-                self.zoom = Some(ZoomLevel::from_percent(value.parse().ok()?)?);
-            }
-            "detail" if self.detail.is_none() => {
-                self.detail = Some(match value {
-                    "open" => DetailPane::Open,
-                    "closed" => DetailPane::Closed,
-                    _ => return None,
-                });
-            }
-            _ => return None,
+            "version" => once(&mut self.version, version_of(value)),
+            "detail_lines" => once(&mut self.detail_lines, lines_of(value)),
+            "find" => once(&mut self.find, parse_find(value)),
+            "theme" => once(&mut self.theme, ThemeChoice::from_keyword(value)),
+            "zoom" => once(
+                &mut self.zoom,
+                value.parse().ok().and_then(ZoomLevel::from_percent),
+            ),
+            "detail" => once(&mut self.detail, pane_of(value)),
+            _ => None,
         }
-        Some(())
     }
 
     /// 版が書いてあれば設定にする。無い鍵は初期値で補う。
     fn into_settings(self) -> Option<Settings> {
-        // 版 1 には `find` の鍵が無い（あれば読めない版 1 として断る）。
-        if !self.version? && self.find.is_some() {
+        // 版 1 には `find` の鍵が無く、版 2 以下には `detail_lines` の鍵が無い（あれば読めない版として断る）。
+        let version = self.version?;
+        if (version < 2 && self.find.is_some()) || (version < 3 && self.detail_lines.is_some()) {
             return None;
         }
         let initial = Settings::initial();
@@ -152,7 +193,8 @@ impl Reading {
                 .with_theme(self.theme.unwrap_or(initial.theme()))
                 .with_zoom(self.zoom.unwrap_or(initial.zoom()))
                 .with_detail(self.detail.unwrap_or(initial.detail()))
-                .with_find(self.find.unwrap_or(initial.find())),
+                .with_find(self.find.unwrap_or(initial.find()))
+                .with_detail_lines(self.detail_lines.unwrap_or(initial.detail_lines())),
         )
     }
 }
@@ -227,7 +269,10 @@ mod tests {
         for text in [
             "",
             "theme = system\n",
-            "version = 3\n",
+            "version = 4\n",
+            "version = 2\ndetail_lines = 8\n",
+            "version = 3\ndetail_lines = many\n",
+            "version = 3\ndetail_lines = 8\ndetail_lines = 9\n",
             "version = 2\nfind = case case\n",
             "version = 2\nfind = loose\n",
             "version = 2\nfind = kana\nfind = case\n",
@@ -242,5 +287,28 @@ mod tests {
         ] {
             assert_eq!(parse(text), None, "{text:?}");
         }
+    }
+
+    /// 詳細ペインの行の数を変えたときだけ版 3 で書き、読み戻せる。既定なら今までの版のまま（古い exe でも読める・
+    /// GitHub Issue #452）。上限と下限に収めて読む。
+    #[test]
+    fn detail_lines_are_written_only_when_changed() {
+        let plain = Settings::initial();
+        assert!(encode(&plain).starts_with("version = 1\n"));
+        let tall = plain.with_detail_lines(12);
+        let text = encode(&tall);
+        assert_eq!(
+            text,
+            "version = 3\ntheme = system\nzoom = 100\ndetail = open\nfind = kana\ndetail_lines = 12\n"
+        );
+        assert_eq!(parse(&text), Some(tall));
+        assert_eq!(
+            parse("version = 3\ndetail_lines = 999\n").map(Settings::detail_lines),
+            Some(MAX_DETAIL_LINES)
+        );
+        assert_eq!(
+            parse("version = 3\ndetail_lines = 0\n").map(Settings::detail_lines),
+            Some(MIN_DETAIL_LINES)
+        );
     }
 }

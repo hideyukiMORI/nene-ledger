@@ -7,4 +7,6 @@ pub enum PointerShape {
     Arrow,
     /// 列の幅を変える（左右の矢印）。
     ColumnResize,
+    /// 詳細ペインの高さを変える（上下の矢印・GitHub Issue #452）。
+    RowResize,
 }

@@ -36,10 +36,10 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CS_DBLCLKS, CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DispatchMessageW, GWLP_USERDATA,
-    GetClientRect, GetMessageW, GetWindowLongPtrW, IDC_ARROW, IDC_SIZEWE, IsZoomed, LoadCursorW,
-    MSG, NCCALCSIZE_PARAMS, PostMessageW, PostQuitMessage, RegisterClassExW, SM_CXFRAME,
-    SM_CXPADDEDBORDER, SM_CYFRAME, SW_SHOW, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE,
-    SWP_NOSIZE, SWP_NOZORDER, SetCursor, SetWindowLongPtrW, SetWindowPos, ShowWindow,
+    GetClientRect, GetMessageW, GetWindowLongPtrW, IDC_ARROW, IDC_SIZENS, IDC_SIZEWE, IsZoomed,
+    LoadCursorW, MSG, NCCALCSIZE_PARAMS, PostMessageW, PostQuitMessage, RegisterClassExW,
+    SM_CXFRAME, SM_CXPADDEDBORDER, SM_CYFRAME, SW_SHOW, SWP_FRAMECHANGED, SWP_NOACTIVATE,
+    SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetCursor, SetWindowLongPtrW, SetWindowPos, ShowWindow,
     TranslateMessage, WINDOW_EX_STYLE, WM_CAPTURECHANGED, WM_CHAR, WM_CLOSE, WM_DESTROY,
     WM_DPICHANGED, WM_DROPFILES, WM_ERASEBKGND, WM_IME_COMPOSITION, WM_IME_ENDCOMPOSITION,
     WM_IME_SETCONTEXT, WM_IME_STARTCOMPOSITION, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN,
@@ -660,22 +660,28 @@ fn pointer_message(
 /// （類の矢印・縁の向き）に任せる。lparam の下位語が当たり判定の値。
 fn cursor_message(state: &WindowState<'_>, lparam: LPARAM) -> Option<LRESULT> {
     let over_content = u32::try_from(lparam.0 & 0xFFFF).ok() == Some(HTCLIENT);
-    if !over_content || state.pointer_shape() != PointerShape::ColumnResize {
+    if !over_content {
         return None;
     }
-    show_column_cursor();
+    // 列の境目は左右、詳細ペインの境の線は上下の矢印（GitHub Issue #452）。
+    let cursor = match state.pointer_shape() {
+        PointerShape::Arrow => return None,
+        PointerShape::ColumnResize => IDC_SIZEWE,
+        PointerShape::RowResize => IDC_SIZENS,
+    };
+    show_resize_cursor(cursor);
     Some(LRESULT(1))
 }
 
-/// カーソルを、列の幅を変える左右の矢印にする（Issue #64）。
+/// カーソルを、列の幅か詳細ペインの高さを変える矢印 `cursor` にする（Issue #64・GitHub Issue #452）。
 #[expect(
     unsafe_code,
     reason = "RS-010: Win32 の LoadCursorW / SetCursor を呼ぶ（ADR 0002 の 4）"
 )]
-fn show_column_cursor() {
+fn show_resize_cursor(cursor: PCWSTR) {
     // SAFETY: 系統の共有のカーソルを読み、今のカーソルにするだけ。
     unsafe {
-        if let Ok(cursor) = LoadCursorW(None, IDC_SIZEWE) {
+        if let Ok(cursor) = LoadCursorW(None, cursor) {
             let _previous = SetCursor(Some(cursor));
         }
     }
