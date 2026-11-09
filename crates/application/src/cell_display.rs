@@ -64,7 +64,7 @@ const fn mark_of(character: char) -> Option<char> {
 }
 
 /// 値 `value` の中の、印に替える字の凡例（印の名前と数・最初に出た順）。表の印 `□` が字の無い豆腐に見えて驚かないよう、
-/// 詳細ペインで言葉にする（業界のペルソナの相談・GitHub Issue #387）。印の表は [`mark_of`] と同じ。
+/// 詳細ペインで言葉にする（業界のペルソナの相談・GitHub Issue #387）。印の表は `mark_of`（表の印の正本）と同じ。
 #[must_use]
 pub fn mark_legend(value: &str) -> String {
     let mut counts: Vec<(char, usize)> = Vec::new();
