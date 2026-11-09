@@ -717,8 +717,10 @@ impl CommandPalette {
         if command == CommandId::ChooseDialect {
             return PaletteOutcome::OpenCandidates;
         }
-        if command == CommandId::NextRaggedRow {
-            return PaletteOutcome::FindRagged;
+        if command == CommandId::NextRaggedRow || command == CommandId::PreviousRaggedRow {
+            return PaletteOutcome::FindRagged {
+                forward: command == CommandId::NextRaggedRow,
+            };
         }
         self.query.clear();
         if command == CommandId::ShowKeys {
@@ -956,7 +958,17 @@ mod tests {
         );
         assert_eq!(
             palette.handle(Intent::Confirm, 0),
-            PaletteOutcome::FindRagged
+            PaletteOutcome::FindRagged { forward: true }
+        );
+        let mut back = CommandPalette::open();
+        typed(&mut back, "れつのかずがみだしとちがうまえ");
+        assert_eq!(
+            back.items().first(),
+            Some(&PaletteItem::Command(CommandId::PreviousRaggedRow))
+        );
+        assert_eq!(
+            back.handle(Intent::Confirm, 0),
+            PaletteOutcome::FindRagged { forward: false }
         );
     }
 
