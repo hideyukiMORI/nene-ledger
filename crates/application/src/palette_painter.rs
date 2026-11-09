@@ -41,7 +41,7 @@ use crate::palette_heading::PaletteHeading;
 use crate::palette_item::PaletteItem;
 use crate::palette_layout::{CHIP_MARK_COLUMNS, CHIP_PAD, FIND_CHIPS, PaletteLayout};
 use crate::palette_mode::PaletteMode;
-use crate::palette_search::key_list;
+use crate::palette_search::{key_list, planned_feature};
 use crate::reading_aspect::ReadingAspect;
 use crate::reading_choice::ReadingChoice;
 
@@ -406,7 +406,14 @@ impl<'state> PalettePainter<'state> {
             PaletteMode::Reading { aspect, .. } => aspect.noun(),
             PaletteMode::Candidates { .. } => "候補",
         };
-        let text = format!("“{}” に合う{kind}は無い", self.palette.query());
+        // まだ無いが予定のある機能の言葉なら、そう言う（Excel の言葉で探す人に・GitHub Issue #426）。
+        let planned = (self.palette.mode() == PaletteMode::Commands)
+            .then(|| planned_feature(self.palette.query()))
+            .flatten();
+        let text = planned.map_or_else(
+            || format!("“{}” に合う{kind}は無い", self.palette.query()),
+            |name| format!("「{name}」はまだありません（今後の版で足す予定です）"),
+        );
         let row = self.layout.row(0);
         let left = row.origin().x().saturating_add(self.px(TEXT_INSET));
         self.text_at(from_left(row, left), text, self.colors.gutter_text());
