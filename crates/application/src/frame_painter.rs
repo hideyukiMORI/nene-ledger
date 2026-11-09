@@ -454,7 +454,11 @@ impl<'view> FramePainter<'view> {
         let start = self.commands.len();
         self.paint_editing(wide, editing);
         let drawn: Vec<DrawCommand> = self.commands.drain(start..).collect();
-        let caret = self.overlays.pop();
+        let caret = if editing.caret_shown() {
+            self.overlays.pop()
+        } else {
+            None
+        };
         self.overlays.extend(drawn);
         self.overlays.extend(caret);
         self.editing_wide = Some(wide);
@@ -505,13 +509,15 @@ impl<'view> FramePainter<'view> {
                 self.palette.text(),
             );
         }
-        self.overlays.push(DrawCommand::Fill {
-            rect: PixelRect::new(
-                PixelPoint::new(at(caret), top),
-                PixelSize::new(caret_width, self.metrics.line_height()),
-            ),
-            color: self.palette.cursor(),
-        });
+        if editing.caret_shown() {
+            self.overlays.push(DrawCommand::Fill {
+                rect: PixelRect::new(
+                    PixelPoint::new(at(caret), top),
+                    PixelSize::new(caret_width, self.metrics.line_height()),
+                ),
+                color: self.palette.cursor(),
+            });
+        }
     }
 
     /// 選択が本体の `body` 番目の行を覆うか。

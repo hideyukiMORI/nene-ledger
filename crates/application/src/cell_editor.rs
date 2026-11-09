@@ -16,6 +16,7 @@ use nene_ledger_core::text_edit::TextEdit;
 use crate::cursor_step::CursorStep;
 use crate::edit_commit::EditCommit;
 use crate::edit_mode::EditMode;
+use crate::edit_surface::EditSurface;
 
 /// 編集中のセル。どのセルか・見えていた値・原本の値・状態・欄。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -26,6 +27,8 @@ pub struct CellEditor {
     source: Option<String>,
     mode: EditMode,
     field: TextEdit,
+    /// 字を打っている所（表のセルか詳細ペインか・GitHub Issue #458）。
+    surface: EditSurface,
 }
 
 impl CellEditor {
@@ -58,6 +61,7 @@ impl CellEditor {
             source: source.map(ToOwned::to_owned),
             mode,
             field,
+            surface: EditSurface::Cell,
         }
     }
 
@@ -125,6 +129,17 @@ impl CellEditor {
     /// Delete。
     pub fn erase_after(&mut self) {
         self.field = self.field.deleted();
+    }
+
+    /// 字を打っている所。
+    #[must_use]
+    pub const fn surface(&self) -> EditSurface {
+        self.surface
+    }
+
+    /// 字を打っている所を詳細ペインへ移す（値はそのまま・GitHub Issue #458）。
+    pub fn type_in_pane(&mut self) {
+        self.surface = EditSurface::Pane;
     }
 
     /// Ctrl+A。欄の字をすべて選ぶ。
