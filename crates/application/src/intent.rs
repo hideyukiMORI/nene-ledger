@@ -8,6 +8,7 @@ use crate::column_shift::ColumnShift;
 use crate::cursor_step::CursorStep;
 use crate::find_toggle::FindToggle;
 use crate::go_to_target::GoToTarget;
+use crate::root_command::RootCommand;
 use crate::row_place::RowPlace;
 use crate::scroll::Scroll;
 use crate::selection_mode::SelectionMode;
@@ -118,10 +119,8 @@ pub enum Intent {
     Save,
     /// 別の名前・場所に保存する（Ctrl+Shift+S・ADR 0028 の決定 4）。
     SaveAs,
-    /// 新しい表を新しい窓で開く（Ctrl+N・ADR 0028 の決定 1）。合成ルートが受ける（表の状態は変えない）。
-    NewTable,
-    /// ファイルを選んで新しい窓で開く（Ctrl+O・GitHub Issue #344）。合成ルートが受ける（表の状態は変えない）。
-    OpenFile,
+    /// 合成ルートだけが受ける意図（新しい表・ファイルを開く・壊れた行へ・GitHub Issue #377）。表の状態は変えない。
+    Root(RootCommand),
     /// クリップボードの文字列を貼る（Ctrl+V・Shift+Insert・CLIP-01）。UI が OS のクリップボードを読み、
     /// [`crate::session::Session::paste`] で渡す（ここまで来たら何もしない）。
     Paste,

@@ -6,6 +6,7 @@ use crate::cursor_step::CursorStep;
 use crate::detail_pane::DetailPane;
 use crate::intent::Intent;
 use crate::reading_aspect::ReadingAspect;
+use crate::root_command::RootCommand;
 use crate::row_place::RowPlace;
 use crate::selection_mode::SelectionMode;
 use crate::zoom_step::ZoomStep;
@@ -404,8 +405,6 @@ impl CommandId {
             | Self::UnfreezeColumns
             | Self::ShowKeys
             | Self::ShowAbout
-            | Self::NextRaggedRow
-            | Self::PreviousRaggedRow
             | Self::InsertRowsBelow
             | Self::AppendRow
             | Self::InsertColumnsRight => None,
@@ -415,6 +414,8 @@ impl CommandId {
             Self::Copy => Some("Ctrl+C"),
             Self::Cut => Some("Ctrl+X"),
             Self::Find => Some("Ctrl+F"),
+            Self::NextRaggedRow => Some("F8"),
+            Self::PreviousRaggedRow => Some("Shift+F8"),
             Self::FindNext => Some("F3"),
             Self::FindPrevious => Some("Shift+F3"),
             Self::Replace => Some("Ctrl+H"),
@@ -506,10 +507,7 @@ impl CommandId {
             | Self::ChooseQuoting
             | Self::ChooseHeader
             | Self::ShowKeys
-            | Self::ShowAbout
-            // 意図ではなく、パレットの結果 `FindRagged` で合成ルートが探す（GitHub Issue #338）。
-            | Self::NextRaggedRow
-            | Self::PreviousRaggedRow => None,
+            | Self::ShowAbout => None,
             Self::MoveColumnsLeft => Some(Intent::MoveColumns(ColumnShift::Left)),
             Self::MoveColumnsRight => Some(Intent::MoveColumns(ColumnShift::Right)),
             Self::ResetColumns => Some(Intent::ResetColumns),
@@ -522,10 +520,14 @@ impl CommandId {
             Self::FindNext => Some(Intent::FindAgain { forward: true }),
             Self::FindPrevious => Some(Intent::FindAgain { forward: false }),
             Self::Replace => Some(Intent::OpenFind { replace: true }),
-            Self::OpenFile => Some(Intent::OpenFile),
+            Self::NextRaggedRow => Some(Intent::Root(RootCommand::FindRagged { forward: true })),
+            Self::PreviousRaggedRow => {
+                Some(Intent::Root(RootCommand::FindRagged { forward: false }))
+            }
+            Self::OpenFile => Some(Intent::Root(RootCommand::OpenFile)),
             Self::Save => Some(Intent::Save),
             Self::SaveAs => Some(Intent::SaveAs),
-            Self::NewTable => Some(Intent::NewTable),
+            Self::NewTable => Some(Intent::Root(RootCommand::NewTable)),
             Self::Undo => Some(Intent::Undo),
             Self::Redo => Some(Intent::Redo),
             Self::InsertRowsAbove => Some(Intent::InsertRows(RowPlace::Above)),
@@ -555,13 +557,7 @@ mod tests {
                 || command == CommandId::ShowKeys
                 || command == CommandId::ShowAbout
                 || command.reading_aspect().is_some();
-            // 列の数が違う次の行へは、意図ではなくパレットの結果で探す（GitHub Issue #338）。
-            assert_eq!(
-                command.intent().is_none(),
-                opens_a_list
-                    || command == CommandId::NextRaggedRow
-                    || command == CommandId::PreviousRaggedRow
-            );
+            assert_eq!(command.intent().is_none(), opens_a_list);
             assert!(!opens_a_list || command.keys().is_none());
             // 「…」は次に選ぶか打つものがある操作。行へ飛ぶは入力欄を開く意図を持つ。
             let asks_more =

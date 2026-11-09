@@ -27,12 +27,6 @@ pub enum PaletteOutcome {
     CommitReading(ReadingChoice),
     /// 試した読み方をやめて元に戻す。
     RevertReading,
-    /// 閉じて、列の数が見出しと違う次の（`forward` でなければ前の）行へ探す（合成ルートが `Document::find_ragged` を
-    /// 呼ぶ・GitHub Issue #338・#340）。
-    FindRagged {
-        /// 次へ探すか。
-        forward: bool,
-    },
     /// 判別の候補を選ぶ段を開く（合成ルートが今の文字コードで候補を作り `CommandPalette::enter_candidates` を呼ぶ・Issue #3）。
     OpenCandidates,
     /// 打った道筋に名前を付けて保存する（合成ルートが `CommandPalette::query` を読む）。`overwrite` は、上書きを尋ねて

@@ -25,6 +25,7 @@ use nene_ledger_application::paste_request::PasteRequest;
 use nene_ledger_application::pointer_shape::PointerShape;
 use nene_ledger_application::reading_aspect::ReadingAspect;
 use nene_ledger_application::reading_choice::ReadingChoice;
+use nene_ledger_application::root_command::RootCommand;
 use nene_ledger_application::save_problem::SaveProblem;
 use nene_ledger_application::save_target::SaveTarget;
 use nene_ledger_application::selection_mode::SelectionMode;
@@ -838,8 +839,17 @@ impl Viewer {
                 self.open_candidates();
                 None
             }
-            PaletteOutcome::FindRagged { forward } => self.find_ragged(forward),
         }
+    }
+
+    /// 合成ルートだけが受ける意図（新しい表・ファイルを開く・壊れた行へ・GitHub Issue #377）。
+    fn root_command(&mut self, command: RootCommand) -> Option<ClipboardText> {
+        match command {
+            RootCommand::NewTable => self.open_new_window(),
+            RootCommand::OpenFile => self.open_chosen_file(),
+            RootCommand::FindRagged { forward } => return self.find_ragged(forward),
+        }
+        None
     }
 
     /// パレットを閉じて、列の数が見出しと違う次の（`forward` でなければ前の）行へ探す（GitHub Issue #338・#340）。
@@ -968,13 +978,9 @@ impl Viewer {
             let effect = self.reveal_cursor(view);
             return self.effect(effect);
         }
-        if intent == Intent::NewTable {
-            self.open_new_window();
-            return None;
-        }
-        if intent == Intent::OpenFile {
-            self.open_chosen_file();
-            return None;
+        // 合成ルートだけが受ける意図（新しい表・ファイルを開く・壊れた行へ・GitHub Issue #377）。
+        if let Intent::Root(command) = intent {
+            return self.root_command(command);
         }
         if let Intent::Zoom(step) = intent {
             // 文字の大きさも配色と同じく、ファイルの画面の状態ではないので設定として持つ（ADR 0020）。

@@ -6,6 +6,7 @@ use nene_ledger_application::column_shift::ColumnShift;
 use nene_ledger_application::cursor_step::CursorStep;
 use nene_ledger_application::find_toggle::FindToggle;
 use nene_ledger_application::intent::Intent;
+use nene_ledger_application::root_command::RootCommand;
 use nene_ledger_application::scroll::Scroll;
 use nene_ledger_application::selection_mode::SelectionMode;
 use nene_ledger_application::theme_step::ThemeStep;
@@ -44,6 +45,7 @@ const VK_H: u16 = 0x48;
 const VK_W: u16 = 0x57;
 const VK_R: u16 = 0x52;
 const VK_F3: u16 = 0x72;
+const VK_F8: u16 = 0x77;
 const VK_P: u16 = 0x50;
 const VK_S: u16 = 0x53;
 const VK_Y: u16 = 0x59;
@@ -90,6 +92,8 @@ pub(crate) fn key_intent(key: u16, modifiers: Modifiers) -> Option<Intent> {
         VK_F1 => return Some(Intent::OpenPalette),
         VK_F2 => return Some(Intent::Edit),
         VK_F3 => return Some(Intent::FindAgain { forward: !shift }),
+        // 列の数が見出しと違う次の・前の行へ（VS Code の「次の問題へ」と同じ F8・GitHub Issue #377）。
+        VK_F8 => return Some(Intent::Root(RootCommand::FindRagged { forward: !shift })),
         // 検索の欄の条件の切り替え（ADR 0030 の決定 3）。`WM_SYSKEYDOWN` で届く。表の上では何もしない。
         VK_C if alt && !control => return Some(Intent::FindToggle(FindToggle::Case)),
         VK_W if alt && !control => return Some(Intent::FindToggle(FindToggle::WholeCell)),
@@ -151,8 +155,8 @@ fn control_intent(key: u16, shift: bool, alt: bool) -> Option<Intent> {
         (VK_Z, false) => Some(Intent::Undo),
         (VK_Z, true) | (VK_Y, false) => Some(Intent::Redo),
         (VK_G, false) => Some(Intent::OpenGoTo),
-        (VK_N, false) => Some(Intent::NewTable),
-        (VK_O, false) => Some(Intent::OpenFile),
+        (VK_N, false) => Some(Intent::Root(RootCommand::NewTable)),
+        (VK_O, false) => Some(Intent::Root(RootCommand::OpenFile)),
         (VK_V, false) => Some(Intent::Paste),
         (VK_P, true) => Some(Intent::OpenPalette),
         (VK_U, true) => Some(Intent::ToggleDetail),
@@ -397,8 +401,23 @@ mod tests {
 
         assert_eq!(key_intent(VK_A, control()), Some(Intent::SelectAll));
         assert_eq!(key_intent(VK_G, control()), Some(Intent::OpenGoTo));
-        assert_eq!(key_intent(VK_N, control()), Some(Intent::NewTable));
-        assert_eq!(key_intent(VK_O, control()), Some(Intent::OpenFile));
+        assert_eq!(
+            key_intent(VK_N, control()),
+            Some(Intent::Root(RootCommand::NewTable))
+        );
+        assert_eq!(
+            key_intent(VK_O, control()),
+            Some(Intent::Root(RootCommand::OpenFile))
+        );
+        // F8・Shift+F8 は列の数が見出しと違う次の・前の行へ（GitHub Issue #377）。
+        assert_eq!(
+            key_intent(VK_F8, plain()),
+            Some(Intent::Root(RootCommand::FindRagged { forward: true }))
+        );
+        assert_eq!(
+            key_intent(VK_F8, Modifiers::new(true, false, false)),
+            Some(Intent::Root(RootCommand::FindRagged { forward: false }))
+        );
         assert_eq!(key_intent(VK_V, control()), Some(Intent::Paste));
     }
 
