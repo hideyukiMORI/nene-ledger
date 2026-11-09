@@ -41,11 +41,15 @@ pub enum PaletteRole {
     FoundText,
     /// 検索で当たった字（当たった字の背景の上・GitHub Issue #189）。
     FoundInk,
+    /// 済んだことの字（置き換えました など・緑・GitHub Issue #305）。
+    Success,
+    /// 注意と誤りの字（見つかりません・消します など・赤・GitHub Issue #305）。
+    Danger,
 }
 
 impl PaletteRole {
     /// 役割の数。
-    pub const COUNT: usize = 19;
+    pub const COUNT: usize = 21;
 
     /// すべての役割（並びは配色が色を持つ順）。
     pub const ALL: [Self; Self::COUNT] = [
@@ -68,6 +72,8 @@ impl PaletteRole {
         Self::Found,
         Self::FoundText,
         Self::FoundInk,
+        Self::Success,
+        Self::Danger,
     ];
 
     /// 配色の中の位置。
@@ -93,6 +99,8 @@ impl PaletteRole {
             Self::Found => 16,
             Self::FoundText => 17,
             Self::FoundInk => 18,
+            Self::Success => 19,
+            Self::Danger => 20,
         }
     }
 }

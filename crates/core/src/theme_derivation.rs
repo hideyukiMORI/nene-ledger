@@ -82,6 +82,12 @@ const WHITE: Color = Color::new(0xFF, 0xFF, 0xFF);
 const BLACK: Color = Color::new(0x00, 0x00, 0x00);
 /// 検索で当たった所の印の色（蛍光ペンの黄。配色の強調の色に依らず、選択の色と分ける・GitHub Issue #189）。
 const MARKER: Color = Color::new(0xFF, 0xC4, 0x00);
+/// 済んだことと注意の字の元の色（緑と赤・配色の強調の色に依らない・GitHub Issue #305）。明暗ごとに、面の上で読めるまで
+/// 明暗の端へ寄せる。
+const GREEN_LIGHT: Color = Color::new(0x1E, 0x7B, 0x34);
+const GREEN_DARK: Color = Color::new(0x5C, 0xC8, 0x6E);
+const RED_LIGHT: Color = Color::new(0xC6, 0x28, 0x28);
+const RED_DARK: Color = Color::new(0xFF, 0x6B, 0x6B);
 
 /// 配色の元 `seed` の画面の色。
 #[must_use]
@@ -121,6 +127,7 @@ pub fn derive(seed: &ThemeSeed) -> Palette {
     let (cursor, thumb) = marks_on_lines(seed, weights, (gutter, selection), extreme);
     let (found, found_text, found_ink) =
         marks(seed, weights, text, &[background, gutter, selection, band]);
+    let (success, danger) = signals(seed, (gutter, background), extreme);
     Palette::from_roles(|role| match role {
         PaletteRole::Background => background,
         PaletteRole::Text | PaletteRole::TitleText => text,
@@ -140,7 +147,26 @@ pub fn derive(seed: &ThemeSeed) -> Palette {
         PaletteRole::Found => found,
         PaletteRole::FoundText => found_text,
         PaletteRole::FoundInk => found_ink,
+        PaletteRole::Success => success,
+        PaletteRole::Danger => danger,
     })
+}
+
+/// 済んだことと注意の字（緑と赤）。パレットの面 `gutter` と背景の上で読めるまで明暗の端 `extreme` へ寄せる
+/// （GitHub Issue #305）。
+fn signals(
+    seed: &ThemeSeed,
+    (gutter, background): (Color, Color),
+    extreme: Color,
+) -> (Color, Color) {
+    let (green, red) = match seed.appearance() {
+        Appearance::Light => (GREEN_LIGHT, RED_LIGHT),
+        Appearance::Dark => (GREEN_DARK, RED_DARK),
+    };
+    (
+        ensure(green, &[gutter, background], extreme, TEXT_RATIO),
+        ensure(red, &[gutter, background], extreme, TEXT_RATIO),
+    )
 }
 
 /// カーソルの色とスクロールバーのつまみの色。どちらも線の基準に届くまで明暗の端 `extreme` へ寄せる。
@@ -433,6 +459,37 @@ mod tests {
                     palette.found_text()
                 );
             }
+        }
+    }
+
+    /// 済んだこと（緑）と注意（赤）の字は、どの配色でもパレットの面と背景の上で読め、互いに、また本文の字とカーソル（強調）
+    /// の色から見分けられる（GitHub Issue #305・専門家ペルソナの指摘「橙が確かめ・注意・完了のすべて」）。
+    #[test]
+    fn every_builtin_theme_tells_success_and_danger_apart() {
+        for seed in &SEEDS {
+            let palette = derive(seed);
+            let name = seed.name();
+            for (role, color) in [("済んだ", palette.success()), ("注意", palette.danger())] {
+                let readable = meets(color, palette.gutter(), TEXT_RATIO)
+                    && meets(color, palette.background(), TEXT_RATIO);
+                assert!(readable, "{name}: {role}の字");
+                assert!(
+                    distance(color, palette.text()) >= 60,
+                    "{name}: {role}と本文の字"
+                );
+            }
+            assert!(
+                distance(palette.success(), palette.danger()) >= 100,
+                "{name}: 済んだと注意"
+            );
+            assert!(
+                palette.success().green() > palette.success().red(),
+                "{name}: 済んだは緑"
+            );
+            assert!(
+                palette.danger().red() > palette.danger().green(),
+                "{name}: 注意は赤"
+            );
         }
     }
 
