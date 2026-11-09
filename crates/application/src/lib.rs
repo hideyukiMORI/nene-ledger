@@ -132,6 +132,7 @@ pub mod ticker;
 pub mod totals_request;
 pub mod track_side;
 pub mod tsv;
+pub mod unrepresentable_notice;
 pub mod view_row;
 pub mod wakeup;
 pub mod window_view;

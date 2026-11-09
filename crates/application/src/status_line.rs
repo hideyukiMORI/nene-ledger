@@ -21,6 +21,7 @@ use crate::rows_notice::RowsNotice;
 use crate::save_problem::SaveProblem;
 use crate::selection_stats::SelectionStats;
 use crate::selection_totals::SelectionTotals;
+use crate::unrepresentable_notice::UnrepresentableNotice;
 use nene_ledger_core::decimal::Decimal;
 
 /// 検索の知らせ。
@@ -315,7 +316,23 @@ pub fn notice_status(notice: Notice) -> String {
         Notice::Columns(columns) => columns_status(columns),
         Notice::EditMissingCell => String::from("この行には、この列のセルがありません"),
         Notice::DialectUnsure { top, rival } => dialect_unsure_status(top, rival),
+        Notice::Unrepresentable(found) => unrepresentable_status(found),
     }
+}
+
+/// 文字コードで表せない字があって保存できなかった文言（どのセルか・その字のセルの数・GitHub Issue #393）。
+fn unrepresentable_status(found: UnrepresentableNotice) -> String {
+    let others = if found.cells > 1 {
+        format!("この字のセル {} · ", group_digits(found.cells))
+    } else {
+        String::new()
+    };
+    format!(
+        "{} の「{}」は {} で表せないので保存できませんでした（{others}直してから Ctrl+S · 直した値は残っています）",
+        cursor_status(found.line, found.column),
+        found.character,
+        encoding_name(found.encoding)
+    )
 }
 
 /// 判別に確信が無いときの文言（GitHub Issue #381）。区切りが同じなら区切りは疑わせず、引用の読み方の迷いとして言う。
@@ -947,6 +964,25 @@ mod tests {
             notice_status(Notice::Frozen { columns: 0 }),
             "列の固定を外しました"
         );
+    }
+
+    /// 文字コードで表せない字は、どのセルかとその字のセルの数を言う（GitHub Issue #393）。
+    #[test]
+    fn an_unrepresentable_character_is_placed() {
+        let notice = |cells| {
+            notice_status(Notice::Unrepresentable(UnrepresentableNotice {
+                character: '𠮷',
+                encoding: TextEncoding::ShiftJis,
+                line: 4,
+                column: 1,
+                cells,
+            }))
+        };
+        assert_eq!(
+            notice(3),
+            "5 行目 · 2 列目 の「𠮷」は Shift_JIS（CP932） で表せないので保存できませんでした（この字のセル 3 · 直してから Ctrl+S · 直した値は残っています）"
+        );
+        assert!(!notice(1).contains("この字のセル"));
     }
 
     /// 判別に確信が無い知らせは、迷った 2 つの読み方の名前を出す（GitHub Issue #381）。
