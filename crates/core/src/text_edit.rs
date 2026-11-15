@@ -11,6 +11,7 @@ use alloc::string::String;
 use crate::caret_move::CaretMove;
 use crate::preedit::Preedit;
 use crate::text_caret::TextCaret;
+use crate::word_class::WordClass;
 
 /// 1 つの編集の欄の、今の文字列とカーソルと選択と確定前の文字列。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -153,6 +154,14 @@ impl TextEdit {
     #[must_use]
     pub fn selected_all(&self) -> Self {
         self.with_caret(TextCaret::new(self.char_count(), 0))
+    }
+
+    /// `index` 字目を含む語（[`WordClass::span_around`]）を選んだ状態。カーソルは語の終わり、起点は始まり
+    /// （ダブルクリック・GitHub Issue #466）。
+    #[must_use]
+    pub fn word_selected(&self, index: usize) -> Self {
+        let (start, end) = WordClass::span_around(&self.text, index);
+        self.with_caret(TextCaret::new(end, start))
     }
 
     /// 描く文字列と、その中のカーソル。確定前の文字列をカーソルの位置に差し込み、カーソルはその中へ移る。

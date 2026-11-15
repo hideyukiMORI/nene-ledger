@@ -25,7 +25,7 @@ use crate::detail_content::DetailContent;
 use crate::detail_place::DetailPlace;
 use crate::shown_body::ShownBody;
 use crate::status_line::{byte_encoding_name, group_digits};
-use crate::text_wrap::{caret_piece, caret_place, index_at, wrap};
+use crate::text_wrap::{caret_piece, caret_place, char_at, index_at, wrap};
 
 /// 本文の左の帯の太さ（カーソルの枠と同じ青。このペインがカーソルのセルの拡大だと示す）。
 const BAR: u32 = 3;
@@ -453,6 +453,27 @@ pub(crate) fn pane_index_at(
     shown: (usize, Option<usize>),
     (x, y): (i64, i64),
 ) -> (usize, usize) {
+    pane_hit((pane, metrics, advances), value, shown, ((x, y), true))
+}
+
+/// [`pane_index_at`] と同じ所の、字の境目ではなく指の下の字が何字目か（ダブルクリックで語を選ぶ・GitHub Issue
+/// #466）と、見せている最初の行。
+pub(crate) fn pane_char_at(
+    (pane, metrics, advances): (PixelRect, GlyphMetrics, &CharAdvances),
+    value: &str,
+    shown: (usize, Option<usize>),
+    (x, y): (i64, i64),
+) -> (usize, usize) {
+    pane_hit((pane, metrics, advances), value, shown, ((x, y), false))
+}
+
+/// `nearest` なら近い字の境目、そうでなければ指の下の字。
+fn pane_hit(
+    (pane, metrics, advances): (PixelRect, GlyphMetrics, &CharAdvances),
+    value: &str,
+    shown: (usize, Option<usize>),
+    ((x, y), nearest): ((i64, i64), bool),
+) -> (usize, usize) {
     let columns = text_columns(pane, metrics);
     let limit = usize::try_from(ClientBands::body_lines(pane.size().height(), metrics))
         .unwrap_or(usize::MAX);
@@ -469,15 +490,16 @@ pub(crate) fn pane_index_at(
         .saturating_sub(i64::from(left))
         .max(0)
         .saturating_mul(i64::from(SUBPIXELS));
-    let index = index_at(
-        value,
-        columns,
-        (
-            usize::try_from(row).unwrap_or(0),
-            u32::try_from(along).unwrap_or(u32::MAX),
-        ),
-        |character| advances.of(character),
+    let place = (
+        usize::try_from(row).unwrap_or(0),
+        u32::try_from(along).unwrap_or(u32::MAX),
     );
+    let advance = |character| advances.of(character);
+    let index = if nearest {
+        index_at(value, columns, place, advance)
+    } else {
+        char_at(value, columns, place, advance)
+    };
     (index, first)
 }
 

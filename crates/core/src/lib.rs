@@ -93,3 +93,4 @@ pub mod unclosed_quote;
 pub mod value;
 pub mod window_chrome;
 pub mod window_placement;
+pub mod word_class;

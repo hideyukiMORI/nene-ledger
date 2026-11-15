@@ -86,6 +86,28 @@ pub fn index_at<F: Fn(char) -> u32>(
     (row, x): (usize, u32),
     advance: F,
 ) -> usize {
+    hit_at(text, max_columns, (row, x), (advance, true))
+}
+
+/// [`index_at`] と同じ所の、字の境目ではなく `x` を含む字が何字目か（0 から・改行も 1 字）。折り返した行の右より右は
+/// その行の最後の字（空の行は改行の字）、最後の行より下は値の末尾。詳細ペインのダブルクリックで語を選ぶ（GitHub Issue #466）。
+#[must_use]
+pub fn char_at<F: Fn(char) -> u32>(
+    text: &str,
+    max_columns: u32,
+    (row, x): (usize, u32),
+    advance: F,
+) -> usize {
+    hit_at(text, max_columns, (row, x), (advance, false))
+}
+
+/// `nearest` なら近い字の境目、そうでなければ `x` を含む字。
+fn hit_at<F: Fn(char) -> u32>(
+    text: &str,
+    max_columns: u32,
+    (row, x): (usize, u32),
+    (advance, nearest): (F, bool),
+) -> usize {
     let mut first_row = 0_usize;
     let mut before = 0_usize;
     for logical in text.split('\n') {
@@ -103,7 +125,7 @@ pub fn index_at<F: Fn(char) -> u32>(
                 .sum();
             return before
                 .saturating_add(skipped)
-                .saturating_add(index_in_piece(piece, x, &advance));
+                .saturating_add(index_in_piece(piece, x, (&advance, nearest)));
         }
         first_row = first_row.saturating_add(rows);
         before = before.saturating_add(length).saturating_add(1);
@@ -111,18 +133,30 @@ pub fn index_at<F: Fn(char) -> u32>(
     text.chars().count()
 }
 
-/// 折り返した切れ端 `piece` の、左から `x` の所に近い字の境目（字の真ん中より右なら後ろ）。
-fn index_in_piece<F: Fn(char) -> u32>(piece: &str, x: u32, advance: F) -> usize {
+/// 折り返した切れ端 `piece` の、左から `x` の所に近い字の境目（字の真ん中より右なら後ろ）。`nearest` でなければ、
+/// `x` を含む字（字の右の端より左なら、その字）。
+fn index_in_piece<F: Fn(char) -> u32>(piece: &str, x: u32, (advance, nearest): (F, bool)) -> usize {
     let mut width = 0_u32;
     for (index, character) in piece.chars().enumerate() {
         let wide = advance(character);
-        // 字の真ん中（2 倍で比べる）より左なら、その字の前。
-        if x.saturating_mul(2) < width.saturating_mul(2).saturating_add(wide) {
+        // 字の真ん中（2 倍で比べる）より左なら、その字の前。含む字なら右の端（2 倍の幅）で比べる。
+        let reach = if nearest {
+            wide
+        } else {
+            wide.saturating_mul(2)
+        };
+        if x.saturating_mul(2) < width.saturating_mul(2).saturating_add(reach) {
             return index;
         }
         width = width.saturating_add(wide);
     }
-    piece.chars().count()
+    // 右より右は、境目なら末尾、含む字なら最後の字（空の切れ端は 0）。
+    let count = piece.chars().count();
+    if nearest {
+        count
+    } else {
+        count.saturating_sub(1)
+    }
 }
 
 /// 折り返した 1 つの論理の行 `pieces` の中の、`left` 字目の前の位置（何番目の切れ端か・その中の桁）。
@@ -224,6 +258,30 @@ mod tests {
         assert_eq!(caret_place(text, 4, 6), (1, 2));
         assert_eq!(caret_place(text, 4, 7), (2, 0));
         assert_eq!(caret_place(text, 4, 9), (2, 2));
+    }
+
+    /// 押した行と桁を含む字の番目。字の真ん中より右でもその字・折り返した行の右はその行の最後の字・空の行は改行の
+    /// 字・下は値の末尾（GitHub Issue #466）。
+    #[test]
+    fn the_character_under_the_point_is_found_from_the_wrapped_row_and_column() {
+        let cases: [(&str, u32, usize, u32, usize); 9] = [
+            ("abcdef\ngh", 4, 0, 0, 0),
+            ("abcdef\ngh", 4, 0, 3, 3),
+            ("abcdef\ngh", 4, 0, 9, 3),
+            ("abcdef\ngh", 4, 1, 1, 5),
+            ("abcdef\ngh", 4, 1, 9, 5),
+            ("abcdef\ngh", 4, 7, 0, 9),
+            ("a\n\nb", 4, 1, 3, 2),
+            ("あい", 10, 0, 1, 0),
+            ("あい", 10, 0, 2, 1),
+        ];
+        for (text, width, row, column, expected) in cases {
+            assert_eq!(
+                char_at(text, width, (row, column), char_columns),
+                expected,
+                "{text:?} {row} {column}"
+            );
+        }
     }
 
     /// 押した行と桁から字の番目へ。字の真ん中より右は後ろ・行の右は行の末尾・下は値の末尾（GitHub Issue #460）。
