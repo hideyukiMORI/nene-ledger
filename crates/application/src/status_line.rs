@@ -425,11 +425,15 @@ fn copied_status(rows: u64, columns: usize, cut: u64) -> String {
 fn rows_status(notice: RowsNotice) -> String {
     match notice {
         RowsNotice::Inserted(rows) => format!("{} 行を足しました", group_digits(rows)),
+        RowsNotice::Duplicated(rows) => {
+            format!("{} 行を複製しました（Ctrl+Z で戻す）", group_digits(rows))
+        }
         RowsNotice::Removed(rows) => {
             format!("{} 行を消しました（Ctrl+Z で戻す）", group_digits(rows))
         }
         RowsNotice::Undone(rows) => format!("元に戻しました（{} 行）", group_digits(rows)),
         RowsNotice::Redone(rows) => format!("やり直しました（{} 行）", group_digits(rows)),
+        RowsNotice::Unread => String::from("行を読めなかったので、複製していません"),
         RowsNotice::AwaitIndex => {
             String::from("表の末尾は、行の数が分かってから扱えます（索引を作っています）")
         }

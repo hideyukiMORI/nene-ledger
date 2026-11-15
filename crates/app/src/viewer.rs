@@ -27,6 +27,7 @@ use nene_ledger_application::pointer_shape::PointerShape;
 use nene_ledger_application::reading_aspect::ReadingAspect;
 use nene_ledger_application::reading_choice::ReadingChoice;
 use nene_ledger_application::root_command::RootCommand;
+use nene_ledger_application::rows_notice::RowsNotice;
 use nene_ledger_application::save_problem::SaveProblem;
 use nene_ledger_application::save_target::SaveTarget;
 use nene_ledger_application::selection_mode::SelectionMode;
@@ -887,6 +888,7 @@ impl Viewer {
             RootCommand::NewTable => self.open_new_window(),
             RootCommand::OpenFile => self.open_chosen_file(),
             RootCommand::FindRagged { forward } => return self.find_ragged(forward),
+            RootCommand::DuplicateRows => self.duplicate_rows(),
         }
         None
     }
@@ -896,6 +898,24 @@ impl Viewer {
         self.palette = None;
         let effect = self.document.find_ragged(forward);
         self.effect(effect)
+    }
+
+    /// パレットを閉じて、選択がかかる行を読み、すぐ下に同じ値で足す（GitHub Issue #486）。読めなければ足さない。
+    fn duplicate_rows(&mut self) {
+        self.palette = None;
+        let Some((first_line, count)) = self.document.duplicate_request() else {
+            return;
+        };
+        let lines = usize::try_from(count)
+            .ok()
+            .and_then(|count| self.read_lines(first_line, count, None).ok());
+        let Some((rows, cuts)) = lines else {
+            self.document.notify(Notice::Rows(RowsNotice::Unread));
+            return;
+        };
+        let effect = self.document.duplicate_rows(first_line, (&rows, &cuts));
+        let _clipboard = self.effect(effect);
+        self.refresh_totals();
     }
 
     /// 書き換えがある間（保存の途中も）に読み方を変えようとしたら、パレットを閉じて知らせ、`true`。

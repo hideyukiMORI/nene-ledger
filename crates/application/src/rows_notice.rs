@@ -5,6 +5,10 @@
 pub enum RowsNotice {
     /// 行を足した。
     Inserted(u64),
+    /// 行を複製した（すぐ下に同じ値の行を足した・GitHub Issue #486）。
+    Duplicated(u64),
+    /// 複製する行を読めなかったので、足さなかった（GitHub Issue #486）。
+    Unread,
     /// 行を消した（Ctrl+Z で戻せる）。
     Removed(u64),
     /// 行の足し消しを戻した。

@@ -12,4 +12,6 @@ pub enum RootCommand {
         /// 次へ探すか。
         forward: bool,
     },
+    /// 選択がかかる行を読んで、すぐ下に同じ値の行を足す（パレット・GitHub Issue #486）。
+    DuplicateRows,
 }

@@ -3139,6 +3139,91 @@ impl Document {
         self.after_rows_changed(body, window)
     }
 
+    /// 行の複製（パレット・GitHub Issue #486）の前に、合成ルートに読ませる行（行の並びの位置と数）。選択がかかる行の
+    /// すべて。直していれば確定する。読み取り専用・保存の途中・閉じる問いの間・ファイルの終わりまでの選択で索引の前・
+    /// コピーの上限を超える行なら、知らせて `None`。
+    pub fn duplicate_request(&mut self) -> Option<(u64, u64)> {
+        if self.closing != CloseState::Open {
+            return None;
+        }
+        if self.saving {
+            self.notice = Some(Notice::StillSaving);
+            return None;
+        }
+        if self.refuses_change() {
+            return None;
+        }
+        self.commit_edit();
+        let to_end = self.selection.bottom_right().body() == TO_END;
+        if to_end && self.records().is_none() {
+            self.notice = Some(Notice::Rows(RowsNotice::AwaitIndex));
+            return None;
+        }
+        let (top, bottom) = self.row_span();
+        let count = bottom.saturating_sub(top).saturating_add(1);
+        if count > MAX_COPY_ROWS {
+            self.notice = Some(Notice::TooLargeToCopy);
+            return None;
+        }
+        Some((self.line_of(top), count))
+    }
+
+    /// `duplicate_request` が読ませた行（位置 `first_line` から読んだ `rows`・切り詰めたレコード `cuts`）を、選択の
+    /// すぐ下に同じ値（書き換えた値を重ねた画面の値）で足す。足した行と書き込みを 1 手の束として積み（ADR 0029 の決定 3）、
+    /// 足した最初の行へカーソルを動かす。読めた行が足りないか切り詰めた行にかかれば、何も足さない（GitHub Issue #486）。
+    pub fn duplicate_rows(
+        &mut self,
+        first_line: u64,
+        (rows, cuts): (&[CellRow], &[CutRecord]),
+    ) -> DocumentEffect {
+        let Some(window) = self.window else {
+            return DocumentEffect::Stay;
+        };
+        let (top, bottom) = self.row_span();
+        let count = bottom.saturating_sub(top).saturating_add(1);
+        let read = first_line..first_line.saturating_add(count);
+        if cuts.iter().any(|cut| read.contains(&cut.record())) {
+            self.notice = Some(Notice::EditCut);
+            return DocumentEffect::Stay;
+        }
+        let values = self.overlaid(first_line, rows);
+        let width = self.widths.columns().len();
+        let body: Vec<&Vec<String>> = self.body_cells(first_line, &values);
+        if u64::try_from(body.len()).ok() != Some(count) {
+            return DocumentEffect::Stay;
+        }
+        let below = bottom.saturating_add(1);
+        let (added, change) = self.add_rows(self.line_of(below), count);
+        let shown: &Self = self;
+        let cells: Vec<(CellChange, String)> = added
+            .iter()
+            .zip(body)
+            .flat_map(|(&row, cells)| {
+                cells
+                    .iter()
+                    .take(width)
+                    .enumerate()
+                    .filter_map(move |(table, value)| shown.pasted_cell((row, table), &[], value))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        self.history
+            .record_batch(vec![EditStep::Rows(change)], cells, &mut self.edits);
+        self.notice = Some(Notice::Rows(RowsNotice::Duplicated(count)));
+        // 足した行は、表示の行を読み直すまで行の数に入らないので、末尾で押さえずに動かす（`after_rows_changed` は押さえる）。
+        let column = self.selection.cursor().column();
+        self.select(CellPosition::new(below, column), SelectionMode::Collapse);
+        let page = self.page_rows(window);
+        let current = self.view.first_body();
+        let first = clamp_first(
+            current,
+            reveal_row(current, below, page),
+            page,
+            self.extent().rows(),
+        );
+        DocumentEffect::Read { first_body: first }
+    }
+
     /// 選んだ範囲にかかる行を消す（尋ねない・ADR 0027 の決定 4）。見出しの行は消さない（前書きと本体にまたがる
     /// 範囲は、見出しの前と後ろを別の手として消す）。
     /// カーソルの行の、見出しより後ろの余計なセルを「セルが無い」にする（1 手・Ctrl+Z で戻す・保存で行が短くなる・GitHub
@@ -9286,6 +9371,78 @@ mod tests {
         document.apply(Intent::Redo, normal());
         reread(&mut document, &editable_rows());
         assert_eq!(first_cells(&document), ["0012", "", "b1", "c1"]);
+    }
+
+    /// `duplicate_request` が求めた行を `editable_rows` から読んで渡す（合成ルートの代わり）。
+    fn duplicate_from_editable(document: &mut Document) -> Option<DocumentEffect> {
+        let (first_line, count) = document.duplicate_request()?;
+        let rows: Vec<CellRow> = editable_rows()
+            .into_iter()
+            .skip(usize::try_from(first_line).ok()?)
+            .take(usize::try_from(count).ok()?)
+            .collect();
+        Some(document.duplicate_rows(first_line, (&rows, &[])))
+    }
+
+    /// 見えている行の `column` 列目の、書き換えを重ねた値（画面と同じ）。
+    fn shown_cells(document: &Document, column: usize) -> Vec<String> {
+        document
+            .view()
+            .rows()
+            .iter()
+            .map(|row| {
+                let raw = row
+                    .cells()
+                    .get(column)
+                    .map(String::from)
+                    .unwrap_or_default();
+                text_of(document, row.row(), ColumnId::Source(column)).map_or(raw, String::from)
+            })
+            .collect()
+    }
+
+    /// 行の複製は、選択がかかる行（行全体でなくても）を、そのすぐ下に同じ値で足す。書き換えた値は書き換えた値で写し、
+    /// 元の行で「セルが無い」所は空のセル。Ctrl+Z 1 回で全部戻る。カーソルは足した最初の行（GitHub Issue #486）。
+    #[test]
+    fn duplicating_rows_adds_the_same_values_just_below_as_one_step() {
+        let mut document = editable();
+        document.apply(Intent::Edit, normal());
+        document.apply(Intent::SelectAll, normal());
+        typed(&mut document, "0013");
+        document.apply(Intent::Confirm, normal());
+        document.apply(moving(CursorStep::Up), normal());
+        document.apply(extending(CursorStep::Down), normal());
+        document.apply(extending(CursorStep::Down), normal());
+        assert!(duplicate_from_editable(&mut document).is_some());
+        reread(&mut document, &editable_rows());
+        assert_eq!(
+            shown_cells(&document, 0),
+            ["0013", "b1", "c1", "0013", "b1", "c1"]
+        );
+        assert_eq!(
+            shown_cells(&document, 1),
+            ["東京", "b2", "", "東京", "b2", ""]
+        );
+        assert_eq!(document.selection().cursor().body(), 3);
+        text_at(
+            &document.frame(normal(), palette()),
+            "3 行を複製しました（Ctrl+Z で戻す）",
+        );
+        document.apply(Intent::Undo, normal());
+        reread(&mut document, &editable_rows());
+        assert_eq!(shown_cells(&document, 0), ["0013", "b1", "c1"]);
+        document.apply(Intent::Redo, normal());
+        reread(&mut document, &editable_rows());
+        assert_eq!(first_cells(&document).len(), 6);
+    }
+
+    /// 読み取り専用なら行を複製しない（読ませもしない・GitHub Issue #486）。
+    #[test]
+    fn duplicating_rows_is_refused_when_read_only() {
+        let mut document = editable();
+        document.apply(Intent::ToggleReadOnly, normal());
+        assert_eq!(duplicate_from_editable(&mut document), None);
+        assert!(document.rows.is_whole());
     }
 
     #[test]
