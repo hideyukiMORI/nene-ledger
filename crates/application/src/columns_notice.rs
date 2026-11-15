@@ -15,4 +15,8 @@ pub enum ColumnsNotice {
     Reordered,
     /// すべての列は消せない（1 列は残す）。
     KeepOne,
+    /// 列を複製した（すぐ右に同じ値の列を足した・GitHub Issue #488）。
+    Duplicated(usize),
+    /// 列の複製は表の全部の行を読むので、索引を作り終えて行の数が分かってから。
+    AwaitIndex,
 }
