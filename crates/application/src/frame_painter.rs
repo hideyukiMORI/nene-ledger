@@ -38,6 +38,8 @@ pub(crate) struct FramePainter<'view> {
     size: PixelSize,
     selection: Option<Ranges<'view>>,
     cut: Option<Selection>,
+    /// 枠のドラッグで落とす先の範囲（外周を実線で囲う・EDIT-17・GitHub Issue #498）。
+    drop: Option<Selection>,
     order: &'view [usize],
     column_ids: &'view [ColumnId],
     edits: Option<&'view CellEdits>,
@@ -104,6 +106,7 @@ impl<'view> FramePainter<'view> {
             edits: None,
             editing: None,
             renaming: None,
+            drop: None,
             found: None,
             found_within: None,
             expected: None,
@@ -126,6 +129,11 @@ impl<'view> FramePainter<'view> {
     /// 切り取った範囲 `cut`（点線の枠で示す・無ければ `None`）。
     pub(crate) fn with_cut(self, cut: Option<Selection>) -> Self {
         Self { cut, ..self }
+    }
+
+    /// 枠のドラッグで落とす先の範囲 `drop` の外周を、実線で囲う（EDIT-17）。
+    pub(crate) fn with_drop(self, drop: Option<Selection>) -> Self {
+        Self { drop, ..self }
     }
 
     pub(crate) fn with_order(self, order: &'view [usize]) -> Self {
@@ -610,28 +618,49 @@ impl<'view> FramePainter<'view> {
         }
     }
 
-    /// 切り取った範囲の外周に当たる、セル（本体の `body` 行・`column` 列）の辺を点線で描く。
+    /// 切り取った範囲の外周に当たる、セル（本体の `body` 行・`column` 列）の辺を点線で描く。枠のドラッグで落とす先の
+    /// 範囲の外周は実線で描く（EDIT-17・GitHub Issue #498）。
     fn cut_edges(&mut self, rect: PixelRect, body: u64, column: usize) {
-        let Some(cut) = self.cut.filter(|cut| cut.contains(body, column)) else {
-            return;
-        };
-        let (top_left, bottom_right) = (cut.top_left(), cut.bottom_right());
+        if let Some(cut) = self.cut.filter(|cut| cut.contains(body, column)) {
+            self.frame_edges(rect, (body, column), (cut, true));
+        }
+        if let Some(drop) = self.drop.filter(|drop| drop.contains(body, column)) {
+            self.frame_edges(rect, (body, column), (drop, false));
+        }
+    }
+
+    /// 範囲 `range` の外周に当たる、セル（矩形 `rect`・本体の `body` 行・`column` 列）の辺を、点線（`dashed`）か実線で描く。
+    fn frame_edges(
+        &mut self,
+        rect: PixelRect,
+        (body, column): (u64, usize),
+        (range, dashed): (Selection, bool),
+    ) {
+        let (top_left, bottom_right) = (range.top_left(), range.bottom_right());
         let (left, top) = (rect.origin().x(), rect.origin().y());
         let (width, height) = (rect.size().width(), rect.size().height());
         let line = self.metrics.px(CUT_LINE).min(width).min(height);
         let right = left.saturating_add(width).saturating_sub(line);
         let bottom = top.saturating_add(height).saturating_sub(line);
+        let mut edges = Vec::new();
         if body == top_left.body() {
-            self.dashed(PixelPoint::new(left, top), (width, line), true);
+            edges.push((PixelPoint::new(left, top), (width, line), true));
         }
         if body == bottom_right.body() {
-            self.dashed(PixelPoint::new(left, bottom), (width, line), true);
+            edges.push((PixelPoint::new(left, bottom), (width, line), true));
         }
         if column == top_left.column() {
-            self.dashed(PixelPoint::new(left, top), (line, height), false);
+            edges.push((PixelPoint::new(left, top), (line, height), false));
         }
         if column == bottom_right.column() {
-            self.dashed(PixelPoint::new(right, top), (line, height), false);
+            edges.push((PixelPoint::new(right, top), (line, height), false));
+        }
+        for (from, size, across) in edges {
+            if dashed {
+                self.dashed(from, size, across);
+            } else {
+                self.overlay(PixelRect::new(from, PixelSize::new(size.0, size.1)));
+            }
         }
     }
 

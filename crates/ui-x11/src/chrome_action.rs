@@ -57,6 +57,8 @@ pub(crate) fn cursor_glyph(shape: CursorShape) -> u16 {
         CursorShape::RowResize => 116,
         // xterm（I 字・GitHub Issue #472）。
         CursorShape::Text => 152,
+        // `XC_fleur`（四方の矢印・範囲を動かす・GitHub Issue #498）。
+        CursorShape::Move => 52,
     }
 }
 
@@ -75,5 +77,10 @@ mod tests {
         assert_eq!(cursor_glyph(CursorShape::ColumnResize), 108);
         assert_eq!(cursor_glyph(CursorShape::RowResize), 116);
         assert_eq!(cursor_glyph(CursorShape::Text), 152);
+    }
+
+    #[test]
+    fn the_range_frame_shows_the_four_way_arrow() {
+        assert_eq!(cursor_glyph(CursorShape::Move), 52);
     }
 }

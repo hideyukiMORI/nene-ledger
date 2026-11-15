@@ -37,8 +37,8 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::UI::WindowsAndMessaging::{
     CS_DBLCLKS, CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DispatchMessageW, GWLP_USERDATA,
     GetClientRect, GetMessageTime, GetMessageW, GetSystemMetrics, GetWindowLongPtrW, IDC_ARROW,
-    IDC_IBEAM, IDC_SIZENS, IDC_SIZEWE, IsZoomed, LoadCursorW, MSG, NCCALCSIZE_PARAMS, PostMessageW,
-    PostQuitMessage, RegisterClassExW, SM_CXDOUBLECLK, SM_CXFRAME, SM_CXPADDEDBORDER,
+    IDC_IBEAM, IDC_SIZEALL, IDC_SIZENS, IDC_SIZEWE, IsZoomed, LoadCursorW, MSG, NCCALCSIZE_PARAMS,
+    PostMessageW, PostQuitMessage, RegisterClassExW, SM_CXDOUBLECLK, SM_CXFRAME, SM_CXPADDEDBORDER,
     SM_CYDOUBLECLK, SM_CYFRAME, SW_SHOW, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
     SWP_NOZORDER, SetCursor, SetWindowLongPtrW, SetWindowPos, ShowWindow, TranslateMessage,
     WINDOW_EX_STYLE, WM_CAPTURECHANGED, WM_CHAR, WM_CLOSE, WM_DESTROY, WM_DPICHANGED, WM_DROPFILES,
@@ -677,6 +677,8 @@ fn cursor_message(state: &WindowState<'_>, lparam: LPARAM) -> Option<LRESULT> {
         PointerShape::RowResize => IDC_SIZENS,
         // 詳細ペインの本文の上は I 字（GitHub Issue #472）。
         PointerShape::Text => IDC_IBEAM,
+        // 選んだ範囲の枠の上は四方の矢印（GitHub Issue #498）。
+        PointerShape::Move => IDC_SIZEALL,
     };
     show_cursor(cursor);
     Some(LRESULT(1))
