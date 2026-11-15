@@ -1110,6 +1110,11 @@ impl Viewer {
         } else {
             self.effect(effect)
         };
+        // 範囲の枠のドラッグ（EDIT-17）：読んだ値を、OS のクリップボードを通さずに落とした先へ貼る。
+        if let Some(request) = self.document.take_drop() {
+            self.finish_paste(request, view);
+            self.document.end_drop();
+        }
         self.refresh_totals();
         self.sync_ticker();
         copied

@@ -15,4 +15,6 @@ pub enum HoverTarget {
     Pane,
     /// 詳細ペインの本文の上（ホイールは `Pane` と同じ・カーソルは I 字・GitHub Issue #472）。
     PaneText,
+    /// 選んだ範囲の枠（掴めば範囲の値を動かす・カーソルは四方の矢印・EDIT-17・GitHub Issue #498）。
+    Frame,
 }

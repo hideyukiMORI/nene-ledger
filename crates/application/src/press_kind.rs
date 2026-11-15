@@ -13,4 +13,8 @@ pub enum PressKind {
     MoveColumns,
     /// 選んでいる行を移す（選んだ行の行番号を押した・GitHub Issue #492）。
     MoveRows,
+    /// 選んだ範囲の値を動かす（範囲の枠を押した・EDIT-17・GitHub Issue #498）。
+    MoveCells,
+    /// 選んだ範囲の値を写す（Ctrl を押して範囲の枠を押した）。
+    CopyCells,
 }

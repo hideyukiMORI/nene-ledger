@@ -17,11 +17,13 @@ pub(crate) enum CursorShape {
     RowResize,
     /// 字を直す所（I 字・GitHub Issue #472）。
     Text,
+    /// 選んだ範囲を動かす所（四方の矢印・GitHub Issue #498）。
+    Move,
 }
 
 impl CursorShape {
     /// すべて（窓を開くときに作るカーソルの並び）。
-    pub(crate) const ALL: [Self; 12] = [
+    pub(crate) const ALL: [Self; 13] = [
         Self::Arrow,
         Self::Edge(ResizeEdge::TopLeft),
         Self::Edge(ResizeEdge::Top),
@@ -34,6 +36,7 @@ impl CursorShape {
         Self::ColumnResize,
         Self::RowResize,
         Self::Text,
+        Self::Move,
     ];
 
     /// 飾りの当たり判定 `hit` と、中身が求める形 `shape` のカーソル。縁が先で、中身の形は中身の上でだけ。
@@ -43,6 +46,7 @@ impl CursorShape {
             (ChromeHit::Client, PointerShape::ColumnResize) => Self::ColumnResize,
             (ChromeHit::Client, PointerShape::RowResize) => Self::RowResize,
             (ChromeHit::Client, PointerShape::Text) => Self::Text,
+            (ChromeHit::Client, PointerShape::Move) => Self::Move,
             (ChromeHit::Client, PointerShape::Arrow)
             | (ChromeHit::Caption | ChromeHit::Button(_), _) => Self::Arrow,
         }

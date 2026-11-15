@@ -11,4 +11,6 @@ pub enum PointerShape {
     RowResize,
     /// 字を直す所（I 字・詳細ペインの本文の上・GitHub Issue #472）。
     Text,
+    /// 選んだ範囲を動かす所（四方の矢印・範囲の枠の上・EDIT-17・GitHub Issue #498）。
+    Move,
 }

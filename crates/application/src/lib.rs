@@ -59,6 +59,7 @@ pub mod find_scope;
 pub mod find_toggle;
 pub mod fixed_parts;
 pub mod format_summary;
+mod frame_drag;
 mod frame_painter;
 pub mod go_to_target;
 pub mod guide_note;

@@ -56,6 +56,7 @@ use crate::find_run::FindRun;
 use crate::find_scope::FindScope;
 use crate::fixed_parts::FixedParts;
 use crate::format_summary::FormatSummary;
+use crate::frame_drag::FrameDrag;
 use crate::frame_painter::FramePainter;
 use crate::go_to_target::GoToTarget;
 use crate::hover_target::HoverTarget;
@@ -173,6 +174,8 @@ pub struct Document {
     custom: BTreeMap<usize, u32>,
     /// 指が見出しの列の境目の上にあるか（カーソルの形）。
     grip: bool,
+    /// 選んだ範囲の枠のドラッグの段（掴めば範囲の値を動かす・EDIT-17・GitHub Issue #498）。
+    frame: FrameDrag,
     /// 直している欄の中でコピー・切り取りした字（合成ルートが `field_text` で取る・GitHub Issue #474）。
     field_clip: Option<ClipboardText>,
     /// 詳細ペインの本文の行の数（境の線で変える・設定に覚える・GitHub Issue #452）。
@@ -245,6 +248,9 @@ const EDITING_HINT_EDITING: &str = "編集中 · Enter 確定 · Esc やめる �
 pub const MAX_COPY_ROWS: u64 = 100_000;
 /// 見出しの列の境目として押せる、境目の左右の画素（100% のとき・Issue #64）。
 const COLUMN_GRIP: u32 = 4;
+/// 選んだ範囲の枠として掴める、枠の内と外の画素（100% のとき・EDIT-17・GitHub Issue #498）。広いと、セルの端から範囲を
+/// 選び始めたつもりのドラッグが値を動かしてしまうので、枠の線（2 画素）とその外の 2 画素に留める。
+const FRAME_GRIP: u32 = 2;
 /// 詳細ペインと表の境の線を掴める上下の幅（画素・100% のとき・GitHub Issue #452）。
 const PANE_GRIP: u32 = 3;
 /// 詳細ペインを広げても表に残す行の数（見出しの行を除く・GitHub Issue #452）。
@@ -330,6 +336,7 @@ impl Document {
             index: JobState::Waiting,
             custom: BTreeMap::new(),
             grip: false,
+            frame: FrameDrag::Idle,
             field_clip: None,
             detail_lines: DETAIL_LINES,
             detail_scroll: None,
@@ -3730,6 +3737,10 @@ impl Document {
             self.start_resize(at, display);
             return;
         }
+        if mode != SelectionMode::Extend && self.grab_frame(at, mode, window) {
+            self.start_hold(at, frame_kind(mode), before);
+            return;
+        }
         let Some(to) = self.cell_at(at, window) else {
             if let Some(kind) = self.press_line(at, mode, window) {
                 self.start_hold(at, kind, before);
@@ -3738,6 +3749,189 @@ impl Document {
         };
         self.select(to, mode);
         self.start_hold(at, PressKind::Cells, before);
+    }
+
+    /// 窓の中の `at` が選んだ範囲の枠の上なら、掴んで `true`（EDIT-17・GitHub Issue #498）。掴んだ所のセルを、範囲の中に
+    /// 収めて覚える（落とす先はここからの差）。Ctrl で足した範囲があるときの Ctrl は、範囲を足す押し方のまま。
+    fn grab_frame(&mut self, at: PixelPoint, mode: SelectionMode, window: WindowView) -> bool {
+        if !self.frame_grip(at, window) || (mode == SelectionMode::Add && !self.others.is_empty()) {
+            return false;
+        }
+        let (first, last) = (self.selection.top_left(), self.selection.bottom_right());
+        let Some(cell) = self.cell_at(at, window) else {
+            return false;
+        };
+        self.frame = FrameDrag::Held(CellPosition::new(
+            cell.body().clamp(first.body(), last.body()),
+            cell.column().clamp(first.column(), last.column()),
+        ));
+        true
+    }
+
+    /// 窓の中の `at` が、選んだ範囲（1 つだけ）の枠の上か（枠の内と外 `FRAME_GRIP` 画素）。直している間・読み取り専用・
+    /// 保存の途中・尋ねる画面では掴めない。
+    fn frame_grip(&self, at: PixelPoint, window: WindowView) -> bool {
+        let busy = self.editor.is_some() || self.saving || self.closing != CloseState::Open;
+        if busy || self.is_read_only() || !self.others.is_empty() {
+            return false;
+        }
+        let Some(cell) = self.cell_at(at, window) else {
+            return false;
+        };
+        let Some(rect) = self.shown_cell_rect(cell, window) else {
+            return false;
+        };
+        let grip = window.metrics().px(FRAME_GRIP);
+        let x = at.x().saturating_sub(rect.origin().x());
+        let y = at.y().saturating_sub(rect.origin().y());
+        let near = (
+            x <= grip,
+            y <= grip,
+            rect.size().width().saturating_sub(x) <= grip,
+            rect.size().height().saturating_sub(y) <= grip,
+        );
+        on_frame(self.selection, cell, near)
+    }
+
+    /// 本体の見えているセル `cell` の、窓の中の矩形。
+    fn shown_cell_rect(&self, cell: CellPosition, window: WindowView) -> Option<PixelRect> {
+        let index = usize::try_from(cell.body().checked_sub(self.view.first_body())?).ok()?;
+        let layout = self.layout(self.first_column, window.content_metrics());
+        let rect = layout.cell_rect(index.checked_add(self.fixed_slots())?, cell.column())?;
+        let body = self.bars(window).body();
+        Some(PixelRect::new(
+            PixelPoint::new(
+                body.origin().x().saturating_add(rect.origin().x()),
+                body.origin().y().saturating_add(rect.origin().y()),
+            ),
+            rect.size(),
+        ))
+    }
+
+    /// 枠のドラッグで、指 `at` の下に落とす先（範囲の左上）。掴んだセルと指の下のセルの差だけ範囲を動かし、表の中に
+    /// 収める。列全体は縦に、行全体は横には動かない（収めると元の位置になる）。
+    fn drop_target(&self, at: PointerPoint, window: WindowView) -> CellPosition {
+        let (first, last) = (self.selection.top_left(), self.selection.bottom_right());
+        let Some(grab) = self.frame.grab() else {
+            return first;
+        };
+        let to = self.cell_toward(at, self.view.first_body(), window);
+        let last_body = if last.body() == TO_END {
+            TO_END
+        } else {
+            self.last_body()
+        };
+        let most_body = last_body.saturating_sub(last.body().saturating_sub(first.body()));
+        let last_column = self.widths.columns().len().saturating_sub(1);
+        let most_column = last_column.saturating_sub(last.column().saturating_sub(first.column()));
+        let body = if to.body() >= grab.body() {
+            first.body().saturating_add(to.body() - grab.body())
+        } else {
+            first.body().saturating_sub(grab.body() - to.body())
+        };
+        let column = if to.column() >= grab.column() {
+            first.column().saturating_add(to.column() - grab.column())
+        } else {
+            first.column().saturating_sub(grab.column() - to.column())
+        };
+        CellPosition::new(body.min(most_body), column.min(most_column))
+    }
+
+    /// 範囲の枠を掴んでいるか（離すまで・Esc でやめるまで）。
+    fn drags_frame(&self) -> bool {
+        matches!(
+            self.hold,
+            Some(PointerHold::Cells {
+                kind: PressKind::MoveCells | PressKind::CopyCells,
+                ..
+            })
+        )
+    }
+
+    /// 枠をドラッグしている間の、落とす先の範囲（描く枠）。ドラッグしていなければ `None`。
+    fn drop_range(&self, window: WindowView) -> Option<Selection> {
+        let Some(PointerHold::Cells {
+            kind: PressKind::MoveCells | PressKind::CopyCells,
+            dragging: true,
+            at,
+            ..
+        }) = self.hold
+        else {
+            return None;
+        };
+        Some(self.range_at(self.drop_target(at, window)))
+    }
+
+    /// 今の範囲と同じ大きさの、左上が `target` の範囲。
+    fn range_at(&self, target: CellPosition) -> Selection {
+        let (first, last) = (self.selection.top_left(), self.selection.bottom_right());
+        let bottom = target
+            .body()
+            .saturating_add(last.body().saturating_sub(first.body()));
+        let right = target
+            .column()
+            .saturating_add(last.column().saturating_sub(first.column()));
+        Selection::at(CellPosition::new(bottom, right)).moved(target, SelectionMode::Extend)
+    }
+
+    /// 枠のドラッグを離した（EDIT-17・GitHub Issue #498）。動かしていれば、落とした先へ値を動かす（`copy` なら写す）
+    /// ために、範囲の行を読ませる（切り取り・コピーと同じ 2 段。値は `copy_text` が受け、`take_drop` で貼る）。動かさずに
+    /// 離したなら、押したセルを選ぶ（ふつうの押しと同じ）。
+    fn release_frame(
+        &mut self,
+        copy: bool,
+        (press, at, dragging): (PointerPoint, PointerPoint, bool),
+        window: WindowView,
+    ) -> DocumentEffect {
+        if !dragging {
+            self.frame = FrameDrag::Idle;
+            let mode = if copy {
+                SelectionMode::Add
+            } else {
+                SelectionMode::Collapse
+            };
+            let cell = self.cell_toward(press, self.view.first_body(), window);
+            self.select(cell, mode);
+            return DocumentEffect::Stay;
+        }
+        let target = self.drop_target(at, window);
+        self.frame = FrameDrag::Idle;
+        if target == self.selection.top_left() {
+            return DocumentEffect::Stay;
+        }
+        let effect = if copy {
+            // 前の切り取りの枠が残っていても、写すだけ（元を空にしない）。
+            self.cut = None;
+            self.copy_request()
+        } else {
+            self.cut_request()
+        };
+        if let DocumentEffect::Copy { .. } = effect {
+            self.frame = FrameDrag::Dropping(target);
+        }
+        effect
+    }
+
+    /// 枠のドラッグで落とした値を、落とした先に貼る求め（合成ルートが、範囲の行を読んで `copy_text` に渡した後に呼ぶ）。
+    /// 落としていなければ `None`。貼った後（読めなかった後）は [`Self::end_drop`] を呼ぶ。
+    pub fn take_drop(&mut self) -> Option<PasteRequest> {
+        let (target, text) = self.frame.take_dropped()?;
+        self.frame = FrameDrag::Pasting(self.selection, self.history.revision());
+        self.others.clear();
+        self.selection = Selection::at(target);
+        Some(self.paste(&text))
+    }
+
+    /// 枠のドラッグの貼り付けが終わった。切り取りの枠は残さず、貼れなかった（上限・セルが無い・読めない）なら、範囲を
+    /// 落とす前に戻す（知らせは残す）。
+    pub fn end_drop(&mut self) {
+        let Some((range, revision)) = self.frame.take_pasting() else {
+            return;
+        };
+        self.cut = None;
+        if self.history.revision() == revision {
+            self.selection = range;
+        }
     }
 
     /// 行番号・見出し・左上の角の `at` を押した。行全体・列全体・すべてを選び、ドラッグで広げるもの（行か列）を返す。
@@ -4109,6 +4303,8 @@ impl Document {
                     PointerShape::RowResize
                 } else if self.grip {
                     PointerShape::ColumnResize
+                } else if self.hovered == Some(HoverTarget::Frame) || self.drags_frame() {
+                    PointerShape::Move
                 } else if self.hovered == Some(HoverTarget::PaneText) && !self.is_read_only() {
                     PointerShape::Text
                 } else {
@@ -4350,7 +4546,10 @@ impl Document {
             PressKind::Rows => CellPosition::new(cell.body(), 0),
             PressKind::Columns => CellPosition::new(0, cell.column()),
             // 移している間は選択を変えない（落とす位置は離したときに決める）。
-            PressKind::MoveColumns | PressKind::MoveRows => return,
+            PressKind::MoveColumns
+            | PressKind::MoveRows
+            | PressKind::MoveCells
+            | PressKind::CopyCells => return,
         };
         self.selection = self.selection.moved(to, SelectionMode::Extend);
     }
@@ -4500,6 +4699,17 @@ impl Document {
     /// 離していればその列だけを選ぶ。
     fn release(&mut self, window: WindowView) -> DocumentEffect {
         let hold = self.hold.take();
+        if let Some(PointerHold::Cells {
+            kind: kind @ (PressKind::MoveCells | PressKind::CopyCells),
+            press,
+            at,
+            dragging,
+            ..
+        }) = hold
+        {
+            let copy = kind == PressKind::CopyCells;
+            return self.release_frame(copy, (press, at, dragging), window);
+        }
         let Some(PointerHold::Cells {
             kind: kind @ (PressKind::MoveColumns | PressKind::MoveRows),
             press,
@@ -5098,6 +5308,8 @@ impl Document {
             } else {
                 HoverTarget::Pane
             })
+        } else if at.is_some_and(|at| self.frame_grip(at, window)) {
+            Some(HoverTarget::Frame)
         } else {
             thumb
         };
@@ -5317,6 +5529,7 @@ impl Document {
 
     fn copy_request(&mut self) -> DocumentEffect {
         self.cutting = None;
+        let _stale = self.frame.take_dropping();
         if self.ranges().copy_shape().is_none() {
             self.notice = Some(Notice::RangesNotAligned);
             return DocumentEffect::Stay;
@@ -5347,6 +5560,24 @@ impl Document {
     /// コピーする行が無ければ、クリップボードを替えずに知らせる（GitHub Issue #39）。`cuts` は読んだ行のうち上限で
     /// 切り詰めたレコードで、コピーした行に入っていれば知らせに数える（GitHub Issue #36）。
     pub fn copy_text(
+        &mut self,
+        first_record: u64,
+        rows: &[CellRow],
+        cuts: &[CutRecord],
+    ) -> Option<ClipboardText> {
+        let dropping = self.frame.take_dropping();
+        let text = self.copied_text(first_record, rows, cuts)?;
+        let Some(target) = dropping else {
+            return Some(text);
+        };
+        // 枠のドラッグ（EDIT-17）：OS のクリップボードには置かず、落とした先へ貼る（`take_drop`）。
+        self.notice = None;
+        self.frame = FrameDrag::Dropped(target, String::from(text.as_str()));
+        None
+    }
+
+    /// [`Self::copy_text`] の中身。
+    fn copied_text(
         &mut self,
         first_record: u64,
         rows: &[CellRow],
@@ -5901,7 +6132,8 @@ impl Document {
             PixelSize::new(size.width(), table_height),
         );
         let bars = self.bars_in(area, content);
-        let mut commands = self.table_commands(bars.body().size(), content, (palette, found));
+        let marks = (palette, found, self.drop_range(view));
+        let mut commands = self.table_commands(bars.body().size(), content, marks);
         commands.extend(self.bar_commands(bars, view, palette));
         commands.extend(self.drop_line(bars, view, palette));
         if bands.detail() > 0 {
@@ -6208,7 +6440,7 @@ impl Document {
         &self,
         size: PixelSize,
         metrics: GlyphMetrics,
-        (palette, found): (Palette, Option<&FindQuery>),
+        (palette, found, drop): (Palette, Option<&FindQuery>, Option<Selection>),
     ) -> Vec<DrawCommand> {
         let layout = self.layout(self.first_column, metrics);
         let editing = self.editing_cell();
@@ -6220,6 +6452,7 @@ impl Document {
         FramePainter::new(&layout, metrics, palette, size)
             .with_ranges(self.ranges())
             .with_cut(self.live_cut())
+            .with_drop(drop)
             .with_order(&self.order)
             .with_column_ids(&ids)
             .with_edits(&self.edits)
@@ -6319,6 +6552,38 @@ impl Document {
 
 /// 行 `rows` の表示の文字列から、今より多い列の幅を決めて `widths` に足す（VIEW-02・今ある列の幅は変えない）。
 /// 読んだ行 `rows` の中の、見出しの行 `header`（ファイルが短ければ、ある行だけ）。
+/// 枠を押したときのドラッグの種類。Ctrl（範囲を足す押し方）なら写し、そうでなければ動かす。
+const fn frame_kind(mode: SelectionMode) -> PressKind {
+    match mode {
+        SelectionMode::Add => PressKind::CopyCells,
+        SelectionMode::Collapse | SelectionMode::Extend => PressKind::MoveCells,
+    }
+}
+
+/// セル `cell` の上の指が、範囲 `range` の枠の上か。`near` は、指がセルの左・上・右・下の辺に近いか。範囲の縁のセルの外側の
+/// 辺と、範囲のすぐ外のセルの範囲の側の辺が枠（EDIT-17・GitHub Issue #498）。
+fn on_frame(
+    range: Selection,
+    cell: CellPosition,
+    (left, top, right, bottom): (bool, bool, bool, bool),
+) -> bool {
+    let (first, last) = (range.top_left(), range.bottom_right());
+    let (body, column) = (cell.body(), cell.column());
+    let in_rows = (first.body()..=last.body()).contains(&body);
+    let in_columns = (first.column()..=last.column()).contains(&column);
+    if in_rows && in_columns {
+        return (top && body == first.body())
+            || (bottom && body == last.body())
+            || (left && column == first.column())
+            || (right && column == last.column());
+    }
+    let above = bottom && body.checked_add(1) == Some(first.body());
+    let below = top && last.body().checked_add(1) == Some(body);
+    let before = right && column.checked_add(1) == Some(first.column());
+    let after = left && last.column().checked_add(1) == Some(column);
+    (in_columns && (above || below)) || (in_rows && (before || after))
+}
+
 /// 行 `row` の元の列 `column` のセルを直し始める材料（原本の行・行の同一性・原本の値）。窓の行がその列を持って
 /// いなければ（読み直す前）`None`（「セルが無い」と取り違えない・ADR 0033 の決定 1）。
 fn editable_cell(row: &ViewRow, column: usize) -> Option<(u64, RowId, Option<String>)> {
@@ -9499,6 +9764,9 @@ mod tests {
         let mut document = three();
         let grip = first_grip(&mut document);
         assert_eq!(document.pointer_shape(), PointerShape::Arrow);
+        // 本体のセルの境目は矢印のまま。カーソルのセルの枠の上は「動かす」形（EDIT-17）なので、カーソルを離れた列へ。
+        document.apply(plain_move(CursorStep::Right), window);
+        document.apply(plain_move(CursorStep::Right), window);
         document.hover(Some(PixelPoint::new(grip, 60)), window);
         assert_eq!(document.pointer_shape(), PointerShape::Arrow);
         document.apply(pointing(grip, 35, SelectionMode::Collapse), window);
@@ -11453,6 +11721,166 @@ mod tests {
 
     fn cell_text(document: &Document, row: u64, column: usize) -> Option<&str> {
         text_of(document, RowId::Source(row), ColumnId::Source(column))
+    }
+
+    /// 本体のセル（`body` 行・`column` 列）の下の辺のすぐ内側（範囲の枠の上）の点。
+    fn bottom_edge(document: &Document, body: u64, column: usize) -> PixelPoint {
+        let rect = document
+            .shown_cell_rect(CellPosition::new(body, column), normal())
+            .unwrap();
+        PixelPoint::new(
+            rect.origin().x() + rect.size().width() / 2,
+            rect.origin().y() + rect.size().height() - 1,
+        )
+    }
+
+    /// 本体のセルの真ん中の点。
+    fn middle(document: &Document, body: u64, column: usize) -> PixelPoint {
+        center(
+            document
+                .shown_cell_rect(CellPosition::new(body, column), normal())
+                .unwrap(),
+        )
+    }
+
+    /// `from` を押し（`mode`）、`to` まで動かして離す。
+    fn dragged(
+        document: &mut Document,
+        (from, to): (PixelPoint, PixelPoint),
+        mode: SelectionMode,
+    ) -> DocumentEffect {
+        document.apply(pressing(from, mode), normal());
+        document.apply(Intent::Drag { at: pointer_of(to) }, normal());
+        document.apply(Intent::Release, normal())
+    }
+
+    /// 枠のドラッグの後の 2 段（範囲の行を読んで渡し、落とした先に貼る）を、表 `editable_rows` の原本で済ませる。
+    fn dropped(document: &mut Document, effect: DocumentEffect) {
+        let DocumentEffect::Copy { first_line, count } = effect else {
+            panic!("枠のドラッグは範囲の行を読ませるはず");
+        };
+        let lines = |first: u64, rows: u64| -> Vec<CellRow> {
+            editable_rows()
+                .into_iter()
+                .skip(usize::try_from(first).unwrap())
+                .take(usize::try_from(rows).unwrap())
+                .collect()
+        };
+        // OS のクリップボードには置かない。
+        assert!(
+            document
+                .copy_text(first_line, &lines(first_line, count), &[])
+                .is_none()
+        );
+        if let Some(PasteRequest::Read {
+            first_line: target,
+            count: height,
+        }) = document.take_drop()
+        {
+            document.paste_rows(target, (&lines(target, height), &[]), normal());
+        }
+        document.end_drop();
+    }
+
+    /// 選んだ範囲の枠の上では、カーソルが「動かす」形になる。枠を押してドラッグして離すと、値を落とした先へ動かし
+    /// （元は空のセル）、落とした先を選ぶ。Ctrl+Z 1 回で戻る（EDIT-17・GitHub Issue #498）。
+    #[test]
+    fn dragging_the_frame_of_the_range_moves_its_values_as_one_step() {
+        let mut document = indexed_editable();
+        let edge = bottom_edge(&document, 0, 0);
+        document.hover(Some(edge), normal());
+        assert_eq!(document.pointer_shape(), PointerShape::Move);
+        document.hover(Some(middle(&document, 0, 0)), normal());
+        assert_eq!(document.pointer_shape(), PointerShape::Arrow);
+        let to = middle(&document, 1, 1);
+        let effect = dragged(&mut document, (edge, to), SelectionMode::Collapse);
+        dropped(&mut document, effect);
+        assert_eq!(cell_text(&document, 0, 0), Some(""));
+        assert_eq!(cell_text(&document, 1, 1), Some("0012"));
+        assert_eq!(document.selection().cursor(), CellPosition::new(1, 1));
+        assert_eq!(document.live_cut(), None);
+        document.apply(Intent::Undo, normal());
+        assert!(document.edits().is_empty());
+    }
+
+    /// Ctrl を押して枠をドラッグすると、値を写す（元は残る）。動かさずに離せば、ふつうの押しと同じ。
+    #[test]
+    fn dragging_the_frame_with_ctrl_copies_and_a_plain_click_on_it_selects() {
+        let mut document = indexed_editable();
+        document.apply(extending(CursorStep::Right), normal());
+        let edge = bottom_edge(&document, 0, 1);
+        let to = middle(&document, 1, 1);
+        let effect = dragged(&mut document, (edge, to), SelectionMode::Add);
+        dropped(&mut document, effect);
+        // 掴んだのは 2 列目なので、範囲は 1 行下へ（左上は 2 行目の 1 列目）。
+        assert_eq!(cell_text(&document, 1, 0), Some("0012"));
+        assert_eq!(cell_text(&document, 1, 1), Some("東京"));
+        assert_eq!(cell_text(&document, 0, 0), None);
+        assert_eq!(cell_text(&document, 0, 1), None);
+        // 動かさずに離す：押したセルを選ぶだけ。
+        let click = bottom_edge(&document, 1, 1);
+        document.apply(pressing(click, SelectionMode::Collapse), normal());
+        let released = document.apply(Intent::Release, normal());
+        assert_eq!(released, DocumentEffect::Stay);
+        assert_eq!(document.selection().cursor(), CellPosition::new(1, 1));
+        assert_eq!(
+            document.selection().top_left(),
+            document.selection().bottom_right()
+        );
+    }
+
+    /// ドラッグの途中は、落とす先の範囲を枠で見せる（選択は変えない）。元の位置に落とせば何もしない。Esc はドラッグを
+    /// やめる（カーソルの形も戻る）。
+    #[test]
+    fn the_drop_target_is_framed_and_escape_or_the_same_place_does_nothing() {
+        let mut document = indexed_editable();
+        let edge = bottom_edge(&document, 0, 0);
+        let to = middle(&document, 1, 1);
+        document.apply(pressing(edge, SelectionMode::Collapse), normal());
+        document.apply(Intent::Drag { at: pointer_of(to) }, normal());
+        let framed = document.drop_range(normal()).unwrap();
+        assert_eq!(framed.top_left(), CellPosition::new(1, 1));
+        assert_eq!(document.selection().cursor(), CellPosition::new(0, 0));
+        document.apply(
+            Intent::Drag {
+                at: pointer_of(edge),
+            },
+            normal(),
+        );
+        assert_eq!(
+            document.apply(Intent::Release, normal()),
+            DocumentEffect::Stay
+        );
+        document.apply(pressing(edge, SelectionMode::Collapse), normal());
+        document.apply(Intent::Drag { at: pointer_of(to) }, normal());
+        document.apply(Intent::Cancel, normal());
+        assert_eq!(document.drop_range(normal()), None);
+        document.hover(Some(to), normal());
+        assert_eq!(document.pointer_shape(), PointerShape::Arrow);
+        assert!(document.edits().is_empty());
+    }
+
+    /// 貼れなかった（読めなかった）ら、範囲を落とす前に戻し、切り取りの枠を残さない。読み取り専用では枠を掴めない。
+    #[test]
+    fn a_refused_drop_restores_the_range_and_read_only_tables_have_no_frame_grip() {
+        let mut document = indexed_editable();
+        let edge = bottom_edge(&document, 0, 0);
+        let to = middle(&document, 1, 1);
+        let effect = dragged(&mut document, (edge, to), SelectionMode::Collapse);
+        let DocumentEffect::Copy { first_line, .. } = effect else {
+            panic!("枠のドラッグは範囲の行を読ませるはず");
+        };
+        let rows: Vec<CellRow> = editable_rows().into_iter().take(1).collect();
+        assert!(document.copy_text(first_line, &rows, &[]).is_none());
+        assert!(document.take_drop().is_some());
+        document.paste_unread();
+        document.end_drop();
+        assert_eq!(document.selection().cursor(), CellPosition::new(0, 0));
+        assert_eq!(document.live_cut(), None);
+        assert!(document.edits().is_empty());
+        document.apply(Intent::ToggleReadOnly, normal());
+        document.hover(Some(edge), normal());
+        assert_eq!(document.pointer_shape(), PointerShape::Arrow);
     }
 
     fn extending(step: CursorStep) -> Intent {
