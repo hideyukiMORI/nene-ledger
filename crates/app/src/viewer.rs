@@ -888,7 +888,8 @@ impl Viewer {
             RootCommand::NewTable => self.open_new_window(),
             RootCommand::OpenFile => self.open_chosen_file(),
             RootCommand::FindRagged { forward } => return self.find_ragged(forward),
-            RootCommand::DuplicateRows => self.duplicate_rows(),
+            RootCommand::DuplicateRows => self.duplicate(false),
+            RootCommand::DuplicateColumns => self.duplicate(true),
         }
         None
     }
@@ -900,10 +901,16 @@ impl Viewer {
         self.effect(effect)
     }
 
-    /// パレットを閉じて、選択がかかる行を読み、すぐ下に同じ値で足す（GitHub Issue #486）。読めなければ足さない。
-    fn duplicate_rows(&mut self) {
+    /// パレットを閉じて、選択がかかる行を読み、すぐ下に同じ値で足す（GitHub Issue #486）。`columns` なら表の全部の行を
+    /// 読み、選んだ列のすぐ右に同じ値の列を足す（GitHub Issue #488）。読めなければ足さない。
+    fn duplicate(&mut self, columns: bool) {
         self.palette = None;
-        let Some((first_line, count)) = self.document.duplicate_request() else {
+        let request = if columns {
+            self.document.duplicate_columns_request()
+        } else {
+            self.document.duplicate_rows_request()
+        };
+        let Some((first_line, count)) = request else {
             return;
         };
         let lines = usize::try_from(count)
@@ -913,7 +920,11 @@ impl Viewer {
             self.document.notify(Notice::Rows(RowsNotice::Unread));
             return;
         };
-        let effect = self.document.duplicate_rows(first_line, (&rows, &cuts));
+        let effect = if columns {
+            self.document.duplicate_columns(first_line, (&rows, &cuts))
+        } else {
+            self.document.duplicate_rows(first_line, (&rows, &cuts))
+        };
         let _clipboard = self.effect(effect);
         self.refresh_totals();
     }

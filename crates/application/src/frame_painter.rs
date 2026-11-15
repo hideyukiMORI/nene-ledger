@@ -396,10 +396,11 @@ impl<'view> FramePainter<'view> {
         }
     }
 
-    /// 本体の行のセル（行 `row` の元の列 `source`）の書き換え。見出しの行は書き換えない（EDIT-04 はまだ）。
+    /// 本体と見出しの行のセル（行 `row` の元の列 `source`）の書き換え。見出しの行の書き換えは、今は列の複製で写した名前
+    /// だけ（保存と同じに見せる・GitHub Issue #488。見出しの名前の変更 EDIT-04 はまだ）。列の番号の行は書き換えない。
     fn edited(&self, style: RowStyle, row: RowId, source: usize) -> Option<&'view CellValue> {
         match style {
-            RowStyle::Body(_) => {
+            RowStyle::Body(_) | RowStyle::Header => {
                 let column = self
                     .column_ids
                     .get(source)
@@ -407,7 +408,7 @@ impl<'view> FramePainter<'view> {
                     .unwrap_or(ColumnId::Source(source));
                 self.edits?.get(row, column)
             }
-            RowStyle::Header | RowStyle::Numbers => None,
+            RowStyle::Numbers => None,
         }
     }
 

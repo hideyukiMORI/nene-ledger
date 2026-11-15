@@ -10,6 +10,7 @@ use nene_ledger_core::quoting::Quoting;
 use nene_ledger_core::text_encoding::TextEncoding;
 
 use crate::columns_notice::ColumnsNotice;
+use crate::document::MAX_COPY_ROWS;
 use crate::find_notice::FindNotice;
 use crate::format_summary::FormatSummary;
 use crate::job_state::JobState;
@@ -434,6 +435,10 @@ fn rows_status(notice: RowsNotice) -> String {
         RowsNotice::Undone(rows) => format!("元に戻しました（{} 行）", group_digits(rows)),
         RowsNotice::Redone(rows) => format!("やり直しました（{} 行）", group_digits(rows)),
         RowsNotice::Unread => String::from("行を読めなかったので、複製していません"),
+        RowsNotice::TooMany => format!(
+            "行が多すぎるので複製しませんでした（{} 行まで）",
+            group_digits(MAX_COPY_ROWS)
+        ),
         RowsNotice::AwaitIndex => {
             String::from("表の末尾は、行の数が分かってから扱えます（索引を作っています）")
         }
@@ -451,6 +456,12 @@ fn columns_status(notice: ColumnsNotice) -> String {
             "入れ替えた列が離れているので足し消しできません（先に「列の並びを元に戻す」）",
         ),
         ColumnsNotice::KeepOne => String::from("すべての列は消せません"),
+        ColumnsNotice::Duplicated(columns) => {
+            format!("{columns} 列を複製しました（Ctrl+Z で戻す）")
+        }
+        ColumnsNotice::AwaitIndex => {
+            String::from("列の複製は、行の数が分かってからできます（索引を作っています）")
+        }
     }
 }
 

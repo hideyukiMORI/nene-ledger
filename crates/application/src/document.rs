@@ -736,10 +736,18 @@ impl Document {
     /// 見出しが無いか、どの行にも値が無ければ `None`。
     #[must_use]
     pub fn column_name(&self, column: usize) -> Option<String> {
-        let names: Vec<&str> = self
+        // 書き換えた見出しのセル（列の複製で写した名前・GitHub Issue #488）は、書き換えた値（表の見出しと同じ）。
+        let names: Vec<String> = self
             .header
             .iter()
-            .filter_map(|row| row.cells().get(column))
+            .filter_map(|row| {
+                let source = row.cells().get(column)?;
+                Some(match self.edits.get(row.row(), self.column_id(column)) {
+                    Some(CellValue::Text(name)) => name.clone(),
+                    Some(CellValue::Absent) => String::new(),
+                    None => String::from(source),
+                })
+            })
             .filter(|name| !name.is_empty())
             .collect();
         (!names.is_empty()).then(|| names.join(" / "))
@@ -3142,18 +3150,10 @@ impl Document {
     /// 行の複製（パレット・GitHub Issue #486）の前に、合成ルートに読ませる行（行の並びの位置と数）。選択がかかる行の
     /// すべて。直していれば確定する。読み取り専用・保存の途中・閉じる問いの間・ファイルの終わりまでの選択で索引の前・
     /// コピーの上限を超える行なら、知らせて `None`。
-    pub fn duplicate_request(&mut self) -> Option<(u64, u64)> {
-        if self.closing != CloseState::Open {
+    pub fn duplicate_rows_request(&mut self) -> Option<(u64, u64)> {
+        if !self.may_duplicate() {
             return None;
         }
-        if self.saving {
-            self.notice = Some(Notice::StillSaving);
-            return None;
-        }
-        if self.refuses_change() {
-            return None;
-        }
-        self.commit_edit();
         let to_end = self.selection.bottom_right().body() == TO_END;
         if to_end && self.records().is_none() {
             self.notice = Some(Notice::Rows(RowsNotice::AwaitIndex));
@@ -3162,10 +3162,90 @@ impl Document {
         let (top, bottom) = self.row_span();
         let count = bottom.saturating_sub(top).saturating_add(1);
         if count > MAX_COPY_ROWS {
-            self.notice = Some(Notice::TooLargeToCopy);
+            self.notice = Some(Notice::Rows(RowsNotice::TooMany));
             return None;
         }
         Some((self.line_of(top), count))
+    }
+
+    /// 列の複製（パレット・GitHub Issue #488）の前に、合成ルートに読ませる行（表の全部の行・前書きと見出しを含む）。
+    /// 足した列に行ごとの書き換えとして値を書くので、索引を作り終えてから、行の数はコピーの上限まで。表示の上で入れ替えた
+    /// 列が離れていれば足し消しと同じく断る。直していれば確定する。断るときは知らせて `None`。
+    pub fn duplicate_columns_request(&mut self) -> Option<(u64, u64)> {
+        if !self.may_duplicate() {
+            return None;
+        }
+        if self.chosen_columns().is_none() {
+            self.notice = Some(Notice::Columns(ColumnsNotice::Reordered));
+            return None;
+        }
+        let Some(records) = self.records() else {
+            self.notice = Some(Notice::Columns(ColumnsNotice::AwaitIndex));
+            return None;
+        };
+        let lines = self.rows.len(records);
+        if lines > MAX_COPY_ROWS {
+            self.notice = Some(Notice::Rows(RowsNotice::TooMany));
+            return None;
+        }
+        Some((0, lines))
+    }
+
+    /// 複製の前に断るか（閉じる問いの間・保存の途中・読み取り専用）。断らなければ、直していた欄を確定する。
+    fn may_duplicate(&mut self) -> bool {
+        if self.closing != CloseState::Open {
+            return false;
+        }
+        if self.saving {
+            self.notice = Some(Notice::StillSaving);
+            return false;
+        }
+        if self.refuses_change() {
+            return false;
+        }
+        self.commit_edit();
+        true
+    }
+
+    /// `duplicate_columns_request` が読ませた全部の行（位置 `first_line` から `rows`・切り詰めたレコード `cuts`）から、
+    /// 選んだ列のすぐ右に同じ値（書き換えを重ねた画面の値・見出しの名前も）の列を足す。足した列と書き込みを 1 手の束として
+    /// 積み、足した最初の列へカーソルを動かす。読めた行が足りないか切り詰めた行があれば、何も足さない（GitHub Issue #488）。
+    pub fn duplicate_columns(
+        &mut self,
+        first_line: u64,
+        (rows, cuts): (&[CellRow], &[CutRecord]),
+    ) -> DocumentEffect {
+        let (Some(window), Some((first, last, count)), Some(records)) =
+            (self.window, self.chosen_columns(), self.records())
+        else {
+            return DocumentEffect::Stay;
+        };
+        if !cuts.is_empty() {
+            self.notice = Some(Notice::EditCut);
+            return DocumentEffect::Stay;
+        }
+        if u64::try_from(rows.len()).ok() != Some(self.rows.len(records)) {
+            return DocumentEffect::Stay;
+        }
+        let values = self.overlaid(first_line, rows);
+        let at = last.saturating_add(1);
+        let change = self.add_columns(at, count);
+        let shown: &Self = self;
+        let cells: Vec<(CellChange, String)> = values
+            .iter()
+            .zip(first_line..)
+            .flat_map(|(cells, line)| {
+                let row = shown.rows.row_at(line).unwrap_or(RowId::Source(line));
+                (0..count).filter_map(move |offset| {
+                    let value = cells.get(first.saturating_add(offset))?;
+                    shown.pasted_cell((row, at.saturating_add(offset)), &[], value)
+                })
+            })
+            .collect();
+        self.history
+            .record_batch(vec![EditStep::Columns(change)], cells, &mut self.edits);
+        self.notice = Some(Notice::Columns(ColumnsNotice::Duplicated(count)));
+        self.after_columns_changed(at, window)
     }
 
     /// `duplicate_request` が読ませた行（位置 `first_line` から読んだ `rows`・切り詰めたレコード `cuts`）を、選択の
@@ -9375,7 +9455,7 @@ mod tests {
 
     /// `duplicate_request` が求めた行を `editable_rows` から読んで渡す（合成ルートの代わり）。
     fn duplicate_from_editable(document: &mut Document) -> Option<DocumentEffect> {
-        let (first_line, count) = document.duplicate_request()?;
+        let (first_line, count) = document.duplicate_rows_request()?;
         let rows: Vec<CellRow> = editable_rows()
             .into_iter()
             .skip(usize::try_from(first_line).ok()?)
@@ -9434,6 +9514,45 @@ mod tests {
         document.apply(Intent::Redo, normal());
         reread(&mut document, &editable_rows());
         assert_eq!(first_cells(&document).len(), 6);
+    }
+
+    /// 列の複製は、索引を作り終えてから表の全部の行（見出しを含む）を読み、選んだ列のすぐ右に同じ値の列を足す。見出しの
+    /// 名前と書き換えた値も写す。Ctrl+Z 1 回で列ごと戻る（GitHub Issue #488）。
+    #[test]
+    fn duplicating_a_column_copies_every_value_just_to_the_right() {
+        let rows = table(&[&["id", "name"], &["1", "a"], &["2", "b"]]);
+        let mut document = headed();
+        document.apply(moving(CursorStep::Right), normal());
+        assert_eq!(document.duplicate_columns_request(), None);
+        text_at(
+            &document.frame(normal(), palette()),
+            "列の複製は、行の数が分かってからできます（索引を作っています）",
+        );
+        document.report(JobReport::Finished(IndexSummary::new(3, None)));
+        document.apply(Intent::Edit, normal());
+        document.apply(Intent::SelectAll, normal());
+        typed(&mut document, "z");
+        document.apply(Intent::Confirm, normal());
+        document.apply(moving(CursorStep::Up), normal());
+        let (first_line, count) = document.duplicate_columns_request().unwrap();
+        assert_eq!((first_line, count), (0, 3));
+        document.duplicate_columns(first_line, (&rows, &[]));
+        assert_eq!(document.widths.columns().len(), 3);
+        let copy = document.column_id(2);
+        let copied: Vec<Option<&str>> = (0..3)
+            .map(|line| text_of(&document, RowId::Source(line), copy))
+            .collect();
+        assert_eq!(copied, [Some("name"), Some("z"), Some("b")]);
+        // 写した見出しの名前は、表の見出しにも詳細ペインにも出る（保存と同じ）。
+        assert_eq!(document.column_name(2).as_deref(), Some("name"));
+        assert_eq!(document.selection().cursor().column(), 2);
+        text_at(
+            &document.frame(normal(), palette()),
+            "1 列を複製しました（Ctrl+Z で戻す）",
+        );
+        document.apply(Intent::Undo, normal());
+        assert_eq!(document.widths.columns().len(), 2);
+        assert_eq!(text_of(&document, RowId::Source(1), copy), None);
     }
 
     /// 読み取り専用なら行を複製しない（読ませもしない・GitHub Issue #486）。
