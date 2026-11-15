@@ -102,6 +102,8 @@ pub enum Notice {
     Columns(ColumnsNotice),
     /// このセルは差分で消した（`Absent`・KEEP-05）ので直せない。列の数が足りない行のセルは足して直せる（GitHub Issue #83）。
     EditMissingCell,
+    /// 見出しの行が無い表では、列の名前を直せない（EDIT-04・GitHub Issue #496）。
+    NoHeaderToRename,
     /// 書き換えた値に、ファイルの文字コードで表せない字があり、保存できなかった。どのセルかを言う（GitHub Issue #393）。
     Unrepresentable(UnrepresentableNotice),
     /// 行の後ろの余計なセルを消した数（GitHub Issue #413）。`Some(0)` は消すセルが無い、`None` は見出しが無いか列を

@@ -23,7 +23,8 @@ NeNe Ledger（プレビュー版）
   Ctrl+Z 元に戻す / Ctrl+Y やり直す /
   Ctrl+O ファイルを開く / Ctrl+S 保存 / Ctrl+Shift+S 名前を付けて保存 / Ctrl+N 新しい表 /
   Ctrl+C コピー / Ctrl+X 切り取り / Ctrl+V 貼り付け / F2 またはダブルクリックでセルを直す /
-  Ctrl+Shift+U 詳細ペイン / F6 字を打つ先をセルと詳細ペインで替える
+  Ctrl+Shift+U 詳細ペイン / F6 字を打つ先をセルと詳細ペインで替える /
+  見出しのダブルクリックで列の名前を直す（Tab で隣の列の名前へ）
 
 ■ ライセンス
   NeNe Ledger License 1.0（LICENSE を見てください）。使うのは自由・改変はクレジット必須・

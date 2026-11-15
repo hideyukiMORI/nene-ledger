@@ -6,6 +6,7 @@ use nene_ledger_application::click_count::ClickCount;
 use nene_ledger_application::column_shift::ColumnShift;
 use nene_ledger_application::cursor_step::CursorStep;
 use nene_ledger_application::detail_key::DetailKey;
+use nene_ledger_application::edit_target::EditTarget;
 use nene_ledger_application::find_toggle::FindToggle;
 use nene_ledger_application::intent::Intent;
 use nene_ledger_application::root_command::RootCommand;
@@ -93,7 +94,7 @@ pub(crate) fn key_intent(key: u16, modifiers: Modifiers) -> Option<Intent> {
     } = modifiers;
     match key {
         VK_F1 => return Some(Intent::OpenPalette),
-        VK_F2 => return Some(Intent::Edit),
+        VK_F2 => return Some(Intent::Edit(EditTarget::Cell)),
         // 字を打つ先を表のセルと詳細ペインで替える（GitHub Issue #478）。
         VK_F6 => return Some(Intent::Detail(DetailKey::SwitchTyping)),
         VK_F3 => return Some(Intent::FindAgain { forward: !shift }),
@@ -320,7 +321,9 @@ mod tests {
         use nene_ledger_application::key_guide::KeyGuide;
         let shift = Modifiers::new(true, false, false);
         match guide {
-            KeyGuide::EditCell => key_intent(VK_F2, plain()) == Some(Intent::Edit),
+            KeyGuide::EditCell => {
+                key_intent(VK_F2, plain()) == Some(Intent::Edit(EditTarget::Cell))
+            }
             KeyGuide::SwitchTyping => {
                 key_intent(VK_F6, plain()) == Some(Intent::Detail(DetailKey::SwitchTyping))
             }

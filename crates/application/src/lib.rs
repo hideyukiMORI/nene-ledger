@@ -48,6 +48,7 @@ pub mod edit_history;
 pub mod edit_mode;
 pub mod edit_step;
 pub mod edit_surface;
+pub mod edit_target;
 mod editing_cell;
 pub mod file_stamp;
 pub mod find_bound;

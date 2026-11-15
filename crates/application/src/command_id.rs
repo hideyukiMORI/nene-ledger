@@ -5,6 +5,7 @@ use crate::column_shift::ColumnShift;
 use crate::cursor_step::CursorStep;
 use crate::detail_key::DetailKey;
 use crate::detail_pane::DetailPane;
+use crate::edit_target::EditTarget;
 use crate::intent::Intent;
 use crate::palette_heading::PaletteHeading;
 use crate::reading_aspect::ReadingAspect;
@@ -101,6 +102,8 @@ pub enum CommandId {
     DuplicateRows,
     /// 選んだ列を、すぐ右に同じ値で足す（GitHub Issue #488）。
     DuplicateColumns,
+    /// カーソルの列の見出しを、その場で直し始める（EDIT-04・GitHub Issue #496）。
+    RenameColumn,
     /// 選んだ範囲にかかる行を消す。
     RemoveRows,
     /// カーソルの列（選んだ列）の左に空の列を足す（ADR 0027）。
@@ -119,7 +122,7 @@ pub enum CommandId {
 
 impl CommandId {
     /// すべての操作（何も打たないときの順）。
-    pub const ALL: [Self; 49] = [
+    pub const ALL: [Self; 50] = [
         Self::Top,
         Self::Bottom,
         Self::GoTo,
@@ -161,6 +164,7 @@ impl CommandId {
         Self::AppendRow,
         Self::DuplicateRows,
         Self::DuplicateColumns,
+        Self::RenameColumn,
         Self::RemoveRows,
         Self::InsertColumnsLeft,
         Self::InsertColumnsRight,
@@ -199,6 +203,7 @@ impl CommandId {
             | Self::AppendRow
             | Self::DuplicateRows
             | Self::DuplicateColumns
+            | Self::RenameColumn
             | Self::RemoveRows
             | Self::InsertColumnsLeft
             | Self::InsertColumnsRight
@@ -280,6 +285,7 @@ impl CommandId {
             Self::AppendRow => "末尾に行を足す",
             Self::DuplicateRows => "行を複製する（すぐ下に同じ値の行を足す）",
             Self::DuplicateColumns => "列を複製する（すぐ右に同じ値の列を足す）",
+            Self::RenameColumn => "列の名前を変える（見出しをその場で直す）",
             Self::RemoveRows => "行を消す",
             Self::InsertColumnsLeft => "左に列を足す",
             Self::InsertColumnsRight => "右に列を足す",
@@ -336,6 +342,7 @@ impl CommandId {
             Self::AppendRow => "まつびにぎょうをたす",
             Self::DuplicateRows => "ぎょうをふくせいする",
             Self::DuplicateColumns => "れつをふくせいする",
+            Self::RenameColumn => "れつのなまえをかえる",
             Self::RemoveRows => "ぎょうをけす",
             Self::InsertColumnsLeft => "ひだりにれつをたす",
             Self::InsertColumnsRight => "みぎにれつをたす",
@@ -399,6 +406,7 @@ impl CommandId {
             Self::AppendRow => &["append row", "add row at end", "new row"],
             Self::DuplicateRows => &["duplicate row", "clone row", "repeat row"],
             Self::DuplicateColumns => &["duplicate column", "clone column", "repeat column"],
+            Self::RenameColumn => &["rename column", "rename header", "column title"],
             Self::RemoveRows => &["delete row", "remove row"],
             Self::InsertColumnsLeft => &["insert column left", "add column", "new column"],
             Self::InsertColumnsRight => &["insert column right", "add column", "new column"],
@@ -447,6 +455,7 @@ impl CommandId {
             }
             Self::DuplicateRows => &["行の複製", "同じ行", "写す"],
             Self::DuplicateColumns => &["列の複製", "同じ列", "写す"],
+            Self::RenameColumn => &["列名の変更", "見出しの名前", "項目名", "リネーム"],
             Self::RemoveRows => &["行の削除", "削除"],
             Self::InsertColumnsLeft | Self::InsertColumnsRight => &["列の挿入", "追加"],
             Self::RemoveColumns => &["列の削除", "削除"],
@@ -490,6 +499,7 @@ impl CommandId {
             | Self::AppendRow
             | Self::DuplicateRows
             | Self::DuplicateColumns
+            | Self::RenameColumn
             | Self::InsertColumnsRight
             | Self::TrimExtraCells => None,
             // Ctrl++ と Ctrl+- は、列全体を選んでいれば列に、そうでなければ行に効く（ADR 0027 の決定 2）。
@@ -558,6 +568,7 @@ impl CommandId {
             | Self::AppendRow
             | Self::DuplicateRows
             | Self::DuplicateColumns
+            | Self::RenameColumn
             | Self::RemoveRows
             | Self::InsertColumnsLeft
             | Self::InsertColumnsRight
@@ -622,6 +633,7 @@ impl CommandId {
             Self::AppendRow => Some(Intent::InsertRows(RowPlace::End)),
             Self::DuplicateRows => Some(Intent::Root(RootCommand::DuplicateRows)),
             Self::DuplicateColumns => Some(Intent::Root(RootCommand::DuplicateColumns)),
+            Self::RenameColumn => Some(Intent::Edit(EditTarget::Header)),
             Self::RemoveRows => Some(Intent::RemoveRows),
             Self::InsertColumnsLeft => Some(Intent::InsertColumns(ColumnPlace::Left)),
             Self::InsertColumnsRight => Some(Intent::InsertColumns(ColumnPlace::Right)),

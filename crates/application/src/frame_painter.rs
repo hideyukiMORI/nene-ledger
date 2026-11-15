@@ -42,6 +42,9 @@ pub(crate) struct FramePainter<'view> {
     column_ids: &'view [ColumnId],
     edits: Option<&'view CellEdits>,
     editing: Option<&'view EditingCell>,
+    /// 欄として描くのが見出しのセルなら、その所（上に固定した行の番目・表示の列・EDIT-04・GitHub Issue #496）。
+    /// `None` なら、欄はカーソルのセル。
+    renaming: Option<(usize, usize)>,
     found: Option<&'view FindQuery>,
     /// 当たりの印を付ける表示の列（検索と置換を列に限ったとき・GitHub Issue #411）。`None` なら全部の列。
     found_within: Option<Range<usize>>,
@@ -100,6 +103,7 @@ impl<'view> FramePainter<'view> {
             column_ids: &[],
             edits: None,
             editing: None,
+            renaming: None,
             found: None,
             found_within: None,
             expected: None,
@@ -145,6 +149,11 @@ impl<'view> FramePainter<'view> {
     /// カーソルのセルを、編集の欄として描く（ADR 0026）。
     pub(crate) fn with_editing(self, editing: Option<&'view EditingCell>) -> Self {
         Self { editing, ..self }
+    }
+
+    /// 編集の欄を、カーソルのセルでなく見出しのセル（上に固定した行の番目・表示の列）に描く（EDIT-04）。
+    pub(crate) fn with_renaming(self, renaming: Option<(usize, usize)>) -> Self {
+        Self { renaming, ..self }
     }
 
     /// 問い `found` に当たる本体のセルと字に印を付ける（検索と置換の欄が開いている間・GitHub Issue #189）。
@@ -321,13 +330,18 @@ impl<'view> FramePainter<'view> {
             {
                 self.found = None;
             }
-            self.paint_shown_cell(rect, (row, style, source), mark);
+            let field = self.field_at(index, column, mark);
+            if let Some(editing) = field {
+                self.paint_editing_cell(rect, editing);
+            } else {
+                self.paint_shown_cell(rect, (row, style, source), mark);
+            }
             self.found = found;
             if let RowStyle::Body(body) = style {
                 self.edges(rect, body, column);
                 self.cut_edges(rect, body, column);
             }
-            if mark == CellMark::Cursor {
+            if mark == CellMark::Cursor || field.is_some() {
                 cursor = Some(rect);
             }
         }
@@ -337,17 +351,23 @@ impl<'view> FramePainter<'view> {
         }
     }
 
-    /// 行 `row`（`style`）の元の列 `source` のセル。編集中のカーソルのセルは欄として、書き換えたセルは書き換えた値で描く。
+    /// 上から `index` 番目の行の表示の列 `column` のセル（印 `mark`）が編集の欄なら、その描き方。欄は、見出しの名前を
+    /// 直していればその見出しのセル、そうでなければカーソルのセル。
+    fn field_at(&self, index: usize, column: usize, mark: CellMark) -> Option<&'view EditingCell> {
+        let here = match self.renaming {
+            Some(place) => place == (index, column),
+            None => mark == CellMark::Cursor,
+        };
+        self.editing.filter(|_| here)
+    }
+
+    /// 行 `row`（`style`）の元の列 `source` のセル。書き換えたセルは書き換えた値で描く（編集の欄は `paint_row` が先に描く）。
     fn paint_shown_cell(
         &mut self,
         rect: PixelRect,
         (row, style, source): (&ViewRow, RowStyle, usize),
         mark: CellMark,
     ) {
-        if let (CellMark::Cursor, Some(editing)) = (mark, self.editing) {
-            self.paint_editing_cell(rect, editing);
-            return;
-        }
         let edited = self.edited(style, row.row(), source);
         // 原本の行の書き換えたセルは、保存するまで左の端に帯を付ける（足した行は行の番号の色で分かる・GitHub Issue #323）。
         if edited.is_some() && matches!(row.row(), RowId::Source(_)) {
@@ -396,8 +416,8 @@ impl<'view> FramePainter<'view> {
         }
     }
 
-    /// 本体と見出しの行のセル（行 `row` の元の列 `source`）の書き換え。見出しの行の書き換えは、今は列の複製で写した名前
-    /// だけ（保存と同じに見せる・GitHub Issue #488。見出しの名前の変更 EDIT-04 はまだ）。列の番号の行は書き換えない。
+    /// 本体と見出しの行のセル（行 `row` の元の列 `source`）の書き換え。見出しの行の書き換えは、直した名前（EDIT-04・GitHub
+    /// Issue #496）と、列の複製で写した名前（保存と同じに見せる・GitHub Issue #488）。列の番号の行は書き換えない。
     fn edited(&self, style: RowStyle, row: RowId, source: usize) -> Option<&'view CellValue> {
         match style {
             RowStyle::Body(_) | RowStyle::Header => {
@@ -465,6 +485,17 @@ impl<'view> FramePainter<'view> {
         self.editing_wide = Some(wide);
     }
 
+    /// 欄の中の横の範囲 `from..to`（画素）を、縦の帯 `band`（上端と高さ）で塗る（選んだ字の地・確定前の文字列の下線）。
+    fn span_fill(&mut self, (from, to): (u32, u32), (top, height): (u32, u32), color: Color) {
+        self.fill(
+            PixelRect::new(
+                PixelPoint::new(from, top),
+                PixelSize::new(to.saturating_sub(from), height),
+            ),
+            color,
+        );
+    }
+
     /// 編集中の欄 `rect`。地の色で塗り、欄の文字列とカーソルの棒と、確定前の文字列の下線を描く。
     /// 欄より長い文字列は、カーソルが右端に見えるまで頭の字を飛ばして描く（`…` は付けない）。
     fn paint_editing(&mut self, rect: PixelRect, editing: &EditingCell) {
@@ -476,9 +507,6 @@ impl<'view> FramePainter<'view> {
             .saturating_sub(self.layout.padding().saturating_mul(2))
             / half;
         let (shown, skipped) = scrolled_to_caret(editing.text(), editing.caret(), room);
-        if !shown.is_empty() {
-            self.text(rect, &shown, self.palette.text());
-        }
         let caret = editing.caret().saturating_sub(skipped);
         let left = rect.origin().x().saturating_add(self.layout.padding());
         let right = rect.origin().x().saturating_add(rect.size().width());
@@ -492,21 +520,26 @@ impl<'view> FramePainter<'view> {
             left.saturating_add(columns.saturating_mul(half))
                 .min(right.saturating_sub(caret_width))
         };
-        if let Some((start, end)) = editing.underline() {
-            let line = self.metrics.px(UNDERLINE);
-            let (from, to) = (
+        // 選んだ字の地（字より先に塗る）。
+        let span = |(start, end): (u32, u32)| {
+            (
                 at(start.saturating_sub(skipped)),
                 at(end.saturating_sub(skipped)),
-            );
-            self.fill(
-                PixelRect::new(
-                    PixelPoint::new(
-                        from,
-                        top.saturating_add(self.metrics.line_height())
-                            .saturating_sub(line),
-                    ),
-                    PixelSize::new(to.saturating_sub(from), line),
-                ),
+            )
+        };
+        if let Some(selection) = editing.selection().map(span) {
+            let band = (top, self.metrics.line_height());
+            self.span_fill(selection, band, self.palette.selection());
+        }
+        if !shown.is_empty() {
+            self.text(rect, &shown, self.palette.text());
+        }
+        if let Some(underline) = editing.underline().map(span) {
+            let line = self.metrics.px(UNDERLINE);
+            let bottom = top.saturating_add(self.metrics.line_height());
+            self.span_fill(
+                underline,
+                (bottom.saturating_sub(line), line),
                 self.palette.text(),
             );
         }
@@ -1092,6 +1125,40 @@ mod tests {
             "{outline_right} {rights:?}"
         );
         assert!(outline_right > rights[0]);
+    }
+
+    /// 欄の中で選んだ字は、選択の色で地を塗る（半角 2 字目から 4 字目の前まで・GitHub Issue #496）。見出しの名前を直して
+    /// いるときは、欄を見出しのセルに描く。
+    #[test]
+    fn the_selected_part_of_the_field_is_filled_and_a_renaming_field_sits_in_the_header() {
+        let header = [row(0, &["name", "b"])];
+        let rows = [row(1, &["x", "y"])];
+        let owned = [header[0].cells().to_strings()];
+        let cells: Vec<&[String]> = owned.iter().map(Vec::as_slice).collect();
+        let layout = TableLayout::new(&ColumnWidths::fit(&cells), 0, 2, metrics());
+        let editing = EditingCell::new(String::from("name"), 4, None).with_selection(Some((1, 3)));
+        let commands = FramePainter::new(&layout, metrics(), palette(), PixelSize::new(800, 600))
+            .with_selection(Selection::at(crate::cell_position::CellPosition::new(1, 0)))
+            .with_editing(Some(&editing))
+            .with_renaming(Some((0, 0)))
+            .paint(&header, None, &view(&rows));
+        let cell = layout.cell_rect(0, 0).unwrap();
+        let half = metrics().half_width();
+        let band = fills_of(&commands, palette().selection())
+            .into_iter()
+            .find(|rect| rect.size().width() == half * 2)
+            .unwrap();
+        assert_eq!(
+            band.origin().x(),
+            cell.origin().x() + layout.padding() + half
+        );
+        assert!(band.origin().y() < cell.origin().y() + cell.size().height());
+        // 本体のカーソルのセルは値のまま（欄にしない）。
+        assert!(
+            commands
+                .iter()
+                .any(|command| matches!(command, DrawCommand::Text { text, .. } if text == "x"))
+        );
     }
 
     /// 列の数が見出しと違う本体の行は、番号を注意の色にし、左に注意の色の帯を置く。見出しのセルの数を知らなければ印は無い
