@@ -19,7 +19,7 @@ const DRAG_THRESHOLD: i32 = 4;
 pub(crate) struct Pointer {
     press: Press,
     last_caption_press: Option<u32>,
-    last_client_press: Option<PointerAt>,
+    last_client_press: Option<(PointerAt, u8)>,
     hovered: Option<ChromeButton>,
 }
 
@@ -38,15 +38,18 @@ impl Pointer {
         self.hovered
     }
 
-    /// 中身（表）の上で左のボタンを `at` で押した。前の押しから間隔と距離の内なら 2 度目（ダブルクリック）で `true`。
-    /// 2 度目の後は数え直す（3 度目は 1 度目）。
-    pub(crate) fn client_press(&mut self, at: PointerAt) -> bool {
-        let double = self.last_client_press.is_some_and(|last| {
-            at.time().wrapping_sub(last.time()) <= DOUBLE_CLICK_MS
-                && !at.is_far_from(last, DRAG_THRESHOLD)
-        });
-        self.last_client_press = if double { None } else { Some(at) };
-        double
+    /// 中身（表）の上で左のボタンを `at` で押した。何度目の押しか（1〜3）。前の押しから間隔と距離の内なら続けて数え、
+    /// 2 度目はダブルクリック、3 度目はトリプルクリック。3 度目の後は数え直す（4 度目は 1 度目・GitHub Issue #468）。
+    pub(crate) fn client_press(&mut self, at: PointerAt) -> u8 {
+        let count = self
+            .last_client_press
+            .filter(|(last, _)| {
+                at.time().wrapping_sub(last.time()) <= DOUBLE_CLICK_MS
+                    && !at.is_far_from(*last, DRAG_THRESHOLD)
+            })
+            .map_or(1, |(_, count)| count.saturating_add(1));
+        self.last_client_press = (count < 3).then_some((at, count));
+        count
     }
 
     /// 左のボタンを `hit` の所で押した。
@@ -229,15 +232,17 @@ mod tests {
         assert_eq!(pointer.leave(), ChromeAction::Nothing);
     }
 
-    /// 中身の上の 2 度の押しは、間隔と距離の内ならダブルクリック。3 度目は 1 度目に数え直す（ADR 0026 の決定 1）。
+    /// 中身の上の続けた押しは、間隔と距離の内なら 2 度目・3 度目と数える。4 度目は 1 度目に数え直す（ADR 0026 の
+    /// 決定 1・GitHub Issue #468）。
     #[test]
-    fn two_quick_presses_on_the_table_are_a_double_click() {
+    fn quick_presses_on_the_table_count_up_to_three() {
         let mut pointer = Pointer::new();
-        assert!(!pointer.client_press(PointerAt::new(10, 10, 1_000)));
-        assert!(pointer.client_press(PointerAt::new(12, 11, 1_300)));
-        assert!(!pointer.client_press(PointerAt::new(12, 11, 1_400)));
+        assert_eq!(pointer.client_press(PointerAt::new(10, 10, 1_000)), 1);
+        assert_eq!(pointer.client_press(PointerAt::new(12, 11, 1_300)), 2);
+        assert_eq!(pointer.client_press(PointerAt::new(12, 11, 1_400)), 3);
+        assert_eq!(pointer.client_press(PointerAt::new(12, 11, 1_500)), 1);
         // 遅い・遠いは 1 度目。
-        assert!(!pointer.client_press(PointerAt::new(12, 11, 2_000)));
-        assert!(!pointer.client_press(PointerAt::new(40, 11, 2_100)));
+        assert_eq!(pointer.client_press(PointerAt::new(12, 11, 2_100)), 1);
+        assert_eq!(pointer.client_press(PointerAt::new(40, 11, 2_200)), 1);
     }
 }

@@ -2,6 +2,7 @@
 //!
 //! Win32 を呼ばない純関数なので、どの OS でもテストする。仮想キーの値は winuser.h のもの。
 
+use nene_ledger_application::click_count::ClickCount;
 use nene_ledger_application::column_shift::ColumnShift;
 use nene_ledger_application::cursor_step::CursorStep;
 use nene_ledger_application::find_toggle::FindToggle;
@@ -201,7 +202,37 @@ pub(crate) fn double_press_intent(x: i32, y: i32, modifiers: Modifiers) -> Optio
         return press_intent(x, y, modifiers);
     }
     let at = PixelPoint::new(u32::try_from(x).ok()?, u32::try_from(y).ok()?);
-    Some(Intent::DoubleClick { at })
+    Some(Intent::DoubleClick {
+        at,
+        count: ClickCount::Second,
+    })
+}
+
+/// 中身の 3 度目の左の押しの意図。Shift・Ctrl を押していなければトリプルクリック（詳細ペインの本文なら行を選ぶ・
+/// GitHub Issue #468）、押していれば 1 度押したのと同じ。
+pub(crate) fn triple_press_intent(x: i32, y: i32, modifiers: Modifiers) -> Option<Intent> {
+    if modifiers.shift || modifiers.control {
+        return press_intent(x, y, modifiers);
+    }
+    let at = PixelPoint::new(u32::try_from(x).ok()?, u32::try_from(y).ok()?);
+    Some(Intent::DoubleClick {
+        at,
+        count: ClickCount::Third,
+    })
+}
+
+/// 今の押し `now`（メッセージの時刻・x・y）が、2 度目の押し（`WM_LBUTTONDBLCLK`）`double` に続く 3 度目か。
+/// 間が OS のダブルクリックの間 `span`（ミリ秒）の内で、位置の差が OS のダブルクリックの矩形 `width` × `height` の
+/// 半分の内なら 3 度目（Windows が 2 度目を決めるのと同じ規則・GitHub Issue #468）。時刻は 1 周して戻ってもよい。
+pub(crate) fn is_third_press(
+    double: (i32, i32, i32),
+    now: (i32, i32, i32),
+    (span, width, height): (u32, i32, i32),
+) -> bool {
+    let quick = u32::try_from(now.0.wrapping_sub(double.0)).is_ok_and(|gap| gap <= span);
+    quick
+        && now.1.abs_diff(double.1) <= width.unsigned_abs() / 2
+        && now.2.abs_diff(double.2) <= height.unsigned_abs() / 2
 }
 
 /// 縦のホイール（`WM_MOUSEWHEEL`）の刻み `delta` の意図。上が正。Ctrl で拡大、Shift で横へ。
@@ -421,13 +452,50 @@ mod tests {
         assert_eq!(key_intent(VK_V, control()), Some(Intent::Paste));
     }
 
+    /// 2 度目の押しに続く押しは、OS のダブルクリックの間と矩形の内なら 3 度目。3 度目は Shift・Ctrl が無ければ
+    /// トリプルクリック（GitHub Issue #468）。
+    #[test]
+    fn a_quick_press_after_a_double_click_is_the_third() {
+        let limits = (500_u32, 4_i32, 4_i32);
+        let second = (1_000_i32, 10_i32, 20_i32);
+        let third = |time: i32, x: i32, y: i32| is_third_press(second, (time, x, y), limits);
+        assert!(third(1_400_i32, 12_i32, 18_i32));
+        assert!(!third(1_600_i32, 10_i32, 20_i32));
+        assert!(!third(1_100_i32, 13_i32, 20_i32));
+        assert!(!third(900_i32, 10_i32, 20_i32));
+        // 時刻が 1 周して戻っても間で比べる。
+        assert!(is_third_press(
+            (i32::MAX - 100_i32, 10_i32, 20_i32),
+            (i32::MIN + 100_i32, 10_i32, 20_i32),
+            limits
+        ));
+        let at = PixelPoint::new(10, 20);
+        assert_eq!(
+            triple_press_intent(10, 20, Modifiers::new(false, false, false)),
+            Some(Intent::DoubleClick {
+                at,
+                count: ClickCount::Third
+            })
+        );
+        assert_eq!(
+            triple_press_intent(10, 20, Modifiers::new(false, true, false)),
+            Some(Intent::Point {
+                at,
+                mode: SelectionMode::Add
+            })
+        );
+    }
+
     /// 2 度目の押しは、Shift・Ctrl が無ければダブルクリック、あれば 1 度押したのと同じ（ADR 0026 の決定 1）。
     #[test]
     fn a_second_press_is_a_double_click_without_modifiers() {
         let at = PixelPoint::new(10, 20);
         assert_eq!(
             double_press_intent(10, 20, Modifiers::new(false, false, false)),
-            Some(Intent::DoubleClick { at })
+            Some(Intent::DoubleClick {
+                at,
+                count: ClickCount::Second
+            })
         );
         assert_eq!(
             double_press_intent(10, 20, Modifiers::new(true, false, false)),

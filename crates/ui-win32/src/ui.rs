@@ -31,21 +31,22 @@ use windows::Win32::UI::HiDpi::{
     SetProcessDpiAwarenessContext,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetKeyState, ReleaseCapture, SetCapture, TME_LEAVE, TME_NONCLIENT, TRACKMOUSEEVENT,
-    TrackMouseEvent, VK_CONTROL, VK_MENU, VK_RETURN, VK_SHIFT,
+    GetDoubleClickTime, GetKeyState, ReleaseCapture, SetCapture, TME_LEAVE, TME_NONCLIENT,
+    TRACKMOUSEEVENT, TrackMouseEvent, VK_CONTROL, VK_MENU, VK_RETURN, VK_SHIFT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CS_DBLCLKS, CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DispatchMessageW, GWLP_USERDATA,
-    GetClientRect, GetMessageW, GetWindowLongPtrW, IDC_ARROW, IDC_SIZENS, IDC_SIZEWE, IsZoomed,
-    LoadCursorW, MSG, NCCALCSIZE_PARAMS, PostMessageW, PostQuitMessage, RegisterClassExW,
-    SM_CXFRAME, SM_CXPADDEDBORDER, SM_CYFRAME, SW_SHOW, SWP_FRAMECHANGED, SWP_NOACTIVATE,
-    SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetCursor, SetWindowLongPtrW, SetWindowPos, ShowWindow,
-    TranslateMessage, WINDOW_EX_STYLE, WM_CAPTURECHANGED, WM_CHAR, WM_CLOSE, WM_DESTROY,
-    WM_DPICHANGED, WM_DROPFILES, WM_ERASEBKGND, WM_IME_COMPOSITION, WM_IME_ENDCOMPOSITION,
-    WM_IME_SETCONTEXT, WM_IME_STARTCOMPOSITION, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN,
-    WM_LBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCALCSIZE, WM_NCHITTEST,
-    WM_NCLBUTTONDBLCLK, WM_NCLBUTTONDOWN, WM_NCLBUTTONUP, WM_NCMOUSEMOVE, WM_PAINT, WM_SETCURSOR,
-    WM_SIZE, WM_SYSCHAR, WM_SYSCOMMAND, WM_SYSKEYDOWN, WM_TIMER, WNDCLASSEXW, WS_OVERLAPPEDWINDOW,
+    GetClientRect, GetMessageTime, GetMessageW, GetSystemMetrics, GetWindowLongPtrW, IDC_ARROW,
+    IDC_SIZENS, IDC_SIZEWE, IsZoomed, LoadCursorW, MSG, NCCALCSIZE_PARAMS, PostMessageW,
+    PostQuitMessage, RegisterClassExW, SM_CXDOUBLECLK, SM_CXFRAME, SM_CXPADDEDBORDER,
+    SM_CYDOUBLECLK, SM_CYFRAME, SW_SHOW, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+    SWP_NOZORDER, SetCursor, SetWindowLongPtrW, SetWindowPos, ShowWindow, TranslateMessage,
+    WINDOW_EX_STYLE, WM_CAPTURECHANGED, WM_CHAR, WM_CLOSE, WM_DESTROY, WM_DPICHANGED, WM_DROPFILES,
+    WM_ERASEBKGND, WM_IME_COMPOSITION, WM_IME_ENDCOMPOSITION, WM_IME_SETCONTEXT,
+    WM_IME_STARTCOMPOSITION, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP,
+    WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCALCSIZE, WM_NCHITTEST, WM_NCLBUTTONDBLCLK,
+    WM_NCLBUTTONDOWN, WM_NCLBUTTONUP, WM_NCMOUSEMOVE, WM_PAINT, WM_SETCURSOR, WM_SIZE, WM_SYSCHAR,
+    WM_SYSCOMMAND, WM_SYSKEYDOWN, WM_TIMER, WNDCLASSEXW, WS_OVERLAPPEDWINDOW,
 };
 use windows::core::{HSTRING, PCWSTR, w};
 
@@ -53,8 +54,8 @@ use crate::dropped_files;
 use crate::hit_code::{HTCLIENT, button_of, hit_code};
 use crate::ime;
 use crate::key_intent::{
-    Modifiers, double_press_intent, key_intent, press_intent, sideways_wheel_intent, typed_intent,
-    wheel_intent,
+    Modifiers, double_press_intent, is_third_press, key_intent, press_intent,
+    sideways_wheel_intent, triple_press_intent, typed_intent, wheel_intent,
 };
 use crate::pen::Pen;
 use crate::timer_ticker::{TICK_TIMER, TimerTicker};
@@ -622,8 +623,14 @@ fn pointer_message(
             capture(window);
             let (x, y) = signed_words(lparam);
             let held = Modifiers::new(wparam.0 & MK_SHIFT != 0, wparam.0 & MK_CONTROL != 0, false);
+            // 2 度目（WM_LBUTTONDBLCLK）の時刻と位置を覚え、続く押しが間と矩形の内なら 3 度目（GitHub Issue #468）。
+            let now = (message_time(), x, y);
+            let double = state.take_double();
             let intent = if message == WM_LBUTTONDBLCLK {
+                state.set_double(now);
                 double_press_intent(x, y, held)
+            } else if double.is_some_and(|last| is_third_press(last, now, double_click_limits())) {
+                triple_press_intent(x, y, held)
             } else {
                 press_intent(x, y, held)
             };
@@ -756,6 +763,32 @@ fn track_leave(window: HWND, nonclient: bool) {
     };
     // SAFETY: request はこの関数の局所で、cbSize を正しく入れてある。
     let _tracked: Result<(), _> = unsafe { TrackMouseEvent(&raw mut request) };
+}
+
+/// 今のメッセージの時刻（ミリ秒・1 周して戻る）。
+#[expect(
+    unsafe_code,
+    reason = "RS-010: Win32 の GetMessageTime を呼ぶ（ADR 0002 の 4）"
+)]
+fn message_time() -> i32 {
+    // SAFETY: このスレッドが今取り出したメッセージの時刻を読むだけ。
+    unsafe { GetMessageTime() }
+}
+
+/// OS のダブルクリックの間（ミリ秒）と、2 度目と見る矩形の幅と高さ（物理画素）。
+#[expect(
+    unsafe_code,
+    reason = "RS-010: Win32 の GetDoubleClickTime・GetSystemMetrics を呼ぶ（ADR 0002 の 4）"
+)]
+fn double_click_limits() -> (u32, i32, i32) {
+    // SAFETY: 利用者の設定と系統の寸法を読むだけ。
+    unsafe {
+        (
+            GetDoubleClickTime(),
+            GetSystemMetrics(SM_CXDOUBLECLK),
+            GetSystemMetrics(SM_CYDOUBLECLK),
+        )
+    }
 }
 
 /// 押したまま窓の外へ引いても、指の動きと離しを受け取る（ドラッグ）。

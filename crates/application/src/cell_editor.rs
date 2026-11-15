@@ -154,6 +154,11 @@ impl CellEditor {
         self.field = self.field.word_selected(index);
     }
 
+    /// `index` 字目がある行（改行で区切った 1 行）を選ぶ（ペインの 3 度押し・GitHub Issue #468）。
+    pub fn select_line(&mut self, index: usize) {
+        self.field = self.field.line_selected(index);
+    }
+
     /// Ctrl+A。欄の字をすべて選ぶ。
     pub fn select_all(&mut self) {
         self.field = self.field.selected_all();

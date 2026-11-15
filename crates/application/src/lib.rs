@@ -19,6 +19,7 @@ pub mod cell_restore;
 pub mod cell_row;
 mod chrome_icon;
 mod chrome_painter;
+pub mod click_count;
 mod client_bands;
 pub mod clipboard_text;
 pub mod close_choice;

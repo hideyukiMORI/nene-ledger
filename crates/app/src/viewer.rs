@@ -1016,8 +1016,8 @@ impl Viewer {
     /// 利用者の意図を取り込む（`Session::intent` の中身。取り込んだ後に表の印の問いをそろえる）。
     fn apply_intent(&mut self, intent: Intent, view: WindowView) -> Option<ClipboardText> {
         let palette_took_last = core::mem::replace(&mut self.palette_took_last, false);
-        // パレットを押して閉じた直後の 2 度目の押しは、表では 1 度の押し（直し始めない）。
-        let intent = if let Intent::DoubleClick { at } = intent
+        // パレットを押して閉じた直後の 2 度目・3 度目の押しは、表では 1 度の押し（直し始めない）。
+        let intent = if let Intent::DoubleClick { at, .. } = intent
             && (palette_took_last || self.palette.is_some())
         {
             Intent::Point {
@@ -1034,7 +1034,7 @@ impl Viewer {
         // 状態の行の右端の案内（「F1 · Ctrl+Shift+P で操作の一覧」）を押したら、操作の一覧を開く（マウスで探す人の入口・
         // GitHub Issue #422）。
         // タイトルバーの左端の「≡ 操作」を押しても開く（GitHub Issue #446）。
-        let on_hint = matches!(intent, Intent::Point { at, .. } | Intent::DoubleClick { at }
+        let on_hint = matches!(intent, Intent::Point { at, .. } | Intent::DoubleClick { at, .. }
             if self.document.palette_hint_hit(at, view) || menu_hit(view, at));
         let intent = if on_hint { Intent::OpenPalette } else { intent };
         if self.opened_palette(intent) {

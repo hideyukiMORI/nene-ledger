@@ -164,6 +164,16 @@ impl TextEdit {
         self.with_caret(TextCaret::new(end, start))
     }
 
+    /// `index` 字目がある行（改行で区切った 1 行・改行は含まない）を選んだ状態。`index` が改行の字ならその前の行。
+    /// カーソルは行の終わり、起点は始まり（3 度押し・GitHub Issue #468）。
+    #[must_use]
+    pub fn line_selected(&self, index: usize) -> Self {
+        let (line, _) = self.position_of(index.min(self.char_count()));
+        let start = self.index_of(line, 0);
+        let end = self.index_of(line, usize::MAX);
+        self.with_caret(TextCaret::new(end, start))
+    }
+
     /// 描く文字列と、その中のカーソル。確定前の文字列をカーソルの位置に差し込み、カーソルはその中へ移る。
     #[must_use]
     pub fn display(&self) -> (String, TextCaret) {
@@ -304,6 +314,17 @@ mod tests {
             .moved(CaretMove::Left, false);
         assert_eq!(typed(&middle, "語").text(), "日語本x");
         assert_eq!(edit.char_count(), 3);
+    }
+
+    /// 3 度押しは、押した字がある行（改行は含まない）を選ぶ。改行の字はその前の行（GitHub Issue #468）。
+    #[test]
+    fn a_line_is_selected_between_line_breaks() {
+        let edit = TextEdit::showing("ab\ncde\n\nf");
+        assert_eq!(edit.line_selected(0).caret(), TextCaret::new(2, 0));
+        assert_eq!(edit.line_selected(2).caret(), TextCaret::new(2, 0));
+        assert_eq!(edit.line_selected(4).caret(), TextCaret::new(6, 3));
+        assert_eq!(edit.line_selected(7).caret(), TextCaret::new(7, 7));
+        assert_eq!(edit.line_selected(99).caret(), TextCaret::new(9, 8));
     }
 
     #[test]
