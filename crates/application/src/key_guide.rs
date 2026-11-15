@@ -31,6 +31,8 @@ pub enum KeyGuide {
     Cancel,
     /// カーソルのセルを続きから直す（ADR 0026）。
     EditCell,
+    /// 字を打つ先を表のセルと詳細ペインで替える（F6・GitHub Issue #478）。
+    SwitchTyping,
     /// カーソルのセルを空にする。
     ClearCell,
     /// セルの中の改行（EDIT-10）。
@@ -43,7 +45,7 @@ pub enum KeyGuide {
 
 impl KeyGuide {
     /// すべて（一覧の順）。
-    pub const ALL: [Self; 17] = [
+    pub const ALL: [Self; 18] = [
         Self::MoveCursor,
         Self::ExtendSelection,
         Self::Page,
@@ -57,6 +59,7 @@ impl KeyGuide {
         Self::Palette,
         Self::Cancel,
         Self::EditCell,
+        Self::SwitchTyping,
         Self::ClearCell,
         Self::BreakLine,
         Self::FillSelection,
@@ -80,6 +83,7 @@ impl KeyGuide {
             Self::Palette => "コマンドパレットを開く",
             Self::Cancel => "やめる・元に戻す",
             Self::EditCell => "セルを続きから直す（入力と編集を替える）",
+            Self::SwitchTyping => "字を打つ先をセルと詳細ペインで替える",
             Self::ClearCell => "セルを空にする",
             Self::BreakLine => "セルの中で改行する",
             Self::FillSelection => "選んだ範囲のすべてのセルに書く",
@@ -104,6 +108,7 @@ impl KeyGuide {
             Self::Palette => "こまんどぱれっとをひらく",
             Self::Cancel => "やめるもとにもどす",
             Self::EditCell => "せるをつづきからなおす",
+            Self::SwitchTyping => "じをうつさきをせるとしょうさいぺいんでかえる",
             Self::ClearCell => "せるをからにする",
             Self::BreakLine => "せるのなかでかいぎょうする",
             Self::FillSelection => "えらんだはんいのすべてのせるにかく",
@@ -128,6 +133,7 @@ impl KeyGuide {
             Self::Palette => "Ctrl+Shift+P / F1",
             Self::Cancel => "Esc",
             Self::EditCell => "F2",
+            Self::SwitchTyping => "F6",
             Self::ClearCell => "Delete",
             Self::BreakLine => "Alt+Enter",
             Self::FillSelection => "Ctrl+Enter",

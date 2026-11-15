@@ -8,6 +8,7 @@ use nene_ledger_application::close_state::CloseState;
 use nene_ledger_application::command_id::CommandId;
 use nene_ledger_application::command_palette::CommandPalette;
 use nene_ledger_application::cut_record::CutRecord;
+use nene_ledger_application::detail_key::DetailKey;
 use nene_ledger_application::document::{Document, MAX_PASTE_CELLS};
 use nene_ledger_application::document_effect::DocumentEffect;
 use nene_ledger_application::format_summary::FormatSummary;
@@ -998,7 +999,10 @@ impl Viewer {
     /// 詳細ペインの開閉と高さを設定に覚える。高さは境の線を離した・戻した・やめたときだけ書く（動かしている間は書かない・
     /// GitHub Issue #452）。書けなければ知らせる。
     fn remember_pane(&mut self, intent: Intent) {
-        let saved = if intent == Intent::ToggleDetail {
+        let saved = if matches!(
+            intent,
+            Intent::Detail(DetailKey::Toggle | DetailKey::SwitchTyping)
+        ) {
             self.preferences.set_detail(self.document.detail())
         } else if matches!(
             intent,

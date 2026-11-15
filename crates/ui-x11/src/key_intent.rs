@@ -2,6 +2,7 @@
 
 use nene_ledger_application::column_shift::ColumnShift;
 use nene_ledger_application::cursor_step::CursorStep;
+use nene_ledger_application::detail_key::DetailKey;
 use nene_ledger_application::find_toggle::FindToggle;
 use nene_ledger_application::intent::Intent;
 use nene_ledger_application::root_command::RootCommand;
@@ -57,6 +58,7 @@ const XK_TAB: u32 = 0xff09;
 /// Shift+Tab（多くの配列で Tab に Shift を足すとこの keysym になる）。
 const XK_ISO_LEFT_TAB: u32 = 0xfe20;
 const XK_F2: u32 = 0xffbf;
+const XK_F6: u32 = 0xffc3;
 /// 拡大のキー（US 配列の `=`（Shift で `+`）・JIS 配列の `;`（Shift で `+`）・`-`・`0`・テンキー）。
 const XK_EQUAL: u32 = 0x3d;
 const XK_PLUS: u32 = 0x2b;
@@ -105,7 +107,7 @@ pub(crate) fn key_intent(keysym: u32, typed: Option<char>, state: KeyButMask) ->
         return Some(Intent::OpenPalette);
     }
     if control_shift && keysym == XK_U {
-        return Some(Intent::ToggleDetail);
+        return Some(Intent::Detail(DetailKey::Toggle));
     }
     if control_shift && keysym == XK_T {
         let step = if state.contains(KeyButMask::MOD1) {
@@ -209,6 +211,8 @@ fn editing_intent(keysym: u32, typed: Option<char>, state: KeyButMask) -> Option
     match keysym {
         XK_F1 => Some(Intent::OpenPalette),
         XK_F2 => Some(Intent::Edit),
+        // 字を打つ先を表のセルと詳細ペインで替える（GitHub Issue #478）。
+        XK_F6 => Some(Intent::Detail(DetailKey::SwitchTyping)),
         XK_F3 if shift => Some(Intent::FindAgain { forward: false }),
         XK_F3 => Some(Intent::FindAgain { forward: true }),
         // 列の数が見出しと違う次の・前の行へ（VS Code の「次の問題へ」と同じ F8・GitHub Issue #377）。
@@ -372,7 +376,7 @@ mod tests {
             KeyButMask::from(u16::from(KeyButMask::CONTROL) | u16::from(KeyButMask::SHIFT));
         assert_eq!(
             key_intent(XK_U, None, control_shift),
-            Some(Intent::ToggleDetail)
+            Some(Intent::Detail(DetailKey::Toggle))
         );
         assert_eq!(key_intent(XK_U, None, KeyButMask::CONTROL), None);
         assert_eq!(
@@ -427,6 +431,9 @@ mod tests {
         use nene_ledger_application::key_guide::KeyGuide;
         match guide {
             KeyGuide::EditCell => key_intent(XK_F2, None, plain()) == Some(Intent::Edit),
+            KeyGuide::SwitchTyping => {
+                key_intent(XK_F6, None, plain()) == Some(Intent::Detail(DetailKey::SwitchTyping))
+            }
             KeyGuide::ClearCell => key_intent(XK_DELETE, None, plain()) == Some(Intent::Delete),
             KeyGuide::BreakLine => {
                 key_intent(XK_RETURN, None, KeyButMask::MOD1) == Some(Intent::BreakLine)
@@ -518,6 +525,7 @@ mod tests {
                 }
                 KeyGuide::Cancel => key_intent(XK_ESCAPE, None, plain()) == Some(Intent::Cancel),
                 KeyGuide::EditCell
+                | KeyGuide::SwitchTyping
                 | KeyGuide::ClearCell
                 | KeyGuide::BreakLine
                 | KeyGuide::FillSelection

@@ -37,6 +37,7 @@ use crate::cursor_step::CursorStep;
 use crate::cut_mark::CutMark;
 use crate::cut_record::CutRecord;
 use crate::detail_content::DetailContent;
+use crate::detail_key::DetailKey;
 use crate::detail_painter::{DetailPainter, body_extent, pane_char_at, pane_index_at};
 use crate::detail_pane::DetailPane;
 use crate::detail_place::DetailPlace;
@@ -470,7 +471,7 @@ impl Document {
             | Intent::FindAgain { .. }
             | Intent::FindToggle(_)
             | Intent::ReplaceAll
-            | Intent::ToggleDetail
+            | Intent::Detail(DetailKey::Toggle | DetailKey::SwitchTyping)
             | Intent::ToggleReadOnly
             | Intent::Theme(_)
             | Intent::Zoom(_)
@@ -1122,7 +1123,7 @@ impl Document {
             | Intent::FreezeColumns
             | Intent::UnfreezeColumns => self.arrange(intent, window),
             Intent::GoTo(target) => self.jump(target, page, window),
-            Intent::ToggleDetail => self.toggle_detail(current, page),
+            Intent::Detail(key) => self.detail_key(key, current, page),
             Intent::ToggleReadOnly => self.toggle_read_only(current),
             Intent::Scroll(scroll) => self.wheel(scroll, current, window),
             Intent::Move { step, mode } => self.move_cursor((step, mode), page, window),
@@ -1177,9 +1178,35 @@ impl Document {
         read_only
     }
 
-    fn toggle_detail(&mut self, current: u64, page: u64) -> u64 {
-        self.detail = self.detail.toggled();
+    /// 詳細ペインのキー。開閉（Ctrl+Shift+U）か、打つ先の切り替え（F6・GitHub Issue #478）。縦の表示の先頭を返す。
+    fn detail_key(&mut self, key: DetailKey, current: u64, page: u64) -> u64 {
+        match key {
+            DetailKey::Toggle => self.detail = self.detail.toggled(),
+            DetailKey::SwitchTyping => self.switch_typing(),
+        }
         reveal_row(current, self.selection.cursor().body(), page)
+    }
+
+    /// F6：字を打つ先を表のセルと詳細ペインで切り替える（値・カーソル・選択はそのまま）。直していなければペインで直し
+    /// 始める（読み取り専用なら直し始めない）。ペインへ移るときに閉じていれば開く。確定はしない（GitHub Issue #478）。
+    fn switch_typing(&mut self) {
+        let to_pane = self
+            .editor
+            .as_ref()
+            .is_none_or(|editor| editor.surface() == EditSurface::Cell);
+        if to_pane {
+            self.detail = DetailPane::Open;
+        }
+        if self.editor.is_none() && !self.begin_edit(EditMode::Editing) {
+            return;
+        }
+        if let Some(editor) = self.editor.as_mut() {
+            if to_pane {
+                editor.type_in_pane();
+            } else {
+                editor.type_in_cell();
+            }
+        }
     }
 
     /// Esc：ドラッグの途中ならやめ、選んだ範囲を数えていれば止める。どちらでもなければ `None`。
@@ -1233,7 +1260,7 @@ impl Document {
             | Intent::FindAgain { .. }
             | Intent::FindToggle(_)
             | Intent::ReplaceAll
-            | Intent::ToggleDetail
+            | Intent::Detail(DetailKey::Toggle | DetailKey::SwitchTyping)
             | Intent::ToggleReadOnly
             | Intent::Theme(_)
             | Intent::Zoom(_)
@@ -1327,7 +1354,7 @@ impl Document {
             | Intent::Scroll(_)
             | Intent::Drag { .. }
             | Intent::Release
-            | Intent::ToggleDetail
+            | Intent::Detail(DetailKey::Toggle | DetailKey::SwitchTyping)
             | Intent::ToggleReadOnly
             | Intent::Theme(_)
             | Intent::Zoom(_) => return Some(intent),
@@ -1434,7 +1461,7 @@ impl Document {
             | Intent::FindAgain { .. }
             | Intent::FindToggle(_)
             | Intent::ReplaceAll
-            | Intent::ToggleDetail
+            | Intent::Detail(DetailKey::Toggle | DetailKey::SwitchTyping)
             | Intent::ToggleReadOnly
             | Intent::Theme(_)
             | Intent::Zoom(_)
@@ -3294,7 +3321,7 @@ impl Document {
             | Intent::FindAgain { .. }
             | Intent::FindToggle(_)
             | Intent::ReplaceAll
-            | Intent::ToggleDetail
+            | Intent::Detail(DetailKey::Toggle | DetailKey::SwitchTyping)
             | Intent::ToggleReadOnly
             | Intent::Theme(_)
             | Intent::Zoom(_)
@@ -3780,7 +3807,7 @@ impl Document {
             | Intent::FindAgain { .. }
             | Intent::FindToggle(_)
             | Intent::ReplaceAll
-            | Intent::ToggleDetail
+            | Intent::Detail(DetailKey::Toggle | DetailKey::SwitchTyping)
             | Intent::ToggleReadOnly
             | Intent::Theme(_)
             | Intent::Zoom(_)
@@ -5987,7 +6014,7 @@ const fn keeps_cut(intent: Intent) -> bool {
         | Intent::ResetWidths
         | Intent::FreezeColumns
         | Intent::UnfreezeColumns
-        | Intent::ToggleDetail
+        | Intent::Detail(DetailKey::Toggle | DetailKey::SwitchTyping)
         | Intent::ToggleReadOnly
         | Intent::Theme(_)
         | Intent::Zoom(_)
@@ -7170,7 +7197,7 @@ mod tests {
         let window = view(400, 400, WindowPlacement::Normal);
         let mut document = opened_with(&table(&[&["h"], &["1"]]));
         let open = document.page_rows(window);
-        document.apply(Intent::ToggleDetail, window);
+        document.apply(Intent::Detail(DetailKey::Toggle), window);
         assert_eq!(document.detail(), DetailPane::Closed);
         let closed = document.page_rows(window);
         // ペインは 158。高さ 25 の行で 6 行ぶん。
@@ -7761,7 +7788,7 @@ mod tests {
             bands(&document).table()
                 >= TableLayout::row_height_for(window.content_metrics()) * MIN_TABLE_ROWS
         );
-        document.apply(Intent::ToggleDetail, window);
+        document.apply(Intent::Detail(DetailKey::Toggle), window);
         document.hover(Some(PixelPoint::new(100, border)), window);
         assert_eq!(document.pointer_shape(), PointerShape::Arrow);
     }
@@ -8098,6 +8125,51 @@ mod tests {
         );
         assert!(document.editor().is_none());
         assert_eq!(document.selection(), Selection::at(CellPosition::new(1, 1)));
+    }
+
+    /// F6 は、直していなければペインを開いてペインで直し始め、直している間は同じ値・同じカーソルのまま打つ先をセルと
+    /// ペインで替える。確定はしない（GitHub Issue #478）。
+    #[test]
+    fn f6_switches_where_the_characters_are_typed() {
+        let window = normal();
+        let switch = Intent::Detail(DetailKey::SwitchTyping);
+        let surface = |shown: &Document| shown.editor().map(CellEditor::surface);
+        let mut document = editable();
+        document.detail = DetailPane::Closed;
+        document.apply(switch, window);
+        assert_eq!(document.detail(), DetailPane::Open);
+        assert_eq!(surface(&document), Some(EditSurface::Pane));
+        assert_eq!(
+            document.editor().unwrap().field().caret(),
+            TextCaret::new(4, 4)
+        );
+        typed(&mut document, "x");
+        document.apply(switch, window);
+        assert_eq!(surface(&document), Some(EditSurface::Cell));
+        // セルへ戻っても、矢印は欄の中を動く。
+        document.apply(plain_move(CursorStep::Left), window);
+        assert_eq!(document.editor().unwrap().field().text(), "0012x");
+        assert_eq!(
+            document.editor().unwrap().field().caret(),
+            TextCaret::new(4, 4)
+        );
+        document.apply(switch, window);
+        assert_eq!(surface(&document), Some(EditSurface::Pane));
+        assert!(document.edits().is_empty());
+        document.apply(Intent::Cancel, window);
+        assert!(document.edits().is_empty());
+    }
+
+    /// 読み取り専用の F6 はペインを開くだけで、直し始めない（GitHub Issue #478）。
+    #[test]
+    fn f6_only_opens_the_pane_when_read_only() {
+        let window = normal();
+        let mut document = editable();
+        document.apply(Intent::ToggleReadOnly, window);
+        document.detail = DetailPane::Closed;
+        document.apply(Intent::Detail(DetailKey::SwitchTyping), window);
+        assert_eq!(document.detail(), DetailPane::Open);
+        assert!(document.editor().is_none());
     }
 
     /// 直している欄で「ab」改行「cd」と打った文書。

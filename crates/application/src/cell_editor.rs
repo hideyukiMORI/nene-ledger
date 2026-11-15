@@ -156,6 +156,12 @@ impl CellEditor {
         self.mode = EditMode::Editing;
     }
 
+    /// 字を打っている所を表のセルへ戻す（値・カーソル・選択はそのまま・F6・GitHub Issue #478）。矢印はペインと同じく
+    /// 欄の中を動く（編集の状態のまま）。
+    pub fn type_in_cell(&mut self) {
+        self.surface = EditSurface::Cell;
+    }
+
     /// カーソルを `index` 字目の前へ置く。`extend` なら選択を広げる（ペインを押した所・GitHub Issue #460）。
     pub fn place_caret(&mut self, index: usize, extend: bool) {
         self.field = self.field.placed(index, extend);

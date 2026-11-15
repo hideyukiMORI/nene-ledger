@@ -3,6 +3,7 @@
 use crate::column_place::ColumnPlace;
 use crate::column_shift::ColumnShift;
 use crate::cursor_step::CursorStep;
+use crate::detail_key::DetailKey;
 use crate::detail_pane::DetailPane;
 use crate::intent::Intent;
 use crate::palette_heading::PaletteHeading;
@@ -561,7 +562,7 @@ impl CommandId {
             Self::SelectAll => Some(Intent::SelectAll),
             Self::SelectRows => Some(Intent::SelectRows),
             Self::SelectColumns => Some(Intent::SelectColumns),
-            Self::ToggleDetail => Some(Intent::ToggleDetail),
+            Self::ToggleDetail => Some(Intent::Detail(DetailKey::Toggle)),
             Self::ToggleReadOnly => Some(Intent::ToggleReadOnly),
             Self::ZoomIn => Some(Intent::Zoom(ZoomStep::In)),
             Self::ZoomOut => Some(Intent::Zoom(ZoomStep::Out)),
