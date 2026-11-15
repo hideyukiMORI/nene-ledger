@@ -9,4 +9,6 @@ pub enum PointerShape {
     ColumnResize,
     /// 詳細ペインの高さを変える（上下の矢印・GitHub Issue #452）。
     RowResize,
+    /// 字を直す所（I 字・詳細ペインの本文の上・GitHub Issue #472）。
+    Text,
 }

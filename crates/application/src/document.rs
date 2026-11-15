@@ -3229,7 +3229,10 @@ impl Document {
     /// ホイール。横はその場で動かし、縦は動いた先の本体の先頭を返す。ドラッグ中なら、動いた後の指の下まで選択を広げる。
     fn wheel(&mut self, scroll: Scroll, current: u64, window: WindowView) -> u64 {
         // 指が詳細ペインの上なら、表でなくペインの本文を動かす（GitHub Issue #454）。
-        if self.hovered == Some(HoverTarget::Pane) {
+        if matches!(
+            self.hovered,
+            Some(HoverTarget::Pane | HoverTarget::PaneText)
+        ) {
             self.scroll_pane(scroll, window);
             return current;
         }
@@ -3671,23 +3674,24 @@ impl Document {
             .insert(column, u32::try_from(chars).unwrap_or(MIN_COLUMN_COLUMNS));
     }
 
-    /// 中身の上で出すカーソルの形。列の境目の上か、列の幅を変えている間は左右の矢印（Issue #64）。
+    /// 中身の上で出すカーソルの形。列の境目の上か、列の幅を変えている間は左右の矢印（Issue #64）。詳細ペインの本文の
+    /// 上と、本文をドラッグしている間は I 字（読み取り専用なら直せないので矢印・GitHub Issue #472）。
     #[must_use]
     pub fn pointer_shape(&self) -> PointerShape {
         match self.hold {
             Some(PointerHold::ColumnWidth { .. }) => PointerShape::ColumnResize,
             Some(PointerHold::PaneHeight { .. }) => PointerShape::RowResize,
+            Some(PointerHold::PaneText) => PointerShape::Text,
             Some(
-                PointerHold::Thumb { .. }
-                | PointerHold::Track { .. }
-                | PointerHold::Cells { .. }
-                | PointerHold::PaneText,
+                PointerHold::Thumb { .. } | PointerHold::Track { .. } | PointerHold::Cells { .. },
             )
             | None => {
                 if self.hovered == Some(HoverTarget::PaneGrip) {
                     PointerShape::RowResize
                 } else if self.grip {
                     PointerShape::ColumnResize
+                } else if self.hovered == Some(HoverTarget::PaneText) && !self.is_read_only() {
+                    PointerShape::Text
                 } else {
                     PointerShape::Arrow
                 }
@@ -4494,7 +4498,11 @@ impl Document {
             self.pane_rect(window)
                 .is_some_and(|pane| contains_point(pane, at))
         }) {
-            Some(HoverTarget::Pane)
+            Some(if at.is_some_and(|at| self.in_pane_body(at, window)) {
+                HoverTarget::PaneText
+            } else {
+                HoverTarget::Pane
+            })
         } else {
             thumb
         };
@@ -7956,6 +7964,43 @@ mod tests {
         }
         document.apply(Intent::DoubleClick { at, count }, window);
         document.apply(Intent::Release, window);
+    }
+
+    /// 詳細ペインの本文の上と、本文をドラッグしている間は I 字。見出しの帯と表の上は矢印、読み取り専用なら本文の上でも
+    /// 矢印（GitHub Issue #472）。
+    #[test]
+    fn the_pointer_is_an_i_beam_over_the_pane_text() {
+        let window = view(400, 600, WindowPlacement::Normal);
+        let mut document = editable();
+        document.set_detail(DetailPane::Open);
+        let (x, y) = pane_text_at(&document, window, 0);
+        let text = PixelPoint::new(x, y);
+        document.hover(Some(text), window);
+        assert_eq!(document.pointer_shape(), PointerShape::Text);
+        document.apply(pointing(x, y, SelectionMode::Collapse), window);
+        // 本文から外へドラッグしても、離すまで I 字。
+        document.hover(Some(PixelPoint::new(x, 5)), window);
+        assert_eq!(document.pointer_shape(), PointerShape::Text);
+        document.apply(Intent::Release, window);
+        assert_eq!(document.pointer_shape(), PointerShape::Arrow);
+        let header = window.chrome().client().origin().y()
+            + ClientBands::split(
+                window.chrome().client().size().height(),
+                window,
+                document.detail,
+                document.detail_lines,
+            )
+            .table()
+            + window.content_metrics().px(DETAIL_RULE)
+            + TableLayout::row_height_for(window.content_metrics()) / 2;
+        document.hover(Some(PixelPoint::new(x, header)), window);
+        assert_eq!(document.pointer_shape(), PointerShape::Arrow);
+        document.apply(Intent::Cancel, window);
+        document.apply(Intent::ToggleReadOnly, window);
+        document.hover(Some(text), window);
+        assert_eq!(document.pointer_shape(), PointerShape::Arrow);
+        document.hover(None, window);
+        assert_eq!(document.pointer_shape(), PointerShape::Arrow);
     }
 
     /// 詳細ペインの本文の 3 度押しで、押した所の行（改行で区切った 1 行・改行は含まない）を選ぶ。表の上の 3 度押しは

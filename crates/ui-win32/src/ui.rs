@@ -37,7 +37,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::UI::WindowsAndMessaging::{
     CS_DBLCLKS, CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DispatchMessageW, GWLP_USERDATA,
     GetClientRect, GetMessageTime, GetMessageW, GetSystemMetrics, GetWindowLongPtrW, IDC_ARROW,
-    IDC_SIZENS, IDC_SIZEWE, IsZoomed, LoadCursorW, MSG, NCCALCSIZE_PARAMS, PostMessageW,
+    IDC_IBEAM, IDC_SIZENS, IDC_SIZEWE, IsZoomed, LoadCursorW, MSG, NCCALCSIZE_PARAMS, PostMessageW,
     PostQuitMessage, RegisterClassExW, SM_CXDOUBLECLK, SM_CXFRAME, SM_CXPADDEDBORDER,
     SM_CYDOUBLECLK, SM_CYFRAME, SW_SHOW, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
     SWP_NOZORDER, SetCursor, SetWindowLongPtrW, SetWindowPos, ShowWindow, TranslateMessage,
@@ -663,7 +663,7 @@ fn pointer_message(
     Some(LRESULT(0))
 }
 
-/// `WM_SETCURSOR`: 中身の上で列の境目に載っていれば左右の矢印にする（Issue #64）。それ以外は既定の手続き
+/// `WM_SETCURSOR`: 中身の上で列の境目に載っていれば左右の矢印、詳細ペインの本文なら I 字にする（Issue #64・#472）。それ以外は既定の手続き
 /// （類の矢印・縁の向き）に任せる。lparam の下位語が当たり判定の値。
 fn cursor_message(state: &WindowState<'_>, lparam: LPARAM) -> Option<LRESULT> {
     let over_content = u32::try_from(lparam.0 & 0xFFFF).ok() == Some(HTCLIENT);
@@ -675,17 +675,19 @@ fn cursor_message(state: &WindowState<'_>, lparam: LPARAM) -> Option<LRESULT> {
         PointerShape::Arrow => return None,
         PointerShape::ColumnResize => IDC_SIZEWE,
         PointerShape::RowResize => IDC_SIZENS,
+        // 詳細ペインの本文の上は I 字（GitHub Issue #472）。
+        PointerShape::Text => IDC_IBEAM,
     };
-    show_resize_cursor(cursor);
+    show_cursor(cursor);
     Some(LRESULT(1))
 }
 
-/// カーソルを、列の幅か詳細ペインの高さを変える矢印 `cursor` にする（Issue #64・GitHub Issue #452）。
+/// カーソルを、列の幅か詳細ペインの高さを変える矢印か I 字の `cursor` にする（Issue #64・GitHub Issue #452・#472）。
 #[expect(
     unsafe_code,
     reason = "RS-010: Win32 の LoadCursorW / SetCursor を呼ぶ（ADR 0002 の 4）"
 )]
-fn show_resize_cursor(cursor: PCWSTR) {
+fn show_cursor(cursor: PCWSTR) {
     // SAFETY: 系統の共有のカーソルを読み、今のカーソルにするだけ。
     unsafe {
         if let Ok(cursor) = LoadCursorW(None, cursor) {

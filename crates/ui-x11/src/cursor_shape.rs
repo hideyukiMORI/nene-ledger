@@ -4,7 +4,7 @@ use nene_ledger_application::pointer_shape::PointerShape;
 use nene_ledger_core::chrome_hit::ChromeHit;
 use nene_ledger_core::resize_edge::ResizeEdge;
 
-/// 窓に出すマウスのカーソル。矢印・縁のリサイズの 8 方向・列の幅（Issue #64）。
+/// 窓に出すマウスのカーソル。矢印・縁のリサイズの 8 方向・列の幅（Issue #64）・ペインの高さ・I 字。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CursorShape {
     /// 矢印。
@@ -15,11 +15,13 @@ pub(crate) enum CursorShape {
     ColumnResize,
     /// 詳細ペインの高さを変える（上下の矢印・GitHub Issue #452）。
     RowResize,
+    /// 字を直す所（I 字・GitHub Issue #472）。
+    Text,
 }
 
 impl CursorShape {
     /// すべて（窓を開くときに作るカーソルの並び）。
-    pub(crate) const ALL: [Self; 11] = [
+    pub(crate) const ALL: [Self; 12] = [
         Self::Arrow,
         Self::Edge(ResizeEdge::TopLeft),
         Self::Edge(ResizeEdge::Top),
@@ -31,6 +33,7 @@ impl CursorShape {
         Self::Edge(ResizeEdge::Left),
         Self::ColumnResize,
         Self::RowResize,
+        Self::Text,
     ];
 
     /// 飾りの当たり判定 `hit` と、中身が求める形 `shape` のカーソル。縁が先で、中身の形は中身の上でだけ。
@@ -39,6 +42,7 @@ impl CursorShape {
             (ChromeHit::Edge(edge), _) => Self::Edge(edge),
             (ChromeHit::Client, PointerShape::ColumnResize) => Self::ColumnResize,
             (ChromeHit::Client, PointerShape::RowResize) => Self::RowResize,
+            (ChromeHit::Client, PointerShape::Text) => Self::Text,
             (ChromeHit::Client, PointerShape::Arrow)
             | (ChromeHit::Caption | ChromeHit::Button(_), _) => Self::Arrow,
         }
@@ -64,6 +68,14 @@ mod tests {
         assert_eq!(
             CursorShape::of(ChromeHit::Client, PointerShape::Arrow),
             CursorShape::Arrow
+        );
+        assert_eq!(
+            CursorShape::of(ChromeHit::Client, PointerShape::Text),
+            CursorShape::Text
+        );
+        assert_eq!(
+            CursorShape::of(ChromeHit::Edge(ResizeEdge::Top), PointerShape::Text),
+            CursorShape::Edge(ResizeEdge::Top)
         );
         assert_eq!(
             CursorShape::of(ChromeHit::Caption, resize),

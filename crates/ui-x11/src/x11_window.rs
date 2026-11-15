@@ -61,7 +61,7 @@ pub(crate) struct X11Window {
     connection: Arc<RustConnection>,
     root: Window,
     window: Window,
-    cursors: [Cursor; 10],
+    cursors: [Cursor; CursorShape::ALL.len()],
     gc: Gcontext,
     atoms: WindowAtoms,
     xdnd: XdndAtoms,
@@ -235,11 +235,12 @@ impl X11Window {
         Ok(())
     }
 
-    /// カーソルの字体から、矢印・8 方向の縁・列の幅のカーソルを作る（並びは `CursorShape::ALL`）。
-    fn cursors(connection: &RustConnection) -> Result<[Cursor; 10], UiFailure> {
+    /// カーソルの字体から、`CursorShape::ALL` の並びのカーソルを作る（並びの長さを `ALL` から取る。10 で書いていたので
+    /// ペインの高さの上下の矢印が作られていなかった・GitHub Issue #472）。
+    fn cursors(connection: &RustConnection) -> Result<[Cursor; CursorShape::ALL.len()], UiFailure> {
         let font = connection.generate_id()?;
         connection.open_font(font, b"cursor")?;
-        let mut cursors = [0; 10];
+        let mut cursors = [0; CursorShape::ALL.len()];
         for (slot, shape) in cursors.iter_mut().zip(CursorShape::ALL) {
             let glyph = cursor_glyph(shape);
             *slot = connection.generate_id()?;
