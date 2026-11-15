@@ -385,6 +385,25 @@ mod tests {
         );
     }
 
+    /// 1 つのセルだけを直した保存は、ほかのバイトを変えない：BOM・末尾の区切り・引用符つきの空（`""`）と無しの空・
+    /// 前後の空白・列の足りない行・引用の中の `""`・日付や先頭の 0 に見える値・最後の行の改行の無さ（KEEP-03・04・05・07・
+    /// GitHub Issue #500）。合成ルートの保存の経路（判別 → 索引 → 計画 → 一時ファイル → 置き換え）を通すので、Windows の
+    /// 上（`make test-windows`）では Windows の置き換えで確かめる。
+    #[test]
+    fn an_edited_cell_keeps_every_other_byte_of_a_tricky_file() {
+        let original = b"\xEF\xBB\xBFa,b,c,\r\n 7 ,\"\",x,\r\n\" q \",,z,\r\n1,2\r\n0012,\"say \"\"hi\"\"\",2026-01-02,"
+            .to_vec();
+        let path = fixture("tricky.csv", &original);
+        save_edited(&path, &CellEdits::empty()).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        let mut edits = CellEdits::empty();
+        edits.set(RowId::Source(1), ColumnId::Source(2), text("Y"));
+        save_edited(&path, &edits).unwrap();
+        let expected = b"\xEF\xBB\xBFa,b,c,\r\n 7 ,\"\",Y,\r\n\" q \",,z,\r\n1,2\r\n0012,\"say \"\"hi\"\"\",2026-01-02,"
+            .to_vec();
+        assert_eq!(std::fs::read(&path).unwrap(), expected);
+    }
+
     #[test]
     fn a_shift_jis_file_is_saved_in_shift_jis() {
         // 「名前」「佐藤」（CP932）。

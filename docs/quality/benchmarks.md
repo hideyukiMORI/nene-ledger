@@ -584,3 +584,24 @@ BIG-10 の目安は「操作ごとの応答 500 ms 以内」。キーを押し�
 - ファイルが 10 倍でも最初の画面の時間は変わらない（先頭を切って窓の分を読むだけで、索引は裏で作る・ADR 0017・第 17 節）。
 - 表の字の時間には、撮る道具の 1 回の手間（`import` で数十 ms）が入るので、実際はこれより短い。
 - **測っていない**：Windows の実機の時間・比較相手（EmEditor・Modern CSV など）との同じファイルでの比べ（BIG-11）。
+
+## 20. 保存の往復を Windows の exe でも（GitHub Issue #500・2026-11-16・KEEP-02・QLT-013）
+
+**条件**：main `65e0e0c` の release。Linux は `target/release/nene-ledger`、Windows は `make build-windows` の exe（mingw-w64）を WSL の interop で呼ぶ。Windows の測りでは、写しを **NTFS の上**（Windows の利用者の一時フォルダ）に置き、Windows の道筋で exe に渡した（一時ファイルに書いて置き換える道を、Windows の流儀の置き換えで通す・ADR 0025）。写しに `--resave` をかけ、元のファイルと `cmp` で比べた（第 4 節と同じ測り方）。
+
+| | |
+| --- | --- |
+| 機械 | Intel Core i9-10850K（20 論理 CPU）・メモリ 31 GiB・Windows 11 の WSL2（カーネル 6.18）。第 2 節の機械とは別 |
+| Pollock | `polluted_files/csv` の 2,290 ファイル（2026-11-16 に取得） |
+| 実データ | `make fetch-corpus` の 381 ファイル・157 MB（2026-11-16 に取得。取得 381・URL 無し 10・失敗 1＝`fr/f035.csv` が 404・大きさが表と違う 3。出どころの側が変わった分は GitHub Issue #501） |
+
+| 集まり | OS とファイルシステム | ファイル | 失敗 | 元と違う | 残った一時ファイル | かかった時間 |
+| --- | --- | --- | --- | --- | --- | --- |
+| Pollock | Linux・ext4 | 2,290 | 0 | 0 | 0 | 44.6 s |
+| Pollock | **Windows・NTFS** | 2,290 | 0 | 0 | 0 | 2 分 22 秒 |
+| 実データ | Linux・ext4 | 381 | 0 | 0 | 0 | 6.4 s |
+| 実データ | **Windows・NTFS** | 381 | 0 | 0 | 0 | 35.8 s |
+
+- かかった時間は、ファイルごとに exe を起こす手間（Windows は interop の手間）を含む通しの時間で、保存の速さの数字ではない。
+- 1 つのセルだけを直した保存がほかのバイトを変えないことは、合成ルートの保存の経路のテスト `an_edited_cell_keeps_every_other_byte_of_a_tricky_file`（BOM・末尾の区切り・引用符つきの空・前後の空白・列の足りない行・最後の改行の無さ）で固定した。`make test` と `make test-windows`（Windows の上・Windows の置き換え）の両方で通る。X11 の画面（Xvfb）でも、同じファイルの 1 つのセルを打って Ctrl+S で保存し、期待のバイト列と `cmp` が一致した。
+- **測っていない**：Windows の画面（Ctrl+S）からの保存の往復（画面からの保存は施主の実機の確認 gate-proofs 第 60 節・第 86 節が小さなファイルで見ている）・巨大なファイルの Windows での保存の時間。
