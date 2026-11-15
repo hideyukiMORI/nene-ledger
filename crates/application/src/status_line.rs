@@ -8,6 +8,7 @@ use nene_ledger_core::header_rows::HeaderRows;
 use nene_ledger_core::line_ending_counts::LineEndingCounts;
 use nene_ledger_core::quoting::Quoting;
 use nene_ledger_core::text_encoding::TextEncoding;
+use nene_ledger_core::unclosed_quote::UnclosedQuote;
 
 use crate::columns_notice::ColumnsNotice;
 use crate::document::MAX_COPY_ROWS;
@@ -134,6 +135,18 @@ fn pasted_status(
 /// 🔴 表示言語の文言の表（ADR 0011）を入れるまでの仮の日本語。
 #[must_use]
 pub fn index_status(state: JobState, header: Option<HeaderRows>) -> String {
+    reading_index_status(state, header, UnclosedQuote::ToEnd)
+}
+
+/// [`index_status`] を、閉じない引用符の読み方 `unclosed` で。規則の正本（終わりまでが 1 つのセル）で読んでいれば、閉じない
+/// 引用符は最後の行にあるのでそう言い、利用者が選んで文字として読んでいれば、そう読んだと言う（ADR 0018 の決定 2・3・
+/// GitHub Issue #511）。文言は、1024 幅の窓の状態の行に行の数と並べて収まる長さにする。
+#[must_use]
+pub fn reading_index_status(
+    state: JobState,
+    header: Option<HeaderRows>,
+    unclosed: UnclosedQuote,
+) -> String {
     match state {
         JobState::Waiting => String::from("索引を作る準備をしています"),
         JobState::Running(progress) => match progress.long_quoted_cell() {
@@ -149,9 +162,13 @@ pub fn index_status(state: JobState, header: Option<HeaderRows>) -> String {
         }
         JobState::Finished(summary) => match summary.unclosed_quote() {
             Some(quote) => format!(
-                "{} · {} バイト目の引用符が最後まで閉じていません",
+                "{} · {} {}",
                 records_status(summary.records(), header),
-                group_digits(quote)
+                group_digits(quote),
+                match unclosed {
+                    UnclosedQuote::ToEnd => "バイト目の引用符が閉じていません（最後の行）",
+                    UnclosedQuote::Literal => "バイト目の閉じない引用符を文字として読んでいます",
+                }
             ),
             None => records_status(summary.records(), header),
         },
@@ -212,11 +229,17 @@ pub fn format_status(summary: FormatSummary) -> String {
     let quoting = quoting_status(dialect.quoting(), dialect.quote())
         .map(|name| format!(" · {name}"))
         .unwrap_or_default();
+    // 閉じない引用符を文字として読んでいる（利用者が選んだ・既定でない読み方は見えるように・ADR 0018 の決定 3）。
+    let unclosed = match dialect.unclosed_quote() {
+        UnclosedQuote::ToEnd => "",
+        UnclosedQuote::Literal => " · 閉じない引用符は文字",
+    };
     format!(
-        "{} · {}{} · {}",
+        "{} · {}{}{} · {}",
         encoding_name(format.encoding()),
         delimiter_name(dialect.delimiter().byte()),
         quoting,
+        unclosed,
         line_ending_name(summary.line_endings())
     )
 }
@@ -829,7 +852,7 @@ mod tests {
         let unclosed = JobState::Finished(IndexSummary::new(2, Some(4)));
         assert_eq!(
             index_status(unclosed, None),
-            "2 行 · 4 バイト目の引用符が最後まで閉じていません"
+            "2 行 · 4 バイト目の引用符が閉じていません（最後の行）"
         );
         assert_eq!(
             index_status(JobState::Failed, None),
@@ -856,7 +879,7 @@ mod tests {
         let unclosed = JobState::Finished(IndexSummary::new(3, Some(4)));
         assert_eq!(
             index_status(unclosed, Some(HeaderRows::single(0))),
-            "データ 2 行（見出し 1 行） · 4 バイト目の引用符が最後まで閉じていません"
+            "データ 2 行（見出し 1 行） · 4 バイト目の引用符が閉じていません（最後の行）"
         );
         // 作っている間は数えた行の数を言わないので、見出しは関わらない。
         assert_eq!(
@@ -903,6 +926,36 @@ mod tests {
             TextFormat::new(encoding, dialect),
             LineEndingCounts::tally(endings.iter().copied()),
         )
+    }
+
+    /// 閉じない引用符を文字として読んでいる間は、読み方に出す（利用者が選んだ・既定でない読み方・ADR 0018 の決定 3）。
+    #[test]
+    fn the_format_line_says_when_unclosed_quotes_are_read_as_text() {
+        let literal = TextFormat::new(
+            TextEncoding::Utf8,
+            Dialect::rfc4180().with_unclosed_quote(UnclosedQuote::Literal),
+        );
+        let line = format_status(FormatSummary::new(
+            literal,
+            LineEndingCounts::tally([LineEnding::Lf].into_iter()),
+        ));
+        assert!(
+            line.contains("カンマ区切り · 閉じない引用符は文字 · "),
+            "{line}"
+        );
+    }
+
+    #[test]
+    fn an_unclosed_quote_read_as_text_says_so_instead_of_pointing_at_the_last_row() {
+        let unclosed = JobState::Finished(IndexSummary::new(4, Some(27)));
+        assert_eq!(
+            reading_index_status(unclosed, None, UnclosedQuote::Literal),
+            "4 行 · 27 バイト目の閉じない引用符を文字として読んでいます"
+        );
+        assert_eq!(
+            reading_index_status(unclosed, None, UnclosedQuote::ToEnd),
+            index_status(unclosed, None)
+        );
     }
 
     #[test]

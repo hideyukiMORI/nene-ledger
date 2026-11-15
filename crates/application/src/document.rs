@@ -96,8 +96,8 @@ use crate::selection_mode::SelectionMode;
 use crate::selection_stats::SelectionStats;
 use crate::selection_totals::SelectionTotals;
 use crate::status_line::{
-    RAGGED_TOTALS, cursor_status, format_status, group_digits, index_status, notice_status,
-    ragged_status, skipped_note, totals_status, width_status,
+    RAGGED_TOTALS, cursor_status, format_status, group_digits, notice_status, ragged_status,
+    reading_index_status, skipped_note, totals_status, width_status,
 };
 use crate::table_changes::TableChanges;
 use crate::table_extent::TableExtent;
@@ -6271,7 +6271,11 @@ impl Document {
         format!(
             // 壊れた行の数は行の数のすぐ後ろ（狭い窓で後ろの項目から落としても残す・GitHub Issue #409）。
             "{}{} · {} · {} · {}",
-            index_status(self.shown_index(), self.header_line()),
+            reading_index_status(
+                self.shown_index(),
+                self.header_line(),
+                self.format.format().dialect().unclosed_quote()
+            ),
             ragged_status(
                 self.shown_ragged()
                     .map(|rows| (rows, self.ragged_place(rows)))

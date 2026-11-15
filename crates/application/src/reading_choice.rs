@@ -9,6 +9,7 @@ use nene_ledger_core::header_rows::HeaderRows;
 use nene_ledger_core::quoting::Quoting;
 use nene_ledger_core::text_encoding::TextEncoding;
 use nene_ledger_core::text_format::TextFormat;
+use nene_ledger_core::unclosed_quote::UnclosedQuote;
 
 use crate::reading_aspect::ReadingAspect;
 use crate::status_line::{delimiter_name, encoding_name, quoting_short_name};
@@ -29,6 +30,8 @@ pub enum ReadingChoice {
     },
     /// 見出しのレコードの範囲（`None` は見出しなし・ADR 0034）。
     Header(Option<HeaderRows>),
+    /// 閉じない引用符の読み方（ADR 0018 の決定 3・GitHub Issue #511）。
+    UnclosedQuote(UnclosedQuote),
     /// 判別の候補の方言（区切り・引用の流儀・引用符の字を一度に当てる・Issue #3）。
     Dialect {
         /// 区切り（1 バイト）。
@@ -69,6 +72,7 @@ impl ReadingChoice {
             ReadingAspect::Delimiter => Self::Delimiter(dialect.delimiter().byte()),
             ReadingAspect::Quoting => Self::quoting(dialect.quoting(), dialect.quote()),
             ReadingAspect::Header => Self::Header(header),
+            ReadingAspect::UnclosedQuote => Self::UnclosedQuote(dialect.unclosed_quote()),
         }
     }
 
@@ -79,6 +83,12 @@ impl ReadingChoice {
             Self::Encoding(encoding) => String::from(encoding_name(encoding)),
             Self::Delimiter(byte) => delimiter_name(byte),
             Self::Quoting { quoting, quote } => quoting_name(quoting, quote),
+            Self::UnclosedQuote(UnclosedQuote::ToEnd) => {
+                String::from("終わりまでを 1 つのセルにする（既定・RFC 4180）")
+            }
+            Self::UnclosedQuote(UnclosedQuote::Literal) => {
+                String::from("閉じない引用符を文字として読む（その先はふつうに切る）")
+            }
             Self::Header(None) => String::from("見出しなし"),
             Self::Header(Some(header)) if header.count() == 1 => {
                 format!("{} 行目が見出し", header.first().saturating_add(1))
@@ -124,6 +134,8 @@ impl ReadingChoice {
             Self::Quoting { quote: b'\'', .. } => "quote single apostrophe",
             Self::Quoting { .. } => "quote",
             Self::Header(_) => "header",
+            Self::UnclosedQuote(UnclosedQuote::ToEnd) => "strict toend default",
+            Self::UnclosedQuote(UnclosedQuote::Literal) => "literal text",
             Self::Dialect { delimiter, .. } => Self::Delimiter(delimiter).keyword(),
         }
     }
@@ -149,6 +161,10 @@ impl ReadingChoice {
             Self::Quoting { quoting, quote } => rebuilt(dialect.delimiter().byte(), quoting, quote)
                 .map(|built| (TextFormat::new(format.encoding(), built), header)),
             Self::Header(chosen) => Some((format, chosen)),
+            Self::UnclosedQuote(unclosed) => Some((
+                TextFormat::new(format.encoding(), dialect.with_unclosed_quote(unclosed)),
+                header,
+            )),
             Self::Dialect {
                 delimiter,
                 quoting,
@@ -293,5 +309,34 @@ mod tests {
             quote: b'"',
         };
         assert_eq!(same.apply(utf8(), None), None);
+    }
+
+    /// 閉じない引用符の読み方は、ほかの読み方（区切り・引用の流儀）を変えずに当たり、区切りを選び直しても残る
+    /// （ADR 0018 の決定 3・GitHub Issue #511）。
+    #[test]
+    fn the_unclosed_quote_reading_is_applied_and_kept_by_other_choices() {
+        let format = TextFormat::new(TextEncoding::Utf8, Dialect::rfc4180());
+        let options = ReadingAspect::UnclosedQuote.options();
+        assert_eq!(
+            options,
+            [
+                ReadingChoice::UnclosedQuote(UnclosedQuote::ToEnd),
+                ReadingChoice::UnclosedQuote(UnclosedQuote::Literal)
+            ]
+        );
+        assert_eq!(
+            ReadingChoice::current(ReadingAspect::UnclosedQuote, format, None),
+            ReadingChoice::UnclosedQuote(UnclosedQuote::ToEnd)
+        );
+        let (literal, _) = ReadingChoice::UnclosedQuote(UnclosedQuote::Literal)
+            .apply(format, None)
+            .unwrap();
+        assert_eq!(literal.dialect().unclosed_quote(), UnclosedQuote::Literal);
+        assert_eq!(literal.dialect().delimiter().byte(), b',');
+        let (tabbed, _) = ReadingChoice::Delimiter(b'\t')
+            .apply(literal, None)
+            .unwrap();
+        assert_eq!(tabbed.dialect().unclosed_quote(), UnclosedQuote::Literal);
+        assert!(options.iter().all(|choice| !choice.name().is_empty()));
     }
 }

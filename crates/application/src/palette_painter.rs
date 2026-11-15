@@ -585,6 +585,7 @@ impl<'state> PalettePainter<'state> {
             ReadingChoice::Encoding(encoding) => Some(encoding_note(encoding)),
             ReadingChoice::Delimiter(_)
             | ReadingChoice::Quoting { .. }
+            | ReadingChoice::UnclosedQuote(_)
             | ReadingChoice::Header(_)
             | ReadingChoice::Dialect { .. } => None,
         };
@@ -909,6 +910,10 @@ fn placeholder(mode: PaletteMode) -> &'static str {
             aspect: ReadingAspect::Header,
             ..
         } => "行の番号で絞る（例: 2・2-3）",
+        PaletteMode::Reading {
+            aspect: ReadingAspect::UnclosedQuote,
+            ..
+        } => "英字で絞る（例: literal）",
         PaletteMode::Candidates { .. } => "英字で絞る（例: tab, comma）。上から判別の点数の順",
     }
 }
@@ -970,7 +975,7 @@ mod tests {
         let commands = palette.paint(view(), colors(), DetailPane::Open);
         let shown = texts(&commands);
         assert!(shown.contains(&"したいことを打って探す（例: 保存・置換・文字化け）"));
-        assert!(shown.contains(&"50 / 50"));
+        assert!(shown.contains(&"51 / 51"));
         // 空の一覧は見出しから：よく使う（開く・保存・探す・置換・元に戻す）と、その下の分類（GitHub Issue #420）。
         assert!(shown.contains(&"よく使う") && shown.contains(&"ファイル"));
         assert!(shown.contains(&"ファイルを開く…") && shown.contains(&"Ctrl+O"));
@@ -1056,7 +1061,7 @@ mod tests {
         let commands = palette.paint(view(), colors(), DetailPane::Closed);
         let shown = texts(&commands);
         assert!(shown.contains(&"“xyz” に合う操作は無い"));
-        assert!(shown.contains(&"0 / 50") && shown.contains(&"xyz"));
+        assert!(shown.contains(&"0 / 51") && shown.contains(&"xyz"));
         assert!(fills(&commands, colors().selection()).is_empty());
     }
 
