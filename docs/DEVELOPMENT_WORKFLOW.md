@@ -196,6 +196,18 @@ Windows の実機で動かして確かめるまで「Windows で動く」と書�
 | X11 版（人） | WSLg の上で窓を出し、施主が見て触る | 施主の確認として記録 |
 | Windows 版 | `make lint-windows`（clippy・exe を作らない）で型と lint を見る。exe は施主の実機で組み立てて確かめる（試験用の exe が開発機で検疫された経緯があり、配る exe の経路は別の Issue） | 実機の確認を gate-proofs に記録してから `確認済み` と書く。それまで「Windows で動く」と書かない |
 
+Windows の exe は、WSL から自動でも確かめられる（GitHub Issue #503）。`make build-windows` の exe を Windows の側のフォルダに写して起こし、`tools/winui.ps1` で窓を撮り、マウス・字・キーを送り、保存したファイルを WSL から `cmp` で比べる。
+
+```bash
+# exe を起こし（置き場は CLAUDE.local.md）、プロセスの番号を tasklist.exe で調べてから
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File '<Windows の道筋>\winui.ps1' <番号> \
+  down:140,58 up:140,58 wait:120 dbl:140,58 up:140,58 uni:6c0f,540d vk:13 'keys:^s' wait:1500 'shot:<png の道筋>'
+```
+
+- マウス・字・修飾の無いキーは窓へのメッセージで送る（前面にしない・カーソルを動かさない）。Ctrl の組み合わせは窓を前面にして送り、前面にできなければ止まる。
+- 🔴 これで確かめられるのは「Windows の exe が、その操作でそう動き、そのファイルを書いた」ことまで。マウスのカーソルの形・IME・手応え・倍率ごとの見えは見られないので、施主の実機の確認（QLT-013）は別に要る。記録には「Windows の exe の自動操作」と書き、施主の確認と書き分ける。
+- 終わったら exe を `taskkill.exe /F /PID <番号>` で止める（閉じるボタンは未保存の確かめを出す）。
+
 Wine での目安の確認は、要るときに施主の判断で入れる（Wine は Direct2D・IME・DWM を本物どおりには再現しないので、QLT-013 の実機の代わりにならない）。
 
 ### 開発機に固有の情報
