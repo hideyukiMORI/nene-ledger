@@ -323,6 +323,9 @@ pub fn notice_status(notice: Notice) -> String {
         Notice::Rows(rows) => rows_status(rows),
         Notice::Columns(columns) => columns_status(columns),
         Notice::EditMissingCell => String::from("この行には、この列のセルがありません"),
+        Notice::NoHeaderToRename => String::from(
+            "見出しの行が無いので、列の名前を直せません（パレットの「見出しの行を選ぶ…」で決められます）",
+        ),
         Notice::DialectUnsure { top, rival } => dialect_unsure_status(top, rival),
         Notice::Unrepresentable(found) => unrepresentable_status(found),
         Notice::Trim(trimmed) => trim_status(trimmed),

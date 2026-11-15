@@ -398,7 +398,7 @@ impl CommandPalette {
             | Intent::ToggleReadOnly
             | Intent::Theme(_)
             | Intent::Zoom(_)
-            | Intent::Edit
+            | Intent::Edit(_)
             | Intent::Delete
             | Intent::BreakLine
             | Intent::FillSelection
@@ -520,7 +520,7 @@ impl CommandPalette {
             | Intent::OpenPalette
             | Intent::OpenGoTo
             | Intent::Cancel
-            | Intent::Edit
+            | Intent::Edit(_)
             | Intent::Delete
             | Intent::BreakLine
             | Intent::FillSelection

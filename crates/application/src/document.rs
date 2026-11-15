@@ -47,6 +47,7 @@ use crate::edit_history::EditHistory;
 use crate::edit_mode::EditMode;
 use crate::edit_step::EditStep;
 use crate::edit_surface::EditSurface;
+use crate::edit_target::EditTarget;
 use crate::editing_cell::EditingCell;
 use crate::find_bound::FindBound;
 use crate::find_notice::FindNotice;
@@ -478,7 +479,7 @@ impl Document {
             | Intent::OpenPalette
             | Intent::Type(_)
             | Intent::Erase
-            | Intent::Edit
+            | Intent::Edit(_)
             | Intent::Delete
             | Intent::BreakLine
             | Intent::FillSelection
@@ -554,26 +555,12 @@ impl Document {
         } else {
             self.history.saved(&self.edits);
         }
+        // 保存したファイルは、今の行と列の並びで書かれている。見出しは新しい位置と列の順に置き直す。見出しのセルの
+        // 書き換え（直した名前・複製した列の名前）は保存したファイルの値なので、書き換えを空にする前に写す（写さないと、
+        // 保存したとたんに画面の見出しが前の名前に戻る・GitHub Issue #496）。
+        self.keep_saved_header();
         self.edits = CellEdits::empty();
-        // 保存したファイルは、今の行と列の並びで書かれている。見出しは新しい位置と列の順に置き直す。
-        if !self.columns.is_whole() {
-            self.header_source = self
-                .header_source
-                .iter()
-                .map(|cells| self.arranged(&CellRow::new(cells)))
-                .collect();
-            self.source_width = self.columns.len(self.source_width);
-        }
-        if let Some(lines) = self.header_line() {
-            self.header = core::mem::take(&mut self.header)
-                .into_iter()
-                .zip(lines.lines())
-                .map(|(header, line)| {
-                    ViewRow::from_values(line, header.values().clone())
-                        .with_row(RowId::Source(line))
-                })
-                .collect();
-        }
+        self.source_width = self.columns.len(self.source_width);
         self.rows = RowOrder::whole();
         self.columns = ColumnOrder::whole();
         self.baseline = (self.rows.runs().to_vec(), self.columns.runs().to_vec());
@@ -593,6 +580,57 @@ impl Document {
         DocumentEffect::Read {
             first_body: self.view.first_body(),
         }
+    }
+
+    /// 保存の後の見出し（[`Self::saved`] が書き換えを空にする前に呼ぶ）。新しい位置と列の順に置き直し、書き換えた見出しの
+    /// セルは書き換えた値にする。名前を直していなければ、読んだ行のまま（窓の行が持つ列の範囲を保つ・ADR 0033 の決定 1）。
+    fn keep_saved_header(&mut self) {
+        let renamed = self
+            .header
+            .iter()
+            .any(|row| self.edits.touches_row(row.row()));
+        if renamed || !self.columns.is_whole() {
+            self.header_source = self
+                .header
+                .iter()
+                .zip(&self.header_source)
+                .map(|(row, source)| self.saved_header_row(row.row(), source))
+                .collect();
+        }
+        let Some(lines) = self.header_line() else {
+            return;
+        };
+        let header = core::mem::take(&mut self.header);
+        self.header = header
+            .into_iter()
+            .zip(&self.header_source)
+            .zip(lines.lines())
+            .map(|((header, cells), line)| {
+                let values = if renamed {
+                    CellRow::new(cells)
+                } else {
+                    header.values().clone()
+                };
+                ViewRow::from_values(line, values).with_row(RowId::Source(line))
+            })
+            .collect();
+    }
+
+    /// 保存したファイルの見出しの行 `row`（原本の順のセル `source`）のセル（表の列の順・書き換えたセルは書き換えた値）。
+    fn saved_header_row(&self, row: RowId, source: &[String]) -> Vec<String> {
+        let mut cells = self.arranged(&CellRow::new(source));
+        for (column, id) in self.table_ids().into_iter().enumerate() {
+            let Some(CellValue::Text(name)) = self.edits.get(row, id) else {
+                continue;
+            };
+            if cells.len() <= column {
+                cells.resize(column.saturating_add(1), String::new());
+            }
+            if let Some(cell) = cells.get_mut(column) {
+                cell.clone_from(name);
+            }
+        }
+        cells
     }
 
     /// 名前を付けて保存して、保存先のファイルを同じ読み方で開き直した。題名を `title` に替え、窓は保存先を指す
@@ -1026,15 +1064,23 @@ impl Document {
         }
     }
 
+    /// 意図 `intent` を取り込む前に、前の知らせと切り取りの枠を消す。押したまま動かすことと離すことは、押したときの
+    /// 知らせを消さない（ダブルクリックで断った知らせが、離したとたんに消えないように・GitHub Issue #496）。
+    fn forget_before(&mut self, intent: Intent) {
+        if !matches!(intent, Intent::Drag { .. } | Intent::Release) {
+            self.notice = None;
+        }
+        if !keeps_cut(intent) {
+            self.cut = None;
+        }
+    }
+
     /// 意図を取り込む（[`Self::apply`] の中身）。
     fn apply_intent(&mut self, intent: Intent, window: WindowView) -> DocumentEffect {
         if let Some(effect) = self.close_intent(intent, window) {
             return effect;
         }
-        self.notice = None;
-        if !keeps_cut(intent) {
-            self.cut = None;
-        }
+        self.forget_before(intent);
         if let Some(effect) = self.replace_intent(intent) {
             return effect;
         }
@@ -1104,7 +1150,7 @@ impl Document {
             | Intent::DoubleClick { .. }
             | Intent::Release
             | Intent::OpenGoTo
-            | Intent::Edit
+            | Intent::Edit(_)
             | Intent::Delete
             | Intent::BreakLine
             | Intent::FillSelection
@@ -1277,7 +1323,7 @@ impl Document {
             | Intent::Erase
             | Intent::Confirm
             | Intent::Cancel
-            | Intent::Edit
+            | Intent::Edit(_)
             | Intent::Delete
             | Intent::BreakLine
             | Intent::FillSelection
@@ -1298,13 +1344,45 @@ impl Document {
         {
             return None;
         }
+        // 見出しの名前を直している間は、確定するだけ（本体のカーソルは動かさない・GitHub Issue #496）。
+        let renaming = self.renaming().is_some();
         self.commit_edit();
-        Some(Intent::Move { step, mode })
+        (!renaming).then_some(Intent::Move { step, mode })
     }
 
     /// 編集の意図（ADR 0026 の決定 1・2）。欄で受けたら `None`。表の意図として続けるなら、その意図を返す
     /// （確定して動くときは、確定してから動きの意図を返す）。
     fn edit_intent(&mut self, intent: Intent) -> Option<Intent> {
+        if self.header_intent(intent) {
+            return None;
+        }
+        self.field_intent(intent)
+    }
+
+    /// 見出しの名前の意図（EDIT-04・GitHub Issue #496）。受けたら `true`。直している途中のパレット「列の名前を変える」は、
+    /// 確定してからカーソルの列の名前を直し始める。名前を直している間の Enter は確定するだけ、Tab と Shift+Tab は確定して
+    /// 隣の列へ、F6 は受けて何もしない（打つ先は見出しのまま。詳細ペインはカーソルのセルを見せている）。
+    fn header_intent(&mut self, intent: Intent) -> bool {
+        if intent == Intent::Edit(EditTarget::Header) && self.editor.is_some() {
+            self.commit_edit();
+            self.rename_cursor_column();
+            return true;
+        }
+        let Some(renaming) = self.renaming() else {
+            return false;
+        };
+        if intent == Intent::Confirm {
+            self.committed_rename(renaming, CursorStep::Down);
+        } else if let Intent::Advance(step) = intent {
+            self.committed_rename(renaming, step);
+        } else {
+            return intent == Intent::Detail(DetailKey::SwitchTyping);
+        }
+        true
+    }
+
+    /// 欄が受ける意図（[`Self::edit_intent`] の中身）。
+    fn field_intent(&mut self, intent: Intent) -> Option<Intent> {
         let Some(editor) = self.editor.as_mut() else {
             return self.start_edit(intent);
         };
@@ -1313,7 +1391,8 @@ impl Document {
             Intent::Erase => editor.erase_before(),
             Intent::Delete => editor.erase_after(),
             Intent::BreakLine => editor.break_line(),
-            Intent::Edit => editor.toggle_mode(),
+            // 見出しを直し始める意図は `edit_intent` が先に受ける。
+            Intent::Edit(EditTarget::Cell | EditTarget::Header) => editor.toggle_mode(),
             Intent::SelectAll => editor.select_all(),
             Intent::Cancel => self.editor = None,
             // 欄の中の選んだ字（改行はクリップボードでは CRLF・表のコピーと同じ・GitHub Issue #474）。
@@ -1418,6 +1497,13 @@ impl Document {
             let _released = self.release(window);
             self.begin_edit(EditMode::Editing);
         }
+        // 見出しのセル（境目でない所）の 2 度目の押しは、その名前をその場で直し始める（EDIT-04・GitHub Issue #496）。
+        if let Some((index, display)) = self.header_cell_at(at, window)
+            && self.editor.is_none()
+        {
+            let _released = self.release(window);
+            self.begin_rename(index, display);
+        }
         effect
     }
 
@@ -1436,8 +1522,8 @@ impl Document {
                 self.type_into_new_edit(character);
                 None
             }
-            Intent::Edit => {
-                self.begin_edit(EditMode::Editing);
+            Intent::Edit(target) => {
+                self.begin_at(target);
                 None
             }
             Intent::Delete => {
@@ -1512,19 +1598,23 @@ impl Document {
         let cursor = self.selection.cursor();
         let column = self.source_column(cursor.column());
         // 窓の行がカーソルの列を持っていなければ（読み直す前）、始めない（「セルが無い」と取り違えない・ADR 0033 の決定 1）。
-        let Some((line, row, source)) = self
+        let Some(found) = self
             .view_row(cursor.body())
-            .filter(|row| row.values().holds(column))
-            .map(|row| {
-                (
-                    row.line(),
-                    row.row(),
-                    row.values().get(column).map(String::from),
-                )
-            })
+            .and_then(|row| editable_cell(row, column))
         else {
             return false;
         };
+        self.open_editor(found, column, mode)
+    }
+
+    /// 行 `row`（原本の行 `line`・原本の値 `source`）の元の列 `column` のセルを欄にする。切り詰めたレコードと、差分で
+    /// 消したセルは直さない（知らせる）。始めたら `true`。
+    fn open_editor(
+        &mut self,
+        (line, row, source): (u64, RowId, Option<String>),
+        column: usize,
+        mode: EditMode,
+    ) -> bool {
         if self.cuts.iter().any(|cut| cut.record() == line) {
             self.notice = Some(Notice::EditCut);
             return false;
@@ -1546,6 +1636,100 @@ impl Document {
         };
         self.editor = Some(editor);
         true
+    }
+
+    /// 直しているのが見出しのセルなら、その所（上に固定した行の番目・表示の列・EDIT-04・GitHub Issue #496）。
+    fn renaming(&self) -> Option<(usize, usize)> {
+        let editor = self.editor.as_ref()?;
+        let index = self
+            .header
+            .iter()
+            .position(|row| row.row() == editor.row())?;
+        let source = self.columns.position_of(editor.column())?;
+        Some((index, self.display_column(source)))
+    }
+
+    /// 見出しの `index` 番目の行の、表示の列 `display` の名前を直し始める（欄は元の名前・全部を選んである）。見出しが
+    /// 無い表・読み取り専用・保存の途中・尋ねる画面では始めない。始めたら `true`。
+    fn begin_rename(&mut self, index: usize, display: usize) -> bool {
+        if self.saving || self.closing != CloseState::Open || self.refuses_change() {
+            return false;
+        }
+        self.cut = None;
+        let column = self.source_column(display);
+        if self.header.is_empty() {
+            self.notice = Some(Notice::NoHeaderToRename);
+            return false;
+        }
+        let Some(found) = self
+            .header
+            .get(index)
+            .and_then(|row| editable_cell(row, column))
+        else {
+            return false;
+        };
+        if !self.open_editor(found, column, EditMode::Editing) {
+            return false;
+        }
+        if let Some(editor) = self.editor.as_mut() {
+            editor.select_all();
+        }
+        if let Some(window) = self.window {
+            self.first_column = self.reveal_column(display, window);
+        }
+        true
+    }
+
+    /// F2 かパレット「列の名前を変える」で、先 `target` を直し始める。
+    fn begin_at(&mut self, target: EditTarget) {
+        match target {
+            EditTarget::Cell => {
+                self.begin_edit(EditMode::Editing);
+            }
+            EditTarget::Header => self.rename_cursor_column(),
+        }
+    }
+
+    /// パレット「列の名前を変える」：カーソルの列の見出し（2〜3 行なら一番下の行・ADR 0034）を直し始める。
+    fn rename_cursor_column(&mut self) {
+        let display = self.selection.cursor().column();
+        self.begin_rename(self.header.len().saturating_sub(1), display);
+    }
+
+    /// 見出しの名前を直している間の、確定して動くキー（Enter・Tab・Shift+Tab・Shift+Enter）。確定して、Tab と Shift+Tab は
+    /// 隣の列の名前を続けて直す。本体のカーソルは動かさない。
+    fn committed_rename(&mut self, (index, display): (usize, usize), step: CursorStep) {
+        self.commit_edit();
+        let next = match step {
+            CursorStep::Right => display.checked_add(1),
+            CursorStep::Left => display.checked_sub(1),
+            CursorStep::Up
+            | CursorStep::Down
+            | CursorStep::RowStart
+            | CursorStep::RowEnd
+            | CursorStep::PageUp
+            | CursorStep::PageDown
+            | CursorStep::Top
+            | CursorStep::Bottom => None,
+        };
+        if let Some(next) = next.filter(|&next| next < self.columns.len(self.source_width)) {
+            self.begin_rename(index, next);
+        }
+    }
+
+    /// 窓の中の `at` が見出しのセル（境目を除く）の上なら、その所（見出しの行の番目・表示の列）。列の番号の行（見出しが
+    /// 無い表）は 0 番目として返す（直し始めるときに断って知らせる）。
+    fn header_cell_at(&self, at: PixelPoint, window: WindowView) -> Option<(usize, usize)> {
+        if self.column_grip(at, window).is_some() {
+            return None;
+        }
+        let LineHit::Column(display) = self.line_at(at, window)? else {
+            return None;
+        };
+        let bars = self.bars(window);
+        let y = at.y().checked_sub(bars.body().origin().y())?;
+        let index = usize::try_from(y / bars.fixed().row().max(1)).ok()?;
+        Some((index.min(self.fixed_slots().saturating_sub(1)), display))
     }
 
     /// IME の確定前の文字列を欄に出す（`None` で消す・ADR 0026 の決定 4）。編集していなければ、
@@ -1629,7 +1813,8 @@ impl Document {
             return DocumentEffect::Stay;
         };
         let range = self.ranges().active();
-        if range.top_left() == range.bottom_right() {
+        // 見出しの名前を直している間は、確定するだけ（選んだ範囲には書かない・GitHub Issue #496）。
+        if range.top_left() == range.bottom_right() || self.renaming().is_some() {
             self.commit_edit();
             return DocumentEffect::Stay;
         }
@@ -2814,12 +2999,16 @@ impl Document {
     #[must_use]
     pub fn composition_area(&self, window: WindowView) -> Option<PixelRect> {
         self.editor.as_ref()?;
-        let cursor = self.selection.cursor();
-        let index = usize::try_from(cursor.body().checked_sub(self.view.first_body())?).ok()?;
-        self.view.rows().get(index)?;
         let layout = self.layout(self.first_column, window.content_metrics());
-        // 上の行は上に固定した行（見出しか列の番号）。
-        let cell = layout.cell_rect(index.checked_add(self.fixed_slots())?, cursor.column())?;
+        let cell = if let Some((index, display)) = self.renaming() {
+            layout.cell_rect(index, display)?
+        } else {
+            let cursor = self.selection.cursor();
+            let index = usize::try_from(cursor.body().checked_sub(self.view.first_body())?).ok()?;
+            self.view.rows().get(index)?;
+            // 上の行は上に固定した行（見出しか列の番号）。
+            layout.cell_rect(index.checked_add(self.fixed_slots())?, cursor.column())?
+        };
         let body = self.bars(window).body();
         let origin = PixelPoint::new(
             body.origin().x().saturating_add(cell.origin().x()),
@@ -3418,7 +3607,12 @@ impl Document {
         let underline = caret
             .underline()
             .map(|(start, end)| (columns(start), columns(end)));
-        let cell = EditingCell::new(single_line(&text), columns(caret.cursor()), underline);
+        // 選んだ字（欄の中の Shift+矢印・Ctrl+A・名前を直し始めたときの全部）は塗って見せる（GitHub Issue #496）。
+        let selection = caret
+            .has_selection()
+            .then(|| (columns(caret.start()), columns(caret.end())));
+        let cell = EditingCell::new(single_line(&text), columns(caret.cursor()), underline)
+            .with_selection(selection);
         // 詳細ペインで打っている間は、表のセルには値だけを見せ、カーソルの棒はペインに（GitHub Issue #458）。
         Some(match editor.surface() {
             EditSurface::Cell => cell,
@@ -3495,7 +3689,7 @@ impl Document {
             | Intent::Erase
             | Intent::Confirm
             | Intent::Cancel
-            | Intent::Edit
+            | Intent::Edit(_)
             | Intent::Delete
             | Intent::BreakLine
             | Intent::FillSelection
@@ -3717,6 +3911,10 @@ impl Document {
         }
         // 押す前に描いていた本文の見え（直していればカーソルの棒の行まで動かしてある）で探す。
         let shown = (self.detail_offset(), self.pane_caret());
+        // 見出しの名前を直していたら、確定してからカーソルのセルを直し始める（GitHub Issue #496）。
+        if self.renaming().is_some() {
+            self.commit_edit();
+        }
         if self.editor.is_none() && !self.begin_edit(EditMode::Editing) {
             return true;
         }
@@ -3995,7 +4193,7 @@ impl Document {
             | Intent::UnfreezeColumns
             | Intent::GoTo(_)
             | Intent::OpenGoTo
-            | Intent::Edit
+            | Intent::Edit(_)
             | Intent::Delete
             | Intent::BreakLine
             | Intent::FillSelection
@@ -5725,8 +5923,9 @@ impl Document {
     /// カーソルのセルの、詳細ペインに出す中身。
     fn detail_content(&self) -> DetailContent<'_> {
         let cursor = self.selection.cursor();
-        if let Some(editor) = &self.editor {
-            // 編集中は欄の確定した字（確定前の文字列はセルの中だけに出す）。
+        if let Some(editor) = self.editor.as_ref().filter(|_| self.renaming().is_none()) {
+            // 編集中は欄の確定した字（確定前の文字列はセルの中だけに出す）。見出しの名前を直している間は、カーソルの
+            // セルのまま。
             return DetailContent::Value(editor.field().text());
         }
         let row = cursor
@@ -6025,6 +6224,7 @@ impl Document {
             .with_column_ids(&ids)
             .with_edits(&self.edits)
             .with_editing(editing.as_ref())
+            .with_renaming(self.renaming())
             .with_found(found)
             .with_found_within(self.find_within.clone())
             .with_expected(self.expected_columns())
@@ -6119,6 +6319,18 @@ impl Document {
 
 /// 行 `rows` の表示の文字列から、今より多い列の幅を決めて `widths` に足す（VIEW-02・今ある列の幅は変えない）。
 /// 読んだ行 `rows` の中の、見出しの行 `header`（ファイルが短ければ、ある行だけ）。
+/// 行 `row` の元の列 `column` のセルを直し始める材料（原本の行・行の同一性・原本の値）。窓の行がその列を持って
+/// いなければ（読み直す前）`None`（「セルが無い」と取り違えない・ADR 0033 の決定 1）。
+fn editable_cell(row: &ViewRow, column: usize) -> Option<(u64, RowId, Option<String>)> {
+    row.values().holds(column).then(|| {
+        (
+            row.line(),
+            row.row(),
+            row.values().get(column).map(String::from),
+        )
+    })
+}
+
 fn header_rows_in(header: Option<HeaderRows>, rows: &[CellRow]) -> Vec<ViewRow> {
     header
         .iter()
@@ -6306,7 +6518,7 @@ fn changes_the_table(intent: Intent) -> bool {
     matches!(
         intent,
         Intent::Type(_)
-            | Intent::Edit
+            | Intent::Edit(_)
             | Intent::Delete
             | Intent::BreakLine
             | Intent::FillSelection
@@ -6332,7 +6544,7 @@ const fn changes_when_writable(intent: Intent) -> bool {
     matches!(
         intent,
         Intent::Type(_)
-            | Intent::Edit
+            | Intent::Edit(_)
             | Intent::Delete
             | Intent::BreakLine
             | Intent::FillSelection
@@ -6387,7 +6599,7 @@ const fn keeps_cut(intent: Intent) -> bool {
         | Intent::Cancel
         | Intent::Type(_)
         | Intent::Erase
-        | Intent::Edit
+        | Intent::Edit(_)
         | Intent::Delete
         | Intent::BreakLine
         | Intent::FillSelection
@@ -8252,7 +8464,7 @@ mod tests {
             pane.origin().x() + 40,
             pane.origin().y() + pane.size().height() - 12,
         );
-        document.apply(Intent::Edit, window);
+        document.apply(Intent::Edit(EditTarget::Cell), window);
         document.apply(Intent::Type('7'), window);
         assert_eq!(document.editor().unwrap().surface(), EditSurface::Cell);
         document.apply(pointing(at.x(), at.y(), SelectionMode::Collapse), window);
@@ -8530,7 +8742,7 @@ mod tests {
     /// 直している欄で「ab」改行「cd」と打った文書。
     fn editing_two_lines() -> Document {
         let mut document = editable();
-        document.apply(Intent::Edit, normal());
+        document.apply(Intent::Edit(EditTarget::Cell), normal());
         document.apply(Intent::SelectAll, normal());
         typed(&mut document, "ab");
         document.apply(Intent::BreakLine, normal());
@@ -9435,7 +9647,7 @@ mod tests {
         let window = normal();
         let mut document = editable();
         document.apply(moving(CursorStep::Right), window);
-        document.apply(Intent::Edit, window);
+        document.apply(Intent::Edit(EditTarget::Cell), window);
         document.apply(Intent::SelectAll, window);
         typed(&mut document, "京都");
         document.apply(Intent::Confirm, window);
@@ -9544,7 +9756,7 @@ mod tests {
     #[test]
     fn f2_continues_and_arrows_stay_inside_while_editing() {
         let mut document = editable();
-        document.apply(Intent::Edit, normal());
+        document.apply(Intent::Edit(EditTarget::Cell), normal());
         assert_eq!(
             document.editor().map(CellEditor::mode),
             Some(EditMode::Editing)
@@ -9598,7 +9810,7 @@ mod tests {
     #[test]
     fn a_preedit_inside_f2_keeps_the_value_and_esc_drops_both() {
         let mut document = editable();
-        document.apply(Intent::Edit, normal());
+        document.apply(Intent::Edit(EditTarget::Cell), normal());
         document.compose(Some(Preedit::new("か", 1)));
         assert!(
             document
@@ -9748,7 +9960,7 @@ mod tests {
     #[test]
     fn duplicating_rows_adds_the_same_values_just_below_as_one_step() {
         let mut document = editable();
-        document.apply(Intent::Edit, normal());
+        document.apply(Intent::Edit(EditTarget::Cell), normal());
         document.apply(Intent::SelectAll, normal());
         typed(&mut document, "0013");
         document.apply(Intent::Confirm, normal());
@@ -9791,7 +10003,7 @@ mod tests {
             "列の複製は、行の数が分かってからできます（索引を作っています）",
         );
         document.report(JobReport::Finished(IndexSummary::new(3, None)));
-        document.apply(Intent::Edit, normal());
+        document.apply(Intent::Edit(EditTarget::Cell), normal());
         document.apply(Intent::SelectAll, normal());
         typed(&mut document, "z");
         document.apply(Intent::Confirm, normal());
@@ -9857,7 +10069,7 @@ mod tests {
         document.apply(moving(CursorStep::Down), normal());
         typed(&mut document, "B");
         document.apply(Intent::Cancel, normal());
-        document.apply(Intent::Edit, normal());
+        document.apply(Intent::Edit(EditTarget::Cell), normal());
         typed(&mut document, "!");
         document.apply(Intent::Advance(CursorStep::Left), normal());
         document.apply(Intent::RemoveRows, normal());
@@ -10108,7 +10320,7 @@ mod tests {
             Some(&CellValue::Text(String::from("new")))
         );
         // 2 行目の「b1」は原本のレコード 1 のまま（位置は 2）。
-        document.apply(Intent::Edit, normal());
+        document.apply(Intent::Edit(EditTarget::Cell), normal());
         typed(&mut document, "!");
         document.apply(Intent::Confirm, normal());
         assert_eq!(
@@ -10154,7 +10366,7 @@ mod tests {
             Some(&CellValue::Text(String::new()))
         );
         document.apply(moving(CursorStep::Right), normal());
-        document.apply(Intent::Edit, normal());
+        document.apply(Intent::Edit(EditTarget::Cell), normal());
         document.apply(Intent::BreakLine, normal());
         typed(&mut document, "区");
         document.apply(Intent::Confirm, normal());
@@ -10173,7 +10385,7 @@ mod tests {
         );
         assert_eq!(document.selection().cursor(), CellPosition::new(2, 1));
         // 空のまま確定しても差分にしない（ファイルの値と同じ）。
-        document.apply(Intent::Edit, normal());
+        document.apply(Intent::Edit(EditTarget::Cell), normal());
         assert_eq!(document.editor().map(CellEditor::shown), Some(""));
         document.apply(Intent::Cancel, normal());
         typed(&mut document, "");
@@ -10201,7 +10413,7 @@ mod tests {
         );
         document.mark_cut(vec![CutRecord::new(1, None)]);
         document.apply(moving(CursorStep::Up), normal());
-        document.apply(Intent::Edit, normal());
+        document.apply(Intent::Edit(EditTarget::Cell), normal());
         assert_eq!(document.editor(), None);
         assert_eq!(edited(&document, 1, 0), None);
     }
@@ -10228,7 +10440,7 @@ mod tests {
                 .editing_cell()
                 .is_some_and(|cell| cell.caret() == 2)
         );
-        document.apply(Intent::Edit, normal());
+        document.apply(Intent::Edit(EditTarget::Cell), normal());
         document.apply(moving(CursorStep::Left), normal());
         assert!(
             document
@@ -10632,7 +10844,7 @@ mod tests {
         );
         // 編集中は欄のカーソルに挿す。
         let mut editing = editable();
-        editing.apply(Intent::Edit, normal());
+        editing.apply(Intent::Edit(EditTarget::Cell), normal());
         assert_eq!(editing.paste("-1\r\n"), PasteRequest::Done);
         assert!(
             editing
@@ -10978,7 +11190,7 @@ mod tests {
         assert!(cut.edits().is_empty());
         // 編集中は字のまま欄に挿す（複数のセルでも）。
         let mut editing = editable();
-        editing.apply(Intent::Edit, normal());
+        editing.apply(Intent::Edit(EditTarget::Cell), normal());
         assert_eq!(editing.paste("a\tb\r\n"), PasteRequest::Done);
         assert!(
             editing
@@ -11035,6 +11247,194 @@ mod tests {
         );
         document.apply(Intent::Release, window);
         assert_eq!(document.editor(), None);
+    }
+
+    /// 窓の中の、上から `slot` 番目の行（上に固定した行から数える）の表示の列 `column` のセルの中の点。
+    fn inside_cell(document: &Document, slot: usize, column: usize) -> PixelPoint {
+        let window = normal();
+        let layout = document.layout(0, window.content_metrics());
+        let body = document.bars(window).body();
+        // 真ん中（左右の端は、列の幅を変える境目）。
+        let at = center(layout.cell_rect(slot, column).unwrap());
+        PixelPoint::new(body.origin().x() + at.x(), body.origin().y() + at.y())
+    }
+
+    /// 見出しのセルを 1 度押して離し、2 度目を押して離す。
+    fn double_click_header(document: &mut Document, slot: usize, column: usize) {
+        let at = inside_cell(document, slot, column);
+        document.apply(pressing(at, SelectionMode::Collapse), normal());
+        document.apply(Intent::Release, normal());
+        document.apply(
+            Intent::DoubleClick {
+                at,
+                count: ClickCount::Second,
+            },
+            normal(),
+        );
+        document.apply(Intent::Release, normal());
+    }
+
+    fn field_text(document: &Document) -> Option<&str> {
+        document.editor().map(|editor| editor.field().text())
+    }
+
+    /// 見出しのセルのダブルクリックは、その名前を欄にして直し始める（全部を選んであるので、打てば置き換わる）。Enter で
+    /// 確定し、本体のカーソルは動かない。Ctrl+Z で戻る（EDIT-04・GitHub Issue #496）。
+    #[test]
+    fn double_clicking_a_header_cell_renames_the_column_and_undo_takes_it_back() {
+        let mut document = headed();
+        double_click_header(&mut document, 0, 1);
+        assert_eq!(field_text(&document), Some("name"));
+        assert_eq!(document.renaming(), Some((0, 1)));
+        // 欄は見出しのセルの上（IME の候補の窓を置く所）。
+        let area = document.composition_area(normal()).unwrap();
+        let at = inside_cell(&document, 0, 1);
+        assert!(area.origin().y() < at.y() && at.y() < area.origin().y() + area.size().height());
+        let cursor = document.selection().cursor();
+        typed(&mut document, "氏名");
+        assert_eq!(field_text(&document), Some("氏名"));
+        // 詳細ペインは、カーソルのセルのまま（見出しの欄の字を出さない）。
+        assert_eq!(document.detail_content(), DetailContent::Value("a"));
+        document.apply(Intent::Confirm, normal());
+        assert_eq!(document.editor(), None);
+        assert_eq!(document.selection().cursor(), cursor);
+        renamed_and_undone(&mut document);
+    }
+
+    /// 保存の後も、直した見出しの名前が画面と列の名前に残る（書き換えを空にするときに原本の見出しへ写す）。
+    #[test]
+    fn a_renamed_header_stays_on_screen_after_saving() {
+        let mut document = headed();
+        double_click_header(&mut document, 0, 1);
+        typed(&mut document, "氏名");
+        document.apply(Intent::Confirm, normal());
+        let _reread = document.saved();
+        assert!(document.edits().is_empty());
+        assert_eq!(document.column_name(1).as_deref(), Some("氏名"));
+        let header = document.header().first().unwrap();
+        assert_eq!(header.cells().get(0), Some("id"));
+        assert_eq!(header.cells().get(1), Some("氏名"));
+    }
+
+    /// `headed` の 2 列目の名前を「氏名」に直した後。Ctrl+Z で戻り、Ctrl+Y でやり直せる。
+    fn renamed_and_undone(document: &mut Document) {
+        assert_eq!(
+            edited(document, 0, 1),
+            Some(&CellValue::Text(String::from("氏名")))
+        );
+        assert_eq!(document.column_name(1).as_deref(), Some("氏名"));
+        document.apply(Intent::Undo, normal());
+        assert_eq!(edited(document, 0, 1), None);
+        assert_eq!(document.column_name(1).as_deref(), Some("name"));
+        document.apply(Intent::Redo, normal());
+        assert_eq!(document.column_name(1).as_deref(), Some("氏名"));
+    }
+
+    /// 名前を直している間の Esc はやめる。Ctrl+Enter は確定するだけ（選んだ範囲には書かない）。
+    #[test]
+    fn renaming_cancels_with_escape_and_ctrl_enter_only_commits() {
+        let mut document = headed();
+        double_click_header(&mut document, 0, 0);
+        typed(&mut document, "x");
+        document.apply(Intent::Cancel, normal());
+        assert_eq!(document.editor(), None);
+        assert!(document.edits().is_empty());
+        double_click_header(&mut document, 0, 0);
+        typed(&mut document, "y");
+        document.apply(Intent::FillSelection, normal());
+        assert_eq!(document.editor(), None);
+        assert!(!document.edits().is_empty());
+        assert_eq!(document.column_name(0).as_deref(), Some("y"));
+    }
+
+    /// 名前を直している間：Tab と Shift+Tab は確定して隣の列の名前を続けて直す（端では確定するだけ）。
+    /// 矢印は欄の中で動き、F6 は打つ先を変えない。
+    #[test]
+    fn tab_goes_on_to_rename_the_next_column() {
+        let mut document = headed();
+        double_click_header(&mut document, 0, 0);
+        typed(&mut document, "番号");
+        document.apply(Intent::Detail(DetailKey::SwitchTyping), normal());
+        assert_eq!(
+            document.editor().map(CellEditor::surface),
+            Some(EditSurface::Cell)
+        );
+        document.apply(Intent::Advance(CursorStep::Right), normal());
+        assert_eq!(document.renaming(), Some((0, 1)));
+        assert_eq!(field_text(&document), Some("name"));
+        // 左の矢印は欄の中（選択を畳んで頭へ）。確定しない。
+        document.apply(
+            Intent::Move {
+                step: CursorStep::Left,
+                mode: SelectionMode::Collapse,
+            },
+            normal(),
+        );
+        assert_eq!(document.renaming(), Some((0, 1)));
+        // 右の端の列の Tab は確定するだけ。
+        document.apply(Intent::Advance(CursorStep::Right), normal());
+        assert_eq!(document.editor(), None);
+        document.apply(Intent::Edit(EditTarget::Header), normal());
+        document.apply(Intent::Advance(CursorStep::Left), normal());
+        assert_eq!(document.editor(), None);
+        assert_eq!(document.column_name(0).as_deref(), Some("番号"));
+        assert_eq!(document.column_name(1).as_deref(), Some("name"));
+    }
+
+    /// パレット「列の名前を変える」は、カーソルの列の見出しを直し始める。見出しが 2 行なら下の行（ADR 0034）。
+    /// ダブルクリックは押した行。
+    #[test]
+    fn the_palette_renames_the_bottom_header_row_of_the_cursor_column() {
+        let (mut document, _) = two_header_rows();
+        document.apply(plain_move(CursorStep::Right), normal());
+        document.apply(Intent::Edit(EditTarget::Header), normal());
+        assert_eq!(document.renaming(), Some((1, 1)));
+        assert_eq!(field_text(&document), Some("円"));
+        typed(&mut document, "ドル");
+        document.apply(Intent::Confirm, normal());
+        assert_eq!(document.column_name(1).as_deref(), Some("n / ドル"));
+        double_click_header(&mut document, 0, 1);
+        assert_eq!(document.renaming(), Some((0, 1)));
+        assert_eq!(field_text(&document), Some("n"));
+        // 直している間にもう一度パレットから：確定して、カーソルの列の下の行を直し始める。
+        typed(&mut document, "数");
+        document.apply(Intent::Edit(EditTarget::Header), normal());
+        assert_eq!(document.column_name(1).as_deref(), Some("数 / ドル"));
+        assert_eq!(document.renaming(), Some((1, 1)));
+    }
+
+    /// 見出しの無い表と読み取り専用では、名前を直し始めずに知らせる。
+    #[test]
+    fn renaming_is_refused_without_a_header_or_when_read_only() {
+        let mut document = editable();
+        document.apply(Intent::Edit(EditTarget::Header), normal());
+        assert_eq!(document.editor(), None);
+        assert_eq!(document.notice, Some(Notice::NoHeaderToRename));
+        double_click_header(&mut document, 0, 1);
+        assert_eq!(document.editor(), None);
+        assert_eq!(document.notice, Some(Notice::NoHeaderToRename));
+
+        let mut locked = headed();
+        locked.apply(Intent::ToggleReadOnly, normal());
+        double_click_header(&mut locked, 0, 1);
+        assert_eq!(locked.editor(), None);
+        assert_eq!(
+            locked.notice,
+            Some(Notice::ReadOnly(ReadOnlyNotice::Refused))
+        );
+    }
+
+    /// 見出しの名前を直している欄は、見出しのセルに描く（カーソルのセルは値のまま）。
+    #[test]
+    fn the_renaming_field_is_painted_in_the_header_cell() {
+        let mut document = headed();
+        double_click_header(&mut document, 0, 1);
+        typed(&mut document, "新しい名前");
+        let frame = document.frame(normal(), palette());
+        let texts = shown_texts(&frame);
+        assert!(texts.contains(&"新しい名前"));
+        assert!(!texts.contains(&"name"));
+        assert!(texts.contains(&"a"));
     }
 
     /// Ctrl+X の 2 段を、表 `editable_rows` の原本から行を読んで済ませ、クリップボードに置く文字列を返す。
@@ -11982,7 +12382,7 @@ mod tests {
     #[test]
     fn pasting_into_the_field_keeps_quotes() {
         let mut editing = editable();
-        editing.apply(Intent::Edit, normal());
+        editing.apply(Intent::Edit(EditTarget::Cell), normal());
         assert_eq!(editing.paste("\"abc\"\r\n"), PasteRequest::Done);
         assert!(
             editing
@@ -12267,7 +12667,7 @@ mod tests {
     /// 読み取り専用の間に止める意図（EDIT-13）。
     const READ_ONLY_REFUSED: [Intent; 17] = [
         Intent::Type('x'),
-        Intent::Edit,
+        Intent::Edit(EditTarget::Cell),
         Intent::Delete,
         Intent::BreakLine,
         Intent::FillSelection,

@@ -8,6 +8,7 @@ use crate::column_place::ColumnPlace;
 use crate::column_shift::ColumnShift;
 use crate::cursor_step::CursorStep;
 use crate::detail_key::DetailKey;
+use crate::edit_target::EditTarget;
 use crate::find_toggle::FindToggle;
 use crate::go_to_target::GoToTarget;
 use crate::root_command::RootCommand;
@@ -110,7 +111,8 @@ pub enum Intent {
     /// やめる（Esc）。
     Cancel,
     /// カーソルのセルを、見えていた値の続きから直す（F2）。編集中なら入力と編集の状態を替える（ADR 0026）。
-    Edit,
+    /// 先が見出しなら、カーソルの列の名前を直し始める（パレット・EDIT-04・GitHub Issue #496）。
+    Edit(EditTarget),
     /// 右の 1 字を消す（Delete）。編集していなければ、カーソルのセルを空にする。
     Delete,
     /// セルの中の改行（Alt+Enter・EDIT-10）。

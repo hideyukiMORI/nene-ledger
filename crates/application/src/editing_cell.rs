@@ -8,6 +8,8 @@ pub(crate) struct EditingCell {
     text: String,
     caret: u32,
     underline: Option<(u32, u32)>,
+    /// 選んだ字の範囲（始まりと終わりの字数・無ければ `None`・GitHub Issue #496）。
+    selection: Option<(u32, u32)>,
     /// カーソルの棒を描くか（詳細ペインで打っている間は、表のセルには描かない・GitHub Issue #458）。
     caret_shown: bool,
 }
@@ -19,8 +21,19 @@ impl EditingCell {
             text,
             caret,
             underline,
+            selection: None,
             caret_shown: true,
         }
+    }
+
+    /// 選んだ字の範囲 `selection`（始まりと終わりの字数）を付ける。
+    pub(crate) fn with_selection(self, selection: Option<(u32, u32)>) -> Self {
+        Self { selection, ..self }
+    }
+
+    /// 選んだ字の範囲（字数）。
+    pub(crate) const fn selection(&self) -> Option<(u32, u32)> {
+        self.selection
     }
 
     /// カーソルの棒を描かない（詳細ペインで打っている間・GitHub Issue #458）。

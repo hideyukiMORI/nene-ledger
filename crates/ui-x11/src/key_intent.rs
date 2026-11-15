@@ -3,6 +3,7 @@
 use nene_ledger_application::column_shift::ColumnShift;
 use nene_ledger_application::cursor_step::CursorStep;
 use nene_ledger_application::detail_key::DetailKey;
+use nene_ledger_application::edit_target::EditTarget;
 use nene_ledger_application::find_toggle::FindToggle;
 use nene_ledger_application::intent::Intent;
 use nene_ledger_application::root_command::RootCommand;
@@ -210,7 +211,7 @@ fn editing_intent(keysym: u32, typed: Option<char>, state: KeyButMask) -> Option
     let shift = state.contains(KeyButMask::SHIFT);
     match keysym {
         XK_F1 => Some(Intent::OpenPalette),
-        XK_F2 => Some(Intent::Edit),
+        XK_F2 => Some(Intent::Edit(EditTarget::Cell)),
         // 字を打つ先を表のセルと詳細ペインで替える（GitHub Issue #478）。
         XK_F6 => Some(Intent::Detail(DetailKey::SwitchTyping)),
         XK_F3 if shift => Some(Intent::FindAgain { forward: false }),
@@ -430,7 +431,9 @@ mod tests {
     fn editing_bound(guide: nene_ledger_application::key_guide::KeyGuide) -> bool {
         use nene_ledger_application::key_guide::KeyGuide;
         match guide {
-            KeyGuide::EditCell => key_intent(XK_F2, None, plain()) == Some(Intent::Edit),
+            KeyGuide::EditCell => {
+                key_intent(XK_F2, None, plain()) == Some(Intent::Edit(EditTarget::Cell))
+            }
             KeyGuide::SwitchTyping => {
                 key_intent(XK_F6, None, plain()) == Some(Intent::Detail(DetailKey::SwitchTyping))
             }
