@@ -171,6 +171,8 @@ pub struct Document {
     custom: BTreeMap<usize, u32>,
     /// 指が見出しの列の境目の上にあるか（カーソルの形）。
     grip: bool,
+    /// 直している欄の中でコピー・切り取りした字（合成ルートが `field_text` で取る・GitHub Issue #474）。
+    field_clip: Option<ClipboardText>,
     /// 詳細ペインの本文の行の数（境の線で変える・設定に覚える・GitHub Issue #452）。
     detail_lines: u32,
     /// 詳細ペインの本文を見せる最初の行と、そのときのカーソルのセル（カーソルが動けば先頭に戻る・GitHub Issue #454）。
@@ -326,6 +328,7 @@ impl Document {
             index: JobState::Waiting,
             custom: BTreeMap::new(),
             grip: false,
+            field_clip: None,
             detail_lines: DETAIL_LINES,
             detail_scroll: None,
             advances: None,
@@ -1062,7 +1065,7 @@ impl Document {
         }
         match self.edit_intent(intent) {
             Some(intent) => self.apply_to_table(intent, window),
-            None => DocumentEffect::Stay,
+            None => self.field_effect(intent),
         }
     }
 
@@ -1278,8 +1281,11 @@ impl Document {
             Intent::Edit => editor.toggle_mode(),
             Intent::SelectAll => editor.select_all(),
             Intent::Cancel => self.editor = None,
-            // 🔴 欄の中の字のコピーと切り取りはまだ（OS のクリップボードへ渡す経路を、別の Issue で足す）。
-            Intent::Copy | Intent::Cut => {}
+            // 欄の中の選んだ字（改行はクリップボードでは CRLF・表のコピーと同じ・GitHub Issue #474）。
+            Intent::Copy | Intent::Cut => {
+                let taken = editor.take_selection(intent == Intent::Cut);
+                self.field_clip = taken.map(|text| ClipboardText::new(text.replace('\n', "\r\n")));
+            }
             Intent::Move { step, mode } => return self.arrow_in_field(step, mode),
             Intent::Confirm => return Some(self.committed_move(CursorStep::Down)),
             Intent::Advance(step) => return Some(self.committed_move(step)),
@@ -1327,6 +1333,22 @@ impl Document {
             | Intent::Zoom(_) => return Some(intent),
         }
         None
+    }
+
+    /// 欄が受けた意図 `intent` の後。欄の字をコピー・切り取りしたなら、合成ルートにクリップボードへ置かせる（GitHub
+    /// Issue #474）。
+    fn field_effect(&self, intent: Intent) -> DocumentEffect {
+        if matches!(intent, Intent::Copy | Intent::Cut) && self.field_clip.is_some() {
+            DocumentEffect::CopyField
+        } else {
+            DocumentEffect::Stay
+        }
+    }
+
+    /// 直している欄の中でコピー・切り取りした字（`DocumentEffect::CopyField` を受けた合成ルートが 1 度だけ取る・GitHub
+    /// Issue #474）。
+    pub fn field_text(&mut self) -> Option<ClipboardText> {
+        self.field_clip.take()
     }
 
     /// 編集を確定し、`step` の向きへ動く意図を返す（Enter・Tab・Shift+Tab・Shift+Enter）。
@@ -4333,6 +4355,7 @@ impl Document {
             DocumentEffect::Read { first_body } => first_body,
             DocumentEffect::Stay
             | DocumentEffect::Copy { .. }
+            | DocumentEffect::CopyField
             | DocumentEffect::StopTotals
             | DocumentEffect::Save
             | DocumentEffect::SaveAs
@@ -8043,6 +8066,70 @@ mod tests {
         );
         assert!(document.editor().is_none());
         assert_eq!(document.selection(), Selection::at(CellPosition::new(1, 1)));
+    }
+
+    /// 直している欄で「ab」改行「cd」と打った文書。
+    fn editing_two_lines() -> Document {
+        let mut document = editable();
+        document.apply(Intent::Edit, normal());
+        document.apply(Intent::SelectAll, normal());
+        typed(&mut document, "ab");
+        document.apply(Intent::BreakLine, normal());
+        typed(&mut document, "cd");
+        document
+    }
+
+    fn taken_field_text(document: &mut Document) -> Option<String> {
+        document
+            .field_text()
+            .map(|text| String::from(text.as_str()))
+    }
+
+    /// 直している欄の Ctrl+C は選んだ字（改行は CRLF）をクリップボードへ。選択が無ければ何もしない。取るのは 1 度
+    /// だけ。直していなければ今までどおり表のコピー（GitHub Issue #474）。
+    #[test]
+    fn copy_in_the_field_takes_the_selected_characters() {
+        let window = normal();
+        let mut document = editing_two_lines();
+        assert_eq!(document.apply(Intent::Copy, window), DocumentEffect::Stay);
+        assert_eq!(taken_field_text(&mut document), None);
+        document.apply(Intent::SelectAll, window);
+        assert_eq!(
+            document.apply(Intent::Copy, window),
+            DocumentEffect::CopyField
+        );
+        assert_eq!(
+            taken_field_text(&mut document),
+            Some(String::from("ab\r\ncd"))
+        );
+        assert_eq!(taken_field_text(&mut document), None);
+        document.apply(Intent::Cancel, window);
+        assert!(matches!(
+            document.apply(Intent::Copy, window),
+            DocumentEffect::Copy { .. }
+        ));
+    }
+
+    /// 直している欄の Ctrl+X は選んだ字をクリップボードへ置いてから欄から消す。確定はしない（GitHub Issue #474）。
+    #[test]
+    fn cut_in_the_field_removes_the_selected_characters() {
+        let window = normal();
+        let mut document = editing_two_lines();
+        let left = Intent::Move {
+            step: CursorStep::Left,
+            mode: SelectionMode::Extend,
+        };
+        document.apply(left, window);
+        document.apply(left, window);
+        assert_eq!(
+            document.apply(Intent::Cut, window),
+            DocumentEffect::CopyField
+        );
+        assert_eq!(taken_field_text(&mut document), Some(String::from("cd")));
+        assert_eq!(document.editor().unwrap().field().text(), "ab\n");
+        assert!(document.edits().is_empty());
+        document.apply(Intent::Cancel, window);
+        assert!(document.edits().is_empty());
     }
 
     /// 詳細ペインの本文のダブルクリックで、指の下の字を含む語を選ぶ。字の右半分でもその字の語・行の右は最後の語・

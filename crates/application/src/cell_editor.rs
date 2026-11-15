@@ -131,6 +131,18 @@ impl CellEditor {
         self.field = self.field.deleted();
     }
 
+    /// 選んだ字を取り出す。`cut` なら欄から消す。選択が無ければ `None` で、欄は変えない（GitHub Issue #474）。
+    pub fn take_selection(&mut self, cut: bool) -> Option<String> {
+        if !self.field.caret().has_selection() {
+            return None;
+        }
+        let text = self.field.selected_text().to_owned();
+        if cut {
+            self.field = self.field.deleted();
+        }
+        Some(text)
+    }
+
     /// 字を打っている所。
     #[must_use]
     pub const fn surface(&self) -> EditSurface {
