@@ -70,6 +70,25 @@ impl CharAdvances {
         }
     }
 
+    /// `text` の頭の `upto` 字が幅 `room` 画素に収まるまでに、頭から飛ばす字の数（編集の欄が、カーソルを右の端に見せる
+    /// ために頭の字を飛ばす・GitHub Issue #505）。収まっていれば 0。
+    #[must_use]
+    pub fn skipped_to_fit(&self, text: &str, upto: usize, room: u32) -> usize {
+        let limit = room.saturating_mul(SUBPIXELS);
+        let mut total = text.chars().take(upto).fold(0_u32, |sum, character| {
+            sum.saturating_add(self.of(character))
+        });
+        let mut skipped = 0_usize;
+        for character in text.chars().take(upto) {
+            if total <= limit {
+                break;
+            }
+            total = total.saturating_sub(self.of(character));
+            skipped = skipped.saturating_add(1);
+        }
+        skipped
+    }
+
     /// `text` の幅（画素・端数は足してから丸める）。
     #[must_use]
     pub fn width(&self, text: &str) -> u32 {
@@ -139,5 +158,16 @@ mod tests {
         assert_eq!(advances.width("iiii"), 13);
         assert_eq!(advances.width("国国国国国国国国国国"), 143);
         assert_eq!(advances.width("です。"), 16 + 11 + 7);
+    }
+
+    #[test]
+    fn the_head_is_skipped_until_the_text_before_the_caret_fits() {
+        let advances = CharAdvances::uniform(10);
+        assert_eq!(advances.skipped_to_fit("abcdef", 6, 60), 0);
+        assert_eq!(advances.skipped_to_fit("abcdef", 6, 35), 3);
+        // 全角は半角の 2 倍。カーソルより後ろの字は数えない。
+        assert_eq!(advances.skipped_to_fit("日本語abc", 3, 40), 1);
+        assert_eq!(advances.skipped_to_fit("", 0, 0), 0);
+        assert_eq!(advances.skipped_to_fit("abc", 3, 0), 3);
     }
 }
