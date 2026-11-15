@@ -32,7 +32,7 @@ Win32 の exe を MSIX に包み、Microsoft Store に出すための手順と�
 4. **WACK を走らせる**：管理者の PowerShell で
    ```powershell
    cd <リポジトリのフォルダ>   # WSL のリポジトリなら \\wsl.localhost\<distro>\…
-   powershell -ExecutionPolicy Bypass -File tools\wack.ps1 -Package out\msix\NeNeLedger_0.1.2.0_x64.msix
+   powershell -ExecutionPolicy Bypass -File tools\wack.ps1 -Package out\msix\NeNeLedger_0.1.3.0_x64.msix
    ```
    10〜20 分。結果（総合と落ちた検査）をリナに渡せば gate-proofs に記録する
 5. **提出の項目を埋める**（ADR 0035 の「施主に決めてもらうこと」の推しのとおりなら）：
@@ -51,6 +51,12 @@ Win32 の exe を MSIX に包み、Microsoft Store に出すための手順と�
 - 検索・置換・パレット・表の画面の見直し（#346〜#372）・この包み（#373）・引数なしの起動と Ctrl+O（#374）・窓のアイコン（#375）・F8 で壊れた行へ（#377）。main で `make msix` を作り直した
 - 次のプレビュー版 `0.1.0-preview.2` の準備（版と `docs/release/0.1.0-preview.2.md`）。MSIX の版は `0.1.2.0`
 - スクリーンショットは #374・#375・#377 の前の版で撮った（画面の見た目は同じ）
+
+## 4b. main に入ったもの（2026-11-15）
+
+- 詳細ペインで直す（#452〜#478）・パレットの目録と「≡ 操作」（#420〜#448）・「セルが無い」所の市松（#436〜#444）・アイコンの作り直し（#450）
+- 次のプレビュー版 `0.1.0-preview.3` の準備（版と `docs/release/0.1.0-preview.3.md`）。MSIX の版は `0.1.3.0`
+- 🔴 スクリーンショット（`screenshots/`）は 2026-11-09 の版のまま（前のアイコン・詳細ペインで直す前）。ストアに出す前に撮り直す
 
 ## 5. 残っていること（正直に）
 
