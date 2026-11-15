@@ -45,4 +45,6 @@ pub enum DocumentEffect {
         /// 読む行の数（見出しの行を含むことがある）。
         count: u64,
     },
+    /// 直している欄の中の選んだ字（`Document::field_text`）をクリップボードに置く（GitHub Issue #474）。
+    CopyField,
 }

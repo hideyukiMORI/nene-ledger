@@ -369,6 +369,7 @@ impl Viewer {
                 let (rows, cuts) = self.read_lines(first_line, count, None).ok()?;
                 self.document.copy_text(first_line, &rows, &cuts)
             }
+            DocumentEffect::CopyField => self.document.field_text(),
             DocumentEffect::StopTotals => {
                 if let Some(job) = &self.totals {
                     job.cancel();

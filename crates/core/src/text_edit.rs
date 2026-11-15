@@ -51,6 +51,13 @@ impl TextEdit {
         self.caret
     }
 
+    /// 選んだ字（選択が無ければ空）。確定前の文字列は含まない（コピー・切り取り・GitHub Issue #474）。
+    #[must_use]
+    pub fn selected_text(&self) -> &str {
+        let range = self.byte_offset(self.caret.start())..self.byte_offset(self.caret.end());
+        self.text.get(range).unwrap_or("")
+    }
+
     /// 確定前の文字列。
     #[must_use]
     pub const fn preedit(&self) -> Option<&Preedit> {
@@ -314,6 +321,24 @@ mod tests {
             .moved(CaretMove::Left, false);
         assert_eq!(typed(&middle, "語").text(), "日語本x");
         assert_eq!(edit.char_count(), 3);
+    }
+
+    /// 選んだ字は、カーソルが起点の左でも右でも同じ。字の添字で切り、確定前の文字列は含まない（GitHub Issue #474）。
+    #[test]
+    fn the_selected_text_is_cut_on_character_boundaries() {
+        let edit = TextEdit::showing("東京\n都");
+        assert_eq!(edit.selected_text(), "");
+        assert_eq!(
+            edit.placed(1, false).placed(4, true).selected_text(),
+            "京\n都"
+        );
+        assert_eq!(
+            edit.placed(4, false).placed(1, true).selected_text(),
+            "京\n都"
+        );
+        let preedit = Preedit::new("か", 1);
+        let composing = edit.selected_all().with_preedit(Some(preedit));
+        assert_eq!(composing.selected_text(), "東京\n都");
     }
 
     /// 3 度押しは、押した字がある行（改行は含まない）を選ぶ。改行の字はその前の行（GitHub Issue #468）。
