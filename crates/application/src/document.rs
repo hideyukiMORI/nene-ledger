@@ -7905,6 +7905,38 @@ mod tests {
             .collect()
     }
 
+    /// 詳細ペインで打っている間、IME の確定前の字の下に字の色の細い線を引く。確定すれば消える（GitHub Issue #476）。
+    #[test]
+    fn the_pane_underlines_the_characters_being_composed() {
+        let window = view(400, 600, WindowPlacement::Normal);
+        let mut document = editable();
+        document.set_detail(DetailPane::Open);
+        press_pane(&mut document, window, 0, SelectionMode::Collapse);
+        document.apply(Intent::Release, window);
+        let (left, top) = pane_text_at(&document, window, 0);
+        let underlines = |shown: &Document| -> Vec<PixelRect> {
+            fills(&shown.frame(window, palette()), palette().text())
+                .into_iter()
+                .filter(|rect| rect.origin().y() >= top && rect.size().height() == 1)
+                .collect()
+        };
+        assert!(underlines(&document).is_empty());
+        document.compose(Some(Preedit::new("かな", 2)));
+        let lines = underlines(&document);
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        let line = lines[0];
+        assert!(line.origin().x().abs_diff(left) <= 1, "{line:?}");
+        // 最初の行の箱の中の、下の方。
+        let body_line = ClientBands::body_line(window.content_metrics());
+        assert!(line.origin().y() > top + body_line / 2 && line.origin().y() < top + body_line);
+        let full = window.content_metrics().half_width() * 2;
+        assert_eq!(line.size().width(), full * 2);
+        document.compose(None);
+        document.commit_text("かな");
+        assert!(underlines(&document).is_empty());
+        assert_eq!(document.editor().unwrap().field().text(), "かな0012");
+    }
+
     /// 詳細ペインを押した所にカーソルの棒を置く。ペインの中で押し直しても確定しない（Esc で何も変わらない・
     /// GitHub Issue #460）。
     #[test]
