@@ -429,6 +429,9 @@ fn rows_status(notice: RowsNotice) -> String {
         RowsNotice::Duplicated(rows) => {
             format!("{} 行を複製しました（Ctrl+Z で戻す）", group_digits(rows))
         }
+        RowsNotice::Moved(rows) => {
+            format!("{} 行を移しました（Ctrl+Z で戻す）", group_digits(rows))
+        }
         RowsNotice::Removed(rows) => {
             format!("{} 行を消しました（Ctrl+Z で戻す）", group_digits(rows))
         }

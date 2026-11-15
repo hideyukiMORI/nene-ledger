@@ -3561,6 +3561,13 @@ impl Document {
             // 選んでいる列の見出しを押した。動かせば移し、動かさずに離せばその列だけを選ぶ（Issue #49）。
             return Some(PressKind::MoveColumns);
         }
+        if let LineHit::Row(body) = hit
+            && mode == SelectionMode::Collapse
+            && self.whole_rows_selected(body)
+        {
+            // 選んでいる行の行番号を押した。動かせば移し、動かさずに離せばその行だけを選ぶ（GitHub Issue #492）。
+            return Some(PressKind::MoveRows);
+        }
         self.select_line(hit, mode);
         match hit {
             LineHit::Row(_) => Some(PressKind::Rows),
@@ -4145,7 +4152,7 @@ impl Document {
             PressKind::Rows => CellPosition::new(cell.body(), 0),
             PressKind::Columns => CellPosition::new(0, cell.column()),
             // 移している間は選択を変えない（落とす位置は離したときに決める）。
-            PressKind::MoveColumns => return,
+            PressKind::MoveColumns | PressKind::MoveRows => return,
         };
         self.selection = self.selection.moved(to, SelectionMode::Extend);
     }
@@ -4272,6 +4279,17 @@ impl Document {
         out
     }
 
+    /// 今の範囲が行全体（ファイルの終わりまでではない）で、本体の `body` 番目を含むか（GitHub Issue #492）。
+    fn whole_rows_selected(&self, body: u64) -> bool {
+        let (top, bottom) = (self.selection.top_left(), self.selection.bottom_right());
+        let last_column = self.widths.columns().len().saturating_sub(1);
+        self.others.is_empty()
+            && top.column() == 0
+            && bottom.column() == last_column
+            && bottom.body() != TO_END
+            && (top.body()..=bottom.body()).contains(&body)
+    }
+
     /// 今の範囲が列全体で、`column` 列目を含むか。
     fn whole_columns_selected(&self, column: usize) -> bool {
         let (top, bottom) = (self.selection.top_left(), self.selection.bottom_right());
@@ -4285,7 +4303,7 @@ impl Document {
     fn release(&mut self, window: WindowView) -> DocumentEffect {
         let hold = self.hold.take();
         let Some(PointerHold::Cells {
-            kind: PressKind::MoveColumns,
+            kind: kind @ (PressKind::MoveColumns | PressKind::MoveRows),
             press,
             at,
             dragging,
@@ -4296,6 +4314,10 @@ impl Document {
         };
         if dragging {
             let (top, bottom) = (self.selection.top_left(), self.selection.bottom_right());
+            if kind == PressKind::MoveRows {
+                let before = self.row_drop_index(at, window);
+                return self.move_rows_in_file(top.body()..=bottom.body(), before, window);
+            }
             let before = self.drop_index(at, window);
             return self.move_columns_in_file(top.column()..=bottom.column(), before, window);
         }
@@ -4369,6 +4391,80 @@ impl Document {
         effect
     }
 
+    /// 本体の行 `block` を、本体の位置 `before` の前へファイルの並びごと移す。行を消して足し直す 2 つの手を 1 手の束で
+    /// 積み（Ctrl+Z 1 回で戻る）、移した行を行全体で選び直す。書き換えは行の同一性に付いているので一緒に動く。読み取り
+    /// 専用・保存の途中は断る（GitHub Issue #492）。
+    fn move_rows_in_file(
+        &mut self,
+        block: RangeInclusive<u64>,
+        before: u64,
+        window: WindowView,
+    ) -> DocumentEffect {
+        let (start, end) = (*block.start(), *block.end());
+        if (start..=end.saturating_add(1)).contains(&before) || end == TO_END {
+            return DocumentEffect::Stay;
+        }
+        if self.saving {
+            self.notice = Some(Notice::StillSaving);
+            return DocumentEffect::Stay;
+        }
+        if self.refuses_change() {
+            return DocumentEffect::Stay;
+        }
+        self.commit_edit();
+        let count = end.saturating_sub(start).saturating_add(1);
+        let from = self.line_of(start);
+        let runs = self.rows.remove(from, count);
+        let at = if before > end {
+            before.saturating_sub(count)
+        } else {
+            before
+        };
+        let to = self.line_of(at);
+        self.rows.restore(to, runs.clone());
+        let steps = vec![
+            EditStep::Rows(RowChange::Removed {
+                at: from,
+                runs: runs.clone(),
+            }),
+            EditStep::Rows(RowChange::Inserted { at: to, runs }),
+        ];
+        self.history
+            .record_batch(steps, Vec::new(), &mut self.edits);
+        self.notice = Some(Notice::Rows(RowsNotice::Moved(count)));
+        self.others.clear();
+        let last_column = self.widths.columns().len().saturating_sub(1);
+        let last = at.saturating_add(count).saturating_sub(1);
+        self.selection = Selection::at(CellPosition::new(last, last_column))
+            .moved(CellPosition::new(at, 0), SelectionMode::Extend);
+        self.counted = None;
+        let page = self.page_rows(window);
+        let current = self.view.first_body();
+        let first = clamp_first(
+            current,
+            reveal_row(current, at, page),
+            page,
+            self.extent().rows(),
+        );
+        DocumentEffect::Read { first_body: first }
+    }
+
+    /// 指 `at` の所で離したときに行を入れる、本体の位置（その位置の行の前）。行の上半分なら前、下半分なら後ろ。見えて
+    /// いる行の中だけ（GitHub Issue #492）。
+    fn row_drop_index(&self, at: PointerPoint, window: WindowView) -> u64 {
+        let bars = self.bars(window);
+        let (body, fixed) = (bars.body(), bars.fixed());
+        let row = i64::from(fixed.row().max(1));
+        let y = i64::from(at.y())
+            .saturating_sub(i64::from(body.origin().y()))
+            .saturating_sub(i64::from(fixed.header()));
+        let visible = i64::try_from(self.view.rows().len()).unwrap_or(0);
+        let slot = y.saturating_add(row / 2).div_euclid(row).clamp(0, visible);
+        self.view
+            .first_body()
+            .saturating_add(u64::try_from(slot).unwrap_or(0))
+    }
+
     /// 指 `at` の所で離したときに列を入れる、表示の位置（その位置の列の前）。列の左半分なら前、右半分なら後ろ。
     fn drop_index(&self, at: PointerPoint, window: WindowView) -> usize {
         let body = self.bars(window).body();
@@ -4416,6 +4512,31 @@ impl Document {
         self.counted = None;
     }
 
+    /// 行を移している間の、落とす位置の横の線（行の境・表の所の左上が原点・GitHub Issue #492）。
+    fn row_drop_line(
+        &self,
+        bars: Scrollbars,
+        at: PointerPoint,
+        (window, palette): (WindowView, Palette),
+    ) -> DrawCommand {
+        let fixed = bars.fixed();
+        let before = self.row_drop_index(at, window);
+        let slot = before.saturating_sub(self.view.first_body());
+        let y = fixed.header().saturating_add(
+            fixed
+                .row()
+                .saturating_mul(u32::try_from(slot).unwrap_or(u32::MAX)),
+        );
+        let line = window.content_metrics().px(DROP_LINE);
+        DrawCommand::Fill {
+            rect: PixelRect::new(
+                PixelPoint::new(0, y.saturating_sub(line / 2)),
+                PixelSize::new(bars.body().size().width(), line),
+            ),
+            color: palette.cursor(),
+        }
+    }
+
     /// 列を移している間の、落とす位置の線（表の所の左上が原点・`bars` は表の所の置き場所）。
     fn drop_line(
         &self,
@@ -4424,7 +4545,7 @@ impl Document {
         palette: Palette,
     ) -> Option<DrawCommand> {
         let Some(PointerHold::Cells {
-            kind: PressKind::MoveColumns,
+            kind: kind @ (PressKind::MoveColumns | PressKind::MoveRows),
             dragging: true,
             at,
             ..
@@ -4432,6 +4553,9 @@ impl Document {
         else {
             return None;
         };
+        if kind == PressKind::MoveRows {
+            return Some(self.row_drop_line(bars, at, (window, palette)));
+        }
         let metrics = window.content_metrics();
         let layout = self.layout(self.first_column, metrics);
         let before = self.drop_index(at, window);
@@ -5830,6 +5954,14 @@ impl Document {
         }) = self.hold
         {
             return String::from("離した所へ列を移します（Esc でやめる）");
+        }
+        if let Some(PointerHold::Cells {
+            kind: PressKind::MoveRows,
+            dragging: true,
+            ..
+        }) = self.hold
+        {
+            return String::from("離した所へ行を移します（Esc でやめる）");
         }
         if self.hold.is_some_and(PointerHold::dragging_cells) {
             let (top, bottom) = (self.selection.top_left(), self.selection.bottom_right());
@@ -9294,6 +9426,50 @@ mod tests {
             &document.frame(window, palette()),
             "入れ替えた列が離れているので足し消しできません（先に「列の並びを元に戻す」）",
         );
+    }
+
+    /// 選んだ行の行番号のドラッグは、行をファイルの並びごと移す。書き換えは行と一緒に動き、移した行を選び直し、Ctrl+Z
+    /// 1 回で戻る。動かさずに離せばその行だけを選ぶ（GitHub Issue #492）。
+    #[test]
+    fn dragging_a_selected_row_number_moves_the_row_in_the_file() {
+        let window = normal();
+        let mut document = editable();
+        document.apply(moving(CursorStep::Right), window);
+        document.apply(Intent::Edit, window);
+        document.apply(Intent::SelectAll, window);
+        typed(&mut document, "京都");
+        document.apply(Intent::Confirm, window);
+        // 1 行目を選び、もう一度押して 3 行目の下半分へ動かす。
+        document.apply(pointing(10, 58, SelectionMode::Collapse), window);
+        document.apply(Intent::Release, window);
+        document.apply(pointing(10, 58, SelectionMode::Collapse), window);
+        document.apply(dragging_to(10, 118), window);
+        assert_eq!(
+            document.right_status(),
+            "離した所へ行を移します（Esc でやめる）"
+        );
+        document.apply(Intent::Release, window);
+        reread(&mut document, &editable_rows());
+        assert_eq!(shown_cells(&document, 0), ["b1", "c1", "0012"]);
+        assert_eq!(shown_cells(&document, 1), ["b2", "", "京都"]);
+        assert_eq!(document.selection().top_left(), CellPosition::new(2, 0));
+        assert_eq!(document.selection().bottom_right(), CellPosition::new(2, 1));
+        text_at(
+            &document.frame(window, palette()),
+            "1 行を移しました（Ctrl+Z で戻す）",
+        );
+        document.apply(Intent::Undo, window);
+        reread(&mut document, &editable_rows());
+        assert_eq!(shown_cells(&document, 0), ["0012", "b1", "c1"]);
+        // 動かさずに離せば、その行だけを選ぶ。
+        document.apply(pointing(10, 58, SelectionMode::Collapse), window);
+        document.apply(Intent::Release, window);
+        document.apply(pointing(10, 83, SelectionMode::Extend), window);
+        document.apply(Intent::Release, window);
+        document.apply(pointing(10, 83, SelectionMode::Collapse), window);
+        document.apply(Intent::Release, window);
+        assert_eq!(document.selection().top_left(), CellPosition::new(1, 0));
+        assert_eq!(document.selection().bottom_right(), CellPosition::new(1, 1));
     }
 
     /// 見出しの無い 3 行 × 2 列の表（レコード 0〜2）。
