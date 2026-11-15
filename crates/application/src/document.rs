@@ -1415,7 +1415,7 @@ impl Document {
         );
         let on_cursor = self.cell_at(at, window) == Some(self.selection.cursor());
         if on_cursor && self.editor.is_none() && !self.saving && self.closing == CloseState::Open {
-            self.release(window);
+            let _released = self.release(window);
             self.begin_edit(EditMode::Editing);
         }
         effect
@@ -3960,10 +3960,7 @@ impl Document {
             Intent::Point { at, mode } => self.press_bar(at, mode, window),
             Intent::DoubleClick { at, .. } => self.press_bar(at, SelectionMode::Collapse, window),
             Intent::Drag { at } => Some(self.drag(at, window)),
-            Intent::Release => {
-                self.release(window);
-                Some(DocumentEffect::Stay)
-            }
+            Intent::Release => Some(self.release(window)),
             Intent::Scroll(_)
             | Intent::Move { .. }
             | Intent::Copy
@@ -4283,8 +4280,9 @@ impl Document {
             && (top.column()..=bottom.column()).contains(&column)
     }
 
-    /// 左のボタンを離した。選んだ列を移していれば落とす位置へ移し、動かさずに離していればその列だけを選ぶ。
-    fn release(&mut self, window: WindowView) {
+    /// 左のボタンを離した。選んだ列を移していれば落とす位置へファイルの並びごと移し（GitHub Issue #490）、動かさずに
+    /// 離していればその列だけを選ぶ。
+    fn release(&mut self, window: WindowView) -> DocumentEffect {
         let hold = self.hold.take();
         let Some(PointerHold::Cells {
             kind: PressKind::MoveColumns,
@@ -4294,13 +4292,12 @@ impl Document {
             ..
         }) = hold
         else {
-            return;
+            return DocumentEffect::Stay;
         };
         if dragging {
             let (top, bottom) = (self.selection.top_left(), self.selection.bottom_right());
             let before = self.drop_index(at, window);
-            self.move_columns(top.column()..=bottom.column(), before);
-            return;
+            return self.move_columns_in_file(top.column()..=bottom.column(), before, window);
         }
         let pressed = PixelPoint::new(
             u32::try_from(press.x()).unwrap_or(0),
@@ -4309,6 +4306,67 @@ impl Document {
         if let Some(hit) = self.line_at(pressed, window) {
             self.select_line(hit, SelectionMode::Collapse);
         }
+        DocumentEffect::Stay
+    }
+
+    /// 表の列 `block` を、表の位置 `before` の前へファイルの並びごと移す。列を消して足し直す 2 つの手を 1 手の束で積み
+    /// （Ctrl+Z 1 回で戻る）、移した列を列全体で選び直す。書き換えは列の同一性に付いているので一緒に動く。表示だけの
+    /// 入れ替えをしている間・読み取り専用・保存の途中は断る（GitHub Issue #490）。
+    fn move_columns_in_file(
+        &mut self,
+        block: RangeInclusive<usize>,
+        before: usize,
+        window: WindowView,
+    ) -> DocumentEffect {
+        let (start, end) = (*block.start(), *block.end());
+        let width = self.widths.columns().len();
+        if (start..=end.saturating_add(1)).contains(&before) || end >= width {
+            return DocumentEffect::Stay;
+        }
+        if self
+            .order
+            .iter()
+            .enumerate()
+            .any(|(index, &column)| index != column)
+        {
+            self.notice = Some(Notice::Columns(ColumnsNotice::Reordered));
+            return DocumentEffect::Stay;
+        }
+        if self.saving {
+            self.notice = Some(Notice::StillSaving);
+            return DocumentEffect::Stay;
+        }
+        if self.refuses_change() {
+            return DocumentEffect::Stay;
+        }
+        self.commit_edit();
+        let count = end.saturating_sub(start).saturating_add(1);
+        let runs = self.columns.remove(start, count);
+        let widths = self.columns_removed(start, count);
+        let at = if before > end {
+            before.saturating_sub(count)
+        } else {
+            before
+        };
+        self.columns.restore(at, runs.clone());
+        self.columns_inserted(at, &widths);
+        let steps = vec![
+            EditStep::Columns(ColumnChange::Removed {
+                at: start,
+                runs: runs.clone(),
+                widths: widths.clone(),
+            }),
+            EditStep::Columns(ColumnChange::Inserted { at, runs, widths }),
+        ];
+        self.history
+            .record_batch(steps, Vec::new(), &mut self.edits);
+        self.notice = Some(Notice::Columns(ColumnsNotice::Moved(count)));
+        let effect = self.after_columns_changed(at, window);
+        self.others.clear();
+        let last = at.saturating_add(count).saturating_sub(1);
+        self.selection = Selection::at(CellPosition::new(TO_END, last))
+            .moved(CellPosition::new(0, at), SelectionMode::Extend);
+        effect
     }
 
     /// 指 `at` の所で離したときに列を入れる、表示の位置（その位置の列の前）。列の左半分なら前、右半分なら後ろ。
@@ -8796,8 +8854,10 @@ mod tests {
             .collect()
     }
 
+    /// 選んだ列の見出しのドラッグは、列をファイルの並びごと移す。移した列を選び直し、Ctrl+Z 1 回で戻る（Issue #49 の
+    /// 表示だけの入れ替えから替えた・GitHub Issue #490）。
     #[test]
-    fn dragging_a_selected_column_header_moves_the_column_for_display_only() {
+    fn dragging_a_selected_column_header_moves_the_column_in_the_file() {
         let window = normal();
         let rows = table(&[&["a", "b", "c"], &["1", "2", "3"], &["4"]]);
         let mut document = three();
@@ -8819,10 +8879,18 @@ mod tests {
         );
         document.apply(Intent::Release, window);
         assert_eq!(header_texts(&document), ["c", "a", "b"]);
-        // 移した列を列全体で選び直す。状態の行は元の列の番号。
+        // 移した列を列全体で選び直す。状態の行はファイルの今の列の番号。
         assert_eq!(document.selection().cursor(), CellPosition::new(0, 0));
-        assert!(document.status().ends_with("2 行目 · 3 列目"));
-        // コピーと合計は表示の順。セルが無い所は空のまま。
+        assert!(
+            document.status().ends_with("2 行目 · 1 列目"),
+            "{}",
+            document.status()
+        );
+        text_at(
+            &document.frame(window, palette()),
+            "1 列を移しました（Ctrl+Z で戻す）",
+        );
+        // コピーはファイルの今の順。セルが無い所は空のまま。
         document.apply(pointing(47, 58, SelectionMode::Collapse), window);
         document.apply(dragging_to(140, 83), window);
         document.apply(Intent::Release, window);
@@ -8830,8 +8898,8 @@ mod tests {
             copy_from(&mut document, &rows).map(|text| String::from(text.as_str())),
             Some(String::from("3\t1\t2\r\n\t4\t\r\n"))
         );
-        // 元に戻す。
-        document.apply(Intent::ResetColumns, window);
+        // Ctrl+Z 1 回で元の並び。
+        document.apply(Intent::Undo, window);
         assert_eq!(header_texts(&document), ["a", "b", "c"]);
     }
 
@@ -9200,14 +9268,32 @@ mod tests {
     fn going_to_a_column_uses_the_original_column_number_after_reordering() {
         let window = normal();
         let mut document = three();
-        // c 列（元の 3 列目）を先頭へ移してから、3 列目へ飛ぶ。
+        // c 列（元の 3 列目）を表示の上で先頭へ移してから（Ctrl+Shift+PageUp を 2 回）、3 列目へ飛ぶ。
         document.apply(pointing(140, 35, SelectionMode::Collapse), window);
         document.apply(Intent::Release, window);
-        document.apply(pointing(140, 35, SelectionMode::Collapse), window);
-        document.apply(dragging_to(50, 40), window);
-        document.apply(Intent::Release, window);
+        document.apply(Intent::MoveColumns(ColumnShift::Left), window);
+        document.apply(Intent::MoveColumns(ColumnShift::Left), window);
         document.apply(Intent::GoTo(GoToTarget::parse("2,3").unwrap()), window);
         assert_eq!(document.selection().cursor(), CellPosition::new(0, 0));
+    }
+
+    /// 表示だけの入れ替えをしている間は、見出しのドラッグでファイルの並びを変えない（先に列の並びを元に戻す・GitHub
+    /// Issue #490）。
+    #[test]
+    fn dragging_columns_waits_while_the_display_order_is_changed() {
+        let window = normal();
+        let mut document = three();
+        document.apply(pointing(140, 35, SelectionMode::Collapse), window);
+        document.apply(Intent::Release, window);
+        document.apply(Intent::MoveColumns(ColumnShift::Left), window);
+        document.apply(pointing(95, 35, SelectionMode::Collapse), window);
+        document.apply(dragging_to(50, 40), window);
+        document.apply(Intent::Release, window);
+        assert!(document.columns.is_whole());
+        text_at(
+            &document.frame(window, palette()),
+            "入れ替えた列が離れているので足し消しできません（先に「列の並びを元に戻す」）",
+        );
     }
 
     /// 見出しの無い 3 行 × 2 列の表（レコード 0〜2）。
