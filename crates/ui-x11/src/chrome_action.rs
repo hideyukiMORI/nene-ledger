@@ -40,7 +40,7 @@ pub(crate) fn moveresize_direction(edge: ResizeEdge) -> u32 {
 /// `_NET_WM_MOVERESIZE` の移動の番号（EWMH）。
 pub(crate) const MOVERESIZE_MOVE: u32 = 8;
 
-/// カーソルの字（X の `cursorfont.h`）。矢印・縁の 8 方向・列の幅（`sb_h_double_arrow`）。
+/// カーソルの字（X の `cursorfont.h`）。矢印・縁の 8 方向・列の幅（`sb_h_double_arrow`）・ペインの高さ・I 字。
 pub(crate) fn cursor_glyph(shape: CursorShape) -> u16 {
     match shape {
         CursorShape::Arrow => 68,
@@ -55,6 +55,8 @@ pub(crate) fn cursor_glyph(shape: CursorShape) -> u16 {
         CursorShape::ColumnResize => 108,
         // sb_v_double_arrow（GitHub Issue #452）。
         CursorShape::RowResize => 116,
+        // xterm（I 字・GitHub Issue #472）。
+        CursorShape::Text => 152,
     }
 }
 
@@ -72,5 +74,6 @@ mod tests {
         assert_eq!(cursor_glyph(CursorShape::Edge(ResizeEdge::Right)), 96);
         assert_eq!(cursor_glyph(CursorShape::ColumnResize), 108);
         assert_eq!(cursor_glyph(CursorShape::RowResize), 116);
+        assert_eq!(cursor_glyph(CursorShape::Text), 152);
     }
 }
