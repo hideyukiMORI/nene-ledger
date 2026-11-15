@@ -6,9 +6,9 @@ use core::ops::Range;
 
 use nene_ledger_core::cell_edits::CellEdits;
 use nene_ledger_core::cell_value::CellValue;
+use nene_ledger_core::char_advances::CharAdvances;
 use nene_ledger_core::color::Color;
 use nene_ledger_core::column_id::ColumnId;
-use nene_ledger_core::display_width::{char_columns, display_columns};
 use nene_ledger_core::draw_command::DrawCommand;
 use nene_ledger_core::find_query::FindQuery;
 use nene_ledger_core::glyph_metrics::GlyphMetrics;
@@ -44,6 +44,8 @@ pub(crate) struct FramePainter<'view> {
     column_ids: &'view [ColumnId],
     edits: Option<&'view CellEdits>,
     editing: Option<&'view EditingCell>,
+    /// UI が測った字の送り幅（編集の欄のカーソルの棒と選択の地を置く・測る前は `None` で等幅とみなす・GitHub Issue #505）。
+    advances: Option<&'view CharAdvances>,
     /// 欄として描くのが見出しのセルなら、その所（上に固定した行の番目・表示の列・EDIT-04・GitHub Issue #496）。
     /// `None` なら、欄はカーソルのセル。
     renaming: Option<(usize, usize)>,
@@ -105,6 +107,7 @@ impl<'view> FramePainter<'view> {
             column_ids: &[],
             edits: None,
             editing: None,
+            advances: None,
             renaming: None,
             drop: None,
             found: None,
@@ -157,6 +160,11 @@ impl<'view> FramePainter<'view> {
     /// カーソルのセルを、編集の欄として描く（ADR 0026）。
     pub(crate) fn with_editing(self, editing: Option<&'view EditingCell>) -> Self {
         Self { editing, ..self }
+    }
+
+    /// 編集の欄の字の位置を、UI が測った字の送り幅 `advances` で決める（`None` なら等幅とみなす）。
+    pub(crate) fn with_advances(self, advances: Option<&'view CharAdvances>) -> Self {
+        Self { advances, ..self }
     }
 
     /// 編集の欄を、カーソルのセルでなく見出しのセル（上に固定した行の番目・表示の列）に描く（EDIT-04）。
@@ -454,9 +462,10 @@ impl<'view> FramePainter<'view> {
     /// GitHub Issue #321・専門家ペルソナの 4 巡目「0012999 が 2999 に見える」）。広げたときは外周をカーソルの色で囲う。
     fn paint_editing_cell(&mut self, rect: PixelRect, editing: &EditingCell) {
         let half = self.metrics.half_width().max(1);
-        let needed = display_columns(editing.text())
-            .saturating_add(1)
-            .saturating_mul(half)
+        let needed = self
+            .field_advances()
+            .width(editing.text())
+            .saturating_add(half)
             .saturating_add(self.layout.padding().saturating_mul(2));
         let room = self.size.width().saturating_sub(rect.origin().x());
         // 隣の値の端がのぞかないよう、広げた右端は列の境（その列の右の罫線）にそろえる（GitHub Issue #331）。
@@ -508,33 +517,32 @@ impl<'view> FramePainter<'view> {
     /// 欄より長い文字列は、カーソルが右端に見えるまで頭の字を飛ばして描く（`…` は付けない）。
     fn paint_editing(&mut self, rect: PixelRect, editing: &EditingCell) {
         self.fill(rect, self.palette.background());
-        let half = self.metrics.half_width().max(1);
+        let advances = self.field_advances();
+        let caret_width = self.metrics.px(CARET_WIDTH);
+        let left = rect.origin().x().saturating_add(self.layout.padding());
+        let right = rect.origin().x().saturating_add(rect.size().width());
+        // 欄の中身の幅から、カーソルの棒の分として半角 1 字を空ける。
         let room = rect
             .size()
             .width()
             .saturating_sub(self.layout.padding().saturating_mul(2))
-            / half;
-        let (shown, skipped) = scrolled_to_caret(editing.text(), editing.caret(), room);
-        let caret = editing.caret().saturating_sub(skipped);
-        let left = rect.origin().x().saturating_add(self.layout.padding());
-        let right = rect.origin().x().saturating_add(rect.size().width());
+            .saturating_sub(self.metrics.half_width().max(1));
+        let (shown, skipped) =
+            scrolled_to_caret(editing.text(), editing.caret(), (&advances, room));
         let spare = rect
             .size()
             .height()
             .saturating_sub(self.metrics.line_height());
         let top = rect.origin().y().saturating_add(spare / 2);
-        let caret_width = self.metrics.px(CARET_WIDTH);
-        let at = |columns: u32| {
-            left.saturating_add(columns.saturating_mul(half))
+        // 描く文字列の `index` 字目の左の端（飛ばした頭の字は欄の左の端）。
+        let at = |index: u32| {
+            let count = usize::try_from(index.saturating_sub(skipped)).unwrap_or(usize::MAX);
+            let head: String = shown.chars().take(count).collect();
+            left.saturating_add(advances.width(&head))
                 .min(right.saturating_sub(caret_width))
         };
+        let span = |(start, end): (u32, u32)| (at(start), at(end));
         // 選んだ字の地（字より先に塗る）。
-        let span = |(start, end): (u32, u32)| {
-            (
-                at(start.saturating_sub(skipped)),
-                at(end.saturating_sub(skipped)),
-            )
-        };
         if let Some(selection) = editing.selection().map(span) {
             let band = (top, self.metrics.line_height());
             self.span_fill(selection, band, self.palette.selection());
@@ -545,21 +553,26 @@ impl<'view> FramePainter<'view> {
         if let Some(underline) = editing.underline().map(span) {
             let line = self.metrics.px(UNDERLINE);
             let bottom = top.saturating_add(self.metrics.line_height());
-            self.span_fill(
-                underline,
-                (bottom.saturating_sub(line), line),
-                self.palette.text(),
-            );
+            let band = (bottom.saturating_sub(line), line);
+            self.span_fill(underline, band, self.palette.text());
         }
         if editing.caret_shown() {
             self.overlays.push(DrawCommand::Fill {
                 rect: PixelRect::new(
-                    PixelPoint::new(at(caret), top),
+                    PixelPoint::new(at(editing.caret()), top),
                     PixelSize::new(caret_width, self.metrics.line_height()),
                 ),
                 color: self.palette.cursor(),
             });
         }
+    }
+
+    /// 編集の欄の字の送り幅。UI が測っていなければ、半角の幅から等幅とみなす。
+    fn field_advances(&self) -> CharAdvances {
+        self.advances.map_or_else(
+            || CharAdvances::uniform(self.metrics.half_width().max(1)),
+            CharAdvances::clone,
+        )
     }
 
     /// 選択が本体の `body` 番目の行を覆うか。
@@ -905,19 +918,19 @@ impl<'view> FramePainter<'view> {
     }
 }
 
-/// 欄の文字列 `text` を、カーソル（左からの字数 `caret`）が幅 `room` 字の内に見えるよう、頭の字を飛ばした残りと、
-/// 飛ばした字数。カーソルの棒の分として 1 字を空ける。
-fn scrolled_to_caret(text: &str, caret: u32, room: u32) -> (String, u32) {
-    let limit = room.saturating_sub(1);
-    let mut skipped = 0_u32;
-    let mut characters = text.chars();
-    while caret.saturating_sub(skipped) > limit {
-        let Some(character) = characters.next() else {
-            break;
-        };
-        skipped = skipped.saturating_add(char_columns(character));
-    }
-    (characters.collect(), skipped)
+/// 欄の文字列 `text` を、カーソル（左の字の数 `caret`）が幅 `room` 画素の内に見えるよう、頭の字を飛ばした残りと、
+/// 飛ばした字の数。字の幅は送り幅 `advances` で測る。
+fn scrolled_to_caret(
+    text: &str,
+    caret: u32,
+    (advances, room): (&CharAdvances, u32),
+) -> (String, u32) {
+    let upto = usize::try_from(caret).unwrap_or(usize::MAX);
+    let skipped = advances.skipped_to_fit(text, upto, room);
+    (
+        text.chars().skip(skipped).collect(),
+        u32::try_from(skipped).unwrap_or(u32::MAX),
+    )
 }
 
 /// 見えない字の印の字の色を、字の色からセルの背景へ寄せる割合（百分率・GitHub Issue #269）。
@@ -986,11 +999,22 @@ mod tests {
 
     #[test]
     fn a_long_field_skips_its_head_so_that_the_caret_stays_visible() {
-        assert_eq!(scrolled_to_caret("abc", 3, 10), (String::from("abc"), 0));
-        assert_eq!(scrolled_to_caret("abcdef", 6, 4), (String::from("def"), 3));
-        // 全角は 2 字ぶん飛ぶ。
-        assert_eq!(scrolled_to_caret("日本語x", 7, 4), (String::from("語x"), 4));
-        assert_eq!(scrolled_to_caret("", 0, 0), (String::new(), 0));
+        // 半角 10 画素・全角 20 画素の等幅。
+        let even = CharAdvances::uniform(10);
+        let scrolled =
+            |text: &str, caret: u32, room: u32| scrolled_to_caret(text, caret, (&even, room));
+        assert_eq!(scrolled("abc", 3, 100), (String::from("abc"), 0));
+        assert_eq!(scrolled("abcdef", 6, 30), (String::from("def"), 3));
+        // 全角は 1 字で 2 字ぶんの幅が空く。
+        assert_eq!(scrolled("日本語x", 4, 30), (String::from("語x"), 2));
+        assert_eq!(scrolled("", 0, 0), (String::new(), 0));
+        // 幅の広い字（測った送り幅）では、同じ字の数でも多く飛ばす。
+        let mut wide = CharAdvances::uniform(10);
+        wide.set('m', 20 * nene_ledger_core::char_advances::SUBPIXELS);
+        assert_eq!(
+            scrolled_to_caret("mmmm", 4, (&wide, 40)),
+            (String::from("mm"), 2)
+        );
     }
 
     /// 試しの配色（表の先頭のライト `neutral-light` を導いたもの）。
@@ -1182,6 +1206,24 @@ mod tests {
             cell.origin().x() + layout.padding() + half
         );
         assert!(band.origin().y() < cell.origin().y() + cell.size().height());
+        // UI が測った送り幅があれば、その幅で置く（`a` と `m` が半角の 2 倍の幅の字体・GitHub Issue #505）。
+        let mut measured = CharAdvances::uniform(half);
+        for wide in ['a', 'm'] {
+            measured.set(wide, half * 2 * nene_ledger_core::char_advances::SUBPIXELS);
+        }
+        let placed = FramePainter::new(&layout, metrics(), palette(), PixelSize::new(800, 600))
+            .with_editing(Some(&editing))
+            .with_advances(Some(&measured))
+            .with_renaming(Some((0, 0)))
+            .paint(&header, None, &view(&rows));
+        let wide_band = fills_of(&placed, palette().selection())
+            .into_iter()
+            .find(|rect| rect.size().width() == half * 4)
+            .unwrap();
+        assert_eq!(
+            wide_band.origin().x(),
+            cell.origin().x() + layout.padding() + half
+        );
         // 本体のカーソルのセルは値のまま（欄にしない）。
         assert!(
             commands

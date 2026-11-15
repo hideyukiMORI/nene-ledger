@@ -3607,9 +3607,10 @@ impl Document {
     fn editing_cell(&self) -> Option<EditingCell> {
         let editor = self.editor.as_ref()?;
         let (text, caret) = editor.field().display();
+        // 描く文字列（改行は印 1 字に直してある）の中の、字の番目。
         let columns = |index: usize| {
             let head: String = text.chars().take(index).collect();
-            display_columns(&single_line(&head))
+            u32::try_from(single_line(&head).chars().count()).unwrap_or(u32::MAX)
         };
         let underline = caret
             .underline()
@@ -6457,6 +6458,7 @@ impl Document {
             .with_column_ids(&ids)
             .with_edits(&self.edits)
             .with_editing(editing.as_ref())
+            .with_advances(self.advances.as_deref())
             .with_renaming(self.renaming())
             .with_found(found)
             .with_found_within(self.find_within.clone())
@@ -10055,8 +10057,8 @@ mod tests {
             document
                 .editing_cell()
                 .is_some_and(|cell| cell.text() == "にほ"
-                    && cell.caret() == 4
-                    && cell.underline() == Some((0, 4)))
+                    && cell.caret() == 2
+                    && cell.underline() == Some((0, 2)))
         );
         assert!(document.edits().is_empty());
         document.commit_text("日本");
@@ -10083,7 +10085,7 @@ mod tests {
         assert!(
             document
                 .editing_cell()
-                .is_some_and(|cell| cell.text() == "0012か" && cell.underline() == Some((4, 6)))
+                .is_some_and(|cell| cell.text() == "0012か" && cell.underline() == Some((4, 5)))
         );
         document.compose(None);
         document.apply(Intent::Cancel, normal());
