@@ -97,6 +97,8 @@ pub enum CommandId {
     InsertRowsBelow,
     /// 表の末尾に空の行を足す。
     AppendRow,
+    /// 選択がかかる行を、すぐ下に同じ値で足す（GitHub Issue #486）。
+    DuplicateRows,
     /// 選んだ範囲にかかる行を消す。
     RemoveRows,
     /// カーソルの列（選んだ列）の左に空の列を足す（ADR 0027）。
@@ -115,7 +117,7 @@ pub enum CommandId {
 
 impl CommandId {
     /// すべての操作（何も打たないときの順）。
-    pub const ALL: [Self; 47] = [
+    pub const ALL: [Self; 48] = [
         Self::Top,
         Self::Bottom,
         Self::GoTo,
@@ -155,6 +157,7 @@ impl CommandId {
         Self::InsertRowsAbove,
         Self::InsertRowsBelow,
         Self::AppendRow,
+        Self::DuplicateRows,
         Self::RemoveRows,
         Self::InsertColumnsLeft,
         Self::InsertColumnsRight,
@@ -191,6 +194,7 @@ impl CommandId {
             Self::InsertRowsAbove
             | Self::InsertRowsBelow
             | Self::AppendRow
+            | Self::DuplicateRows
             | Self::RemoveRows
             | Self::InsertColumnsLeft
             | Self::InsertColumnsRight
@@ -270,6 +274,7 @@ impl CommandId {
             Self::InsertRowsAbove => "上に行を足す",
             Self::InsertRowsBelow => "下に行を足す",
             Self::AppendRow => "末尾に行を足す",
+            Self::DuplicateRows => "行を複製する（すぐ下に同じ値の行を足す）",
             Self::RemoveRows => "行を消す",
             Self::InsertColumnsLeft => "左に列を足す",
             Self::InsertColumnsRight => "右に列を足す",
@@ -324,6 +329,7 @@ impl CommandId {
             Self::InsertRowsAbove => "うえにぎょうをたす",
             Self::InsertRowsBelow => "したにぎょうをたす",
             Self::AppendRow => "まつびにぎょうをたす",
+            Self::DuplicateRows => "ぎょうをふくせいする",
             Self::RemoveRows => "ぎょうをけす",
             Self::InsertColumnsLeft => "ひだりにれつをたす",
             Self::InsertColumnsRight => "みぎにれつをたす",
@@ -385,6 +391,7 @@ impl CommandId {
             Self::InsertRowsAbove => &["insert row above", "add row", "new row"],
             Self::InsertRowsBelow => &["insert row below", "add row", "new row"],
             Self::AppendRow => &["append row", "add row at end", "new row"],
+            Self::DuplicateRows => &["duplicate row", "clone row", "repeat row"],
             Self::RemoveRows => &["delete row", "remove row"],
             Self::InsertColumnsLeft => &["insert column left", "add column", "new column"],
             Self::InsertColumnsRight => &["insert column right", "add column", "new column"],
@@ -431,6 +438,7 @@ impl CommandId {
             Self::InsertRowsAbove | Self::InsertRowsBelow | Self::AppendRow => {
                 &["行の挿入", "追加"]
             }
+            Self::DuplicateRows => &["行の複製", "同じ行", "写す"],
             Self::RemoveRows => &["行の削除", "削除"],
             Self::InsertColumnsLeft | Self::InsertColumnsRight => &["列の挿入", "追加"],
             Self::RemoveColumns => &["列の削除", "削除"],
@@ -472,6 +480,7 @@ impl CommandId {
             | Self::ShowAbout
             | Self::InsertRowsBelow
             | Self::AppendRow
+            | Self::DuplicateRows
             | Self::InsertColumnsRight
             | Self::TrimExtraCells => None,
             // Ctrl++ と Ctrl+- は、列全体を選んでいれば列に、そうでなければ行に効く（ADR 0027 の決定 2）。
@@ -538,6 +547,7 @@ impl CommandId {
             | Self::InsertRowsAbove
             | Self::InsertRowsBelow
             | Self::AppendRow
+            | Self::DuplicateRows
             | Self::RemoveRows
             | Self::InsertColumnsLeft
             | Self::InsertColumnsRight
@@ -600,6 +610,7 @@ impl CommandId {
             Self::InsertRowsAbove => Some(Intent::InsertRows(RowPlace::Above)),
             Self::InsertRowsBelow => Some(Intent::InsertRows(RowPlace::Below)),
             Self::AppendRow => Some(Intent::InsertRows(RowPlace::End)),
+            Self::DuplicateRows => Some(Intent::Root(RootCommand::DuplicateRows)),
             Self::RemoveRows => Some(Intent::RemoveRows),
             Self::InsertColumnsLeft => Some(Intent::InsertColumns(ColumnPlace::Left)),
             Self::InsertColumnsRight => Some(Intent::InsertColumns(ColumnPlace::Right)),
