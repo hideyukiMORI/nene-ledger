@@ -11,6 +11,7 @@ use nene_ledger_core::palette::Palette;
 use crate::about_line::AboutLine;
 use crate::command_id::CommandId;
 use crate::cursor_step::CursorStep;
+use crate::detail_key::DetailKey;
 use crate::detail_pane::DetailPane;
 use crate::find_toggle::FindToggle;
 use crate::go_to_target::GoToTarget;
@@ -393,7 +394,7 @@ impl CommandPalette {
             | Intent::FindAgain { .. }
             | Intent::FindToggle(_)
             | Intent::ReplaceAll
-            | Intent::ToggleDetail
+            | Intent::Detail(DetailKey::Toggle | DetailKey::SwitchTyping)
             | Intent::ToggleReadOnly
             | Intent::Theme(_)
             | Intent::Zoom(_)
@@ -512,7 +513,7 @@ impl CommandPalette {
             | Intent::Copy
             | Intent::Cut
             | Intent::OpenFind { .. }
-            | Intent::ToggleDetail
+            | Intent::Detail(DetailKey::Toggle | DetailKey::SwitchTyping)
             | Intent::ToggleReadOnly
             | Intent::Theme(_)
             | Intent::Zoom(_)

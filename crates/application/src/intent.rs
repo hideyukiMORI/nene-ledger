@@ -7,6 +7,7 @@ use crate::click_count::ClickCount;
 use crate::column_place::ColumnPlace;
 use crate::column_shift::ColumnShift;
 use crate::cursor_step::CursorStep;
+use crate::detail_key::DetailKey;
 use crate::find_toggle::FindToggle;
 use crate::go_to_target::GoToTarget;
 use crate::root_command::RootCommand;
@@ -90,8 +91,8 @@ pub enum Intent {
     FindToggle(FindToggle),
     /// 置換の欄で、当たりを全部置き換える（Alt+A・件数を見せてから）。
     ReplaceAll,
-    /// 詳細ペインを開閉する（Ctrl+Shift+U）。
-    ToggleDetail,
+    /// 詳細ペインを開閉する（Ctrl+Shift+U）か、字を打つ先をセルとペインで切り替える（F6・GitHub Issue #478）。
+    Detail(DetailKey),
     /// 読み取り専用にする / 外す（パレット・EDIT-13・GitHub Issue #238）。
     ToggleReadOnly,
     /// 配色を表の中で替える（試しに・Ctrl+Shift+T と Ctrl+Shift+Alt+T）。

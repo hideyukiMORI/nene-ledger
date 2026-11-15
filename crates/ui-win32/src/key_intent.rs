@@ -5,6 +5,7 @@
 use nene_ledger_application::click_count::ClickCount;
 use nene_ledger_application::column_shift::ColumnShift;
 use nene_ledger_application::cursor_step::CursorStep;
+use nene_ledger_application::detail_key::DetailKey;
 use nene_ledger_application::find_toggle::FindToggle;
 use nene_ledger_application::intent::Intent;
 use nene_ledger_application::root_command::RootCommand;
@@ -22,6 +23,7 @@ const VK_BACK: u16 = 0x08;
 const VK_TAB: u16 = 0x09;
 const VK_DELETE: u16 = 0x2E;
 const VK_F2: u16 = 0x71;
+const VK_F6: u16 = 0x75;
 const VK_RETURN: u16 = 0x0D;
 const VK_ESCAPE: u16 = 0x1B;
 const VK_SPACE: u16 = 0x20;
@@ -92,6 +94,8 @@ pub(crate) fn key_intent(key: u16, modifiers: Modifiers) -> Option<Intent> {
     match key {
         VK_F1 => return Some(Intent::OpenPalette),
         VK_F2 => return Some(Intent::Edit),
+        // 字を打つ先を表のセルと詳細ペインで替える（GitHub Issue #478）。
+        VK_F6 => return Some(Intent::Detail(DetailKey::SwitchTyping)),
         VK_F3 => return Some(Intent::FindAgain { forward: !shift }),
         // 列の数が見出しと違う次の・前の行へ（VS Code の「次の問題へ」と同じ F8・GitHub Issue #377）。
         VK_F8 => return Some(Intent::Root(RootCommand::FindRagged { forward: !shift })),
@@ -160,7 +164,7 @@ fn control_intent(key: u16, shift: bool, alt: bool) -> Option<Intent> {
         (VK_O, false) => Some(Intent::Root(RootCommand::OpenFile)),
         (VK_V, false) => Some(Intent::Paste),
         (VK_P, true) => Some(Intent::OpenPalette),
-        (VK_U, true) => Some(Intent::ToggleDetail),
+        (VK_U, true) => Some(Intent::Detail(DetailKey::Toggle)),
         (VK_T, true) => Some(Intent::Theme(if alt {
             ThemeStep::Previous
         } else {
@@ -317,6 +321,9 @@ mod tests {
         let shift = Modifiers::new(true, false, false);
         match guide {
             KeyGuide::EditCell => key_intent(VK_F2, plain()) == Some(Intent::Edit),
+            KeyGuide::SwitchTyping => {
+                key_intent(VK_F6, plain()) == Some(Intent::Detail(DetailKey::SwitchTyping))
+            }
             KeyGuide::ClearCell => key_intent(VK_DELETE, plain()) == Some(Intent::Delete),
             KeyGuide::BreakLine => {
                 key_intent(VK_RETURN, Modifiers::new(false, false, true)) == Some(Intent::BreakLine)
@@ -398,6 +405,7 @@ mod tests {
                 }
                 KeyGuide::Cancel => key_intent(VK_ESCAPE, plain()) == Some(Intent::Cancel),
                 KeyGuide::EditCell
+                | KeyGuide::SwitchTyping
                 | KeyGuide::ClearCell
                 | KeyGuide::BreakLine
                 | KeyGuide::FillSelection
@@ -507,7 +515,7 @@ mod tests {
         assert_eq!(key_intent(VK_P, control_shift()), Some(Intent::OpenPalette));
         assert_eq!(
             key_intent(VK_U, control_shift()),
-            Some(Intent::ToggleDetail)
+            Some(Intent::Detail(DetailKey::Toggle))
         );
         assert_eq!(
             key_intent(VK_T, Modifiers::new(true, true, true)),

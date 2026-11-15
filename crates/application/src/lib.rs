@@ -37,6 +37,7 @@ pub mod cursor_step;
 pub mod cut_mark;
 pub mod cut_record;
 pub mod detail_content;
+pub mod detail_key;
 mod detail_painter;
 pub mod detail_pane;
 mod detail_place;
