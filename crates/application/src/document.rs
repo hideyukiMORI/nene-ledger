@@ -20,6 +20,7 @@ use crate::cell_position::CellPosition;
 use crate::cell_restore::CellRestore;
 use crate::cell_row::CellRow;
 use crate::chrome_painter::ChromePainter;
+use crate::click_count::ClickCount;
 use crate::client_bands::{
     ClientBands, DETAIL_LINES, DETAIL_RULE, MAX_DETAIL_LINES, MIN_DETAIL_LINES,
 };
@@ -443,7 +444,7 @@ impl Document {
             Intent::Type('s' | 'S') | Intent::Confirm => Some(CloseChoice::Save),
             Intent::Type('d' | 'D') => Some(CloseChoice::Discard),
             Intent::Cancel => Some(CloseChoice::Cancel),
-            Intent::Point { at, .. } | Intent::DoubleClick { at } => {
+            Intent::Point { at, .. } | Intent::DoubleClick { at, .. } => {
                 ClosePrompt::new(window).choice_at(at)
             }
             Intent::Scroll(_)
@@ -3460,12 +3461,26 @@ impl Document {
         {
             return Some(DocumentEffect::Stay);
         }
-        if let Intent::DoubleClick { at } = intent {
+        if let Intent::DoubleClick { at, count } = intent {
             if self.press_pane_text(at, SelectionMode::Collapse, window) {
-                self.select_pane_word((i64::from(at.x()), i64::from(at.y())), window);
+                let at = (i64::from(at.x()), i64::from(at.y()));
+                match count {
+                    ClickCount::Second => self.select_pane_word(at, window),
+                    ClickCount::Third => self.select_pane_line(at, window),
+                }
                 return Some(DocumentEffect::Stay);
             }
-            return Some(self.double_click(at, window));
+            return Some(match count {
+                ClickCount::Second => self.double_click(at, window),
+                // ペインの本文の外の 3 度目は 1 度押したのと同じ（GitHub Issue #468）。
+                ClickCount::Third => self.apply(
+                    Intent::Point {
+                        at,
+                        mode: SelectionMode::Collapse,
+                    },
+                    window,
+                ),
+            });
         }
         None
     }
@@ -3526,6 +3541,22 @@ impl Document {
     /// 詳細ペインで直している間に、窓の中の `at` の字を含む語を選ぶ（ダブルクリック・GitHub Issue #466）。
     /// 見せている最初の行は変えない。
     fn select_pane_word(&mut self, at: (i64, i64), window: WindowView) {
+        self.select_pane_span(at, window, CellEditor::select_word);
+    }
+
+    /// 詳細ペインで直している間に、窓の中の `at` の字がある行（改行で区切った 1 行）を選ぶ（3 度押し・GitHub Issue
+    /// #468）。見せている最初の行は変えない。
+    fn select_pane_line(&mut self, at: (i64, i64), window: WindowView) {
+        self.select_pane_span(at, window, CellEditor::select_line);
+    }
+
+    /// 窓の中の `at` の字の番目を `select` に渡して選ぶ。見せている最初の行は変えない。
+    fn select_pane_span(
+        &mut self,
+        at: (i64, i64),
+        window: WindowView,
+        select: fn(&mut CellEditor, usize),
+    ) {
         let shown = (self.detail_offset(), self.pane_caret());
         let Some(pane) = self.pane_rect(window) else {
             return;
@@ -3538,7 +3569,7 @@ impl Document {
         };
         let (text, _) = editor.field().display();
         let (index, first) = pane_char_at((pane, metrics, &advances), &text, shown, at);
-        editor.select_word(index);
+        select(editor, index);
         self.detail_scroll = Some((cursor, first));
     }
 
@@ -3709,7 +3740,7 @@ impl Document {
     fn pointer_intent(&mut self, intent: Intent, window: WindowView) -> Option<DocumentEffect> {
         match intent {
             Intent::Point { at, mode } => self.press_bar(at, mode, window),
-            Intent::DoubleClick { at } => self.press_bar(at, SelectionMode::Collapse, window),
+            Intent::DoubleClick { at, .. } => self.press_bar(at, SelectionMode::Collapse, window),
             Intent::Drag { at } => Some(self.drag(at, window)),
             Intent::Release => {
                 self.release(window);
@@ -7677,6 +7708,7 @@ mod tests {
         document.apply(
             Intent::DoubleClick {
                 at: PixelPoint::new(100, moved),
+                count: ClickCount::Second,
             },
             window,
         );
@@ -7901,6 +7933,73 @@ mod tests {
         );
     }
 
+    /// 詳細ペインの本文の最初の行の `column` 桁目を、1 度押して離してから `count` の押しで押して離す。
+    fn press_pane_repeatedly(
+        document: &mut Document,
+        window: WindowView,
+        column: u32,
+        count: ClickCount,
+    ) {
+        let (x, y) = pane_text_at(document, window, column);
+        document.apply(pointing(x, y, SelectionMode::Collapse), window);
+        document.apply(Intent::Release, window);
+        let at = PixelPoint::new(x, y);
+        if count == ClickCount::Third {
+            document.apply(
+                Intent::DoubleClick {
+                    at,
+                    count: ClickCount::Second,
+                },
+                window,
+            );
+            document.apply(Intent::Release, window);
+        }
+        document.apply(Intent::DoubleClick { at, count }, window);
+        document.apply(Intent::Release, window);
+    }
+
+    /// 詳細ペインの本文の 3 度押しで、押した所の行（改行で区切った 1 行・改行は含まない）を選ぶ。表の上の 3 度押しは
+    /// 1 度押したのと同じ（GitHub Issue #468）。
+    #[test]
+    fn triple_clicking_the_pane_selects_the_line() {
+        let window = view(400, 600, WindowPlacement::Normal);
+        let mut document = editable();
+        document.set_detail(DetailPane::Open);
+        press_pane_repeatedly(&mut document, window, 0, ClickCount::Second);
+        document.apply(Intent::SelectAll, window);
+        typed(&mut document, "ab cd");
+        document.apply(Intent::BreakLine, window);
+        typed(&mut document, "ef");
+        press_pane_repeatedly(&mut document, window, 4, ClickCount::Third);
+        let caret = document.editor().unwrap().field().caret();
+        assert_eq!(caret, TextCaret::new(5, 0));
+        // 行の右の何も無い所でも、その行。
+        press_pane_repeatedly(&mut document, window, 30, ClickCount::Third);
+        assert_eq!(
+            document.editor().unwrap().field().caret(),
+            TextCaret::new(5, 0)
+        );
+        assert!(document.edits().is_empty());
+        document.apply(Intent::Cancel, window);
+        // 表の上の 3 度押しは、セルを選ぶだけで直し始めない。
+        let layout = document.layout(0, window.content_metrics());
+        let body = document.bars(window).body();
+        let rect = layout.cell_rect(2, 1).unwrap();
+        let cell = PixelPoint::new(
+            body.origin().x() + rect.origin().x() + 3,
+            body.origin().y() + rect.origin().y() + 3,
+        );
+        document.apply(
+            Intent::DoubleClick {
+                at: cell,
+                count: ClickCount::Third,
+            },
+            window,
+        );
+        assert!(document.editor().is_none());
+        assert_eq!(document.selection(), Selection::at(CellPosition::new(1, 1)));
+    }
+
     /// 詳細ペインの本文のダブルクリックで、指の下の字を含む語を選ぶ。字の右半分でもその字の語・行の右は最後の語・
     /// 直していなければ直し始めて選ぶ。確定はしない（GitHub Issue #466）。
     #[test]
@@ -7910,16 +8009,7 @@ mod tests {
         document.set_detail(DetailPane::Open);
         let caret = |shown: &Document| shown.editor().unwrap().field().caret();
         let double_click = |shown: &mut Document, column: u32| {
-            let (x, y) = pane_text_at(shown, window, column);
-            shown.apply(pointing(x, y, SelectionMode::Collapse), window);
-            shown.apply(Intent::Release, window);
-            shown.apply(
-                Intent::DoubleClick {
-                    at: PixelPoint::new(x, y),
-                },
-                window,
-            );
-            shown.apply(Intent::Release, window);
+            press_pane_repeatedly(shown, window, column, ClickCount::Second);
         };
         // 直していないセル「0012」：直し始めて、数字の続きの全体を選ぶ。
         double_click(&mut document, 1);
@@ -10141,7 +10231,13 @@ mod tests {
         // 2 行目の 2 列目（b2）を 1 度押して離し、2 度目。
         document.apply(pressing(inside(2, 1), SelectionMode::Collapse), window);
         document.apply(Intent::Release, window);
-        document.apply(Intent::DoubleClick { at: inside(2, 1) }, window);
+        document.apply(
+            Intent::DoubleClick {
+                at: inside(2, 1),
+                count: ClickCount::Second,
+            },
+            window,
+        );
         document.apply(Intent::Release, window);
         assert_eq!(document.selection().cursor(), CellPosition::new(1, 1));
         assert!(
@@ -10156,7 +10252,13 @@ mod tests {
             Some(&CellValue::Text(String::from("b2x")))
         );
         // 列の番号の行（固定した上の行）のダブルクリックは、列を選ぶだけで直し始めない。
-        document.apply(Intent::DoubleClick { at: inside(0, 0) }, window);
+        document.apply(
+            Intent::DoubleClick {
+                at: inside(0, 0),
+                count: ClickCount::Second,
+            },
+            window,
+        );
         document.apply(Intent::Release, window);
         assert_eq!(document.editor(), None);
     }
@@ -11440,7 +11542,13 @@ mod tests {
         );
         document.apply(pressing(at, SelectionMode::Collapse), window);
         document.apply(Intent::Release, window);
-        document.apply(Intent::DoubleClick { at }, window);
+        document.apply(
+            Intent::DoubleClick {
+                at,
+                count: ClickCount::Second,
+            },
+            window,
+        );
         document.apply(Intent::Release, window);
         assert!(document.editor.is_none());
         assert_eq!(table_state(document), before);

@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use nene_ledger_application::click_count::ClickCount;
 use nene_ledger_application::intent::Intent;
 use nene_ledger_application::pointer_shape::PointerShape;
 use nene_ledger_application::selection_mode::SelectionMode;
@@ -188,19 +189,32 @@ impl Ui {
             (self.window.key_intent(key.detail, key.state), key.time)
         } else if let Event::ButtonPress(button) = event {
             let intent = button_intent(button.detail, button.state, button.event_x, button.event_y);
-            // 表の上の 2 度目の左の押しはダブルクリック（Shift・Ctrl を押していないとき・ADR 0026 の決定 1）。
+            // 表の上の 2 度目の左の押しはダブルクリック、3 度目はトリプルクリック（Shift・Ctrl を押していないとき・
+            // ADR 0026 の決定 1・GitHub Issue #468）。
             let intent = match intent {
                 Some(Intent::Point {
                     at,
                     mode: SelectionMode::Collapse,
-                }) if screen.pointer_mut().client_press(PointerAt::new(
-                    button.root_x,
-                    button.root_y,
-                    button.time,
-                )) =>
-                {
-                    Some(Intent::DoubleClick { at })
-                }
+                }) => Some(
+                    match screen.pointer_mut().client_press(PointerAt::new(
+                        button.root_x,
+                        button.root_y,
+                        button.time,
+                    )) {
+                        2 => Intent::DoubleClick {
+                            at,
+                            count: ClickCount::Second,
+                        },
+                        3 => Intent::DoubleClick {
+                            at,
+                            count: ClickCount::Third,
+                        },
+                        _ => Intent::Point {
+                            at,
+                            mode: SelectionMode::Collapse,
+                        },
+                    },
+                ),
                 other => other,
             };
             (intent, button.time)

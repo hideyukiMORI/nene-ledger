@@ -40,6 +40,8 @@ pub(crate) struct WindowState<'session> {
     hovered: Option<ChromeButton>,
     pressed: Option<ChromeButton>,
     holding: bool,
+    /// 中身の 2 度目の押し（`WM_LBUTTONDBLCLK`）の時刻と位置。続く押しが 3 度目かを見る（GitHub Issue #468）。
+    double: Option<(i32, i32, i32)>,
     zoom: ZoomLevel,
     scale: DisplayScale,
     metrics: (GlyphMetrics, GlyphMetrics),
@@ -91,6 +93,7 @@ impl<'session> WindowState<'session> {
             hovered: None,
             pressed: None,
             holding: false,
+            double: None,
             zoom,
             scale,
             metrics: (chrome.unwrap_or(fallback), content.unwrap_or(fallback)),
@@ -231,6 +234,16 @@ impl<'session> WindowState<'session> {
     pub(crate) fn press(&mut self, intent: Intent) {
         self.holding = true;
         self.intent(intent);
+    }
+
+    /// 覚えている 2 度目の押しを取り出して忘れる（3 度目の後・ほかの押しの後は 1 度目から数える）。
+    pub(crate) fn take_double(&mut self) -> Option<(i32, i32, i32)> {
+        self.double.take()
+    }
+
+    /// 2 度目の押しの時刻と位置を覚える。
+    pub(crate) fn set_double(&mut self, at: (i32, i32, i32)) {
+        self.double = Some(at);
     }
 
     /// 左のボタンを離した（取り込みを失ったときも）。押していなければ何もしない。

@@ -3,6 +3,7 @@
 use nene_ledger_core::pixel_point::PixelPoint;
 use nene_ledger_core::pointer_point::PointerPoint;
 
+use crate::click_count::ClickCount;
 use crate::column_place::ColumnPlace;
 use crate::column_shift::ColumnShift;
 use crate::cursor_step::CursorStep;
@@ -34,12 +35,15 @@ pub enum Intent {
         /// 選択を畳むか広げるか。
         mode: SelectionMode,
     },
-    /// 左のボタンを 2 度続けて押した（2 度目・`at` は窓の左上を原点とする位置）。本体のセルなら、押してから
-    /// そのセルを編集の状態で直し始める（F2 と同じ・ADR 0026 の決定 1）。セルの外なら 1 度押したのと同じ。
-    /// 2 度目かを決めるのは UI（OS のダブルクリックの間と距離）。
+    /// 左のボタンを続けて押した（2 度目か 3 度目・`at` は窓の左上を原点とする位置）。2 度目は、本体のセルなら押して
+    /// からそのセルを編集の状態で直し始め（F2 と同じ・ADR 0026 の決定 1）、詳細ペインの本文なら語を選ぶ（GitHub
+    /// Issue #466）。3 度目は、詳細ペインの本文なら行を選ぶ（GitHub Issue #468）。それ以外は 1 度押したのと同じ。
+    /// 何度目かを決めるのは UI（OS のダブルクリックの間と距離）。
     DoubleClick {
         /// 窓の左上を原点とする位置。
         at: PixelPoint,
+        /// 何度目の押しか。
+        count: ClickCount,
     },
     /// 左のボタンを押したまま指を `at` へ動かした（窓の外へ出ると負にもなる）。
     Drag {
