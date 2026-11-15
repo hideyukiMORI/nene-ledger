@@ -11,4 +11,6 @@ pub enum PressKind {
     Columns,
     /// 選んでいる列を移す（選んだ列の見出しを押した・Issue #49）。
     MoveColumns,
+    /// 選んでいる行を移す（選んだ行の行番号を押した・GitHub Issue #492）。
+    MoveRows,
 }
