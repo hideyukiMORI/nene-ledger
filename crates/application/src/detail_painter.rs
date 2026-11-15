@@ -39,6 +39,8 @@ const HINT: &str = "Ctrl+Shift+U で閉じる";
 const EDITING_HINT: &str = "直している · Enter 確定 · Alt+Enter 改行 · Esc やめる";
 /// ペインで直している間のカーソルの棒の幅（画素・100% のとき・GitHub Issue #458）。
 const CARET: u32 = 2;
+/// IME の確定前の字の下線の太さ（画素・100% のとき・表のセルと同じ・GitHub Issue #476）。
+const UNDERLINE: u32 = 1;
 /// 本文のスクロールバーの幅とつまみの最小の長さ（画素・100% のとき・GitHub Issue #454）。
 const PANE_SCROLLBAR: u32 = 4;
 const PANE_SCROLLBAR_MIN: u32 = 12;
@@ -216,10 +218,12 @@ impl DetailPainter {
             .x()
             .saturating_add(self.metrics.px(TEXT_LEFT));
         let line = ClientBands::body_line(self.metrics);
-        if let Some((caret, value)) = editing.filter(|(caret, _)| caret.has_selection()) {
-            let start = place_in_pixels(&self.advances, (value, columns), caret.start());
-            let end = place_in_pixels(&self.advances, (value, columns), caret.end());
-            self.selection_fills((left, top, line), (&lines, first), (start, end));
+        if let Some((caret, value)) = editing {
+            self.marks(
+                (caret, (value, columns)),
+                (left, top, line),
+                (&lines, first),
+            );
         }
         let mut row_top = top;
         for text in lines {
@@ -246,15 +250,60 @@ impl DetailPainter {
         }
     }
 
-    /// 選んだ字（折り返した行と左からの画素で `start` から `end` の前まで）の下を選択の色で塗る。見せている行 `lines`
-    /// （`first` 行目から）の中だけ。次の行へ続く行は、右に半角 1 つ分も塗る（改行も選んでいる印・GitHub Issue #460）。
-    fn selection_fills(
+    /// 直している値 `value`（`columns` 字で折り返す）の、選んだ字の下の塗り（GitHub Issue #460）と、IME の確定前の
+    /// 字の下線（表のセルと同じ太さ・GitHub Issue #476）。
+    fn marks(
         &mut self,
-        (left, top, line): (u32, u32, u32),
+        (caret, (value, columns)): (TextCaret, (&str, u32)),
+        geometry: (u32, u32, u32),
+        shown: (&[String], usize),
+    ) {
+        let advances = &self.advances;
+        let span = |(start, end): (usize, usize)| {
+            (
+                place_in_pixels(advances, (value, columns), start),
+                place_in_pixels(advances, (value, columns), end),
+            )
+        };
+        let selection = caret
+            .has_selection()
+            .then(|| span((caret.start(), caret.end())));
+        let preedit = caret.underline().map(span);
+        if let Some(selection) = selection {
+            self.span_fills((geometry, false), shown, selection);
+        }
+        if let Some(preedit) = preedit {
+            self.span_fills((geometry, true), shown, preedit);
+        }
+    }
+
+    /// 折り返した行と左からの画素で `start` から `end` の前までの字の下を塗る。見せている行 `lines`（`first` 行目から）の
+    /// 中だけ。`underline` でなければ行の高さを選択の色で塗り、次の行へ続く行は右に半角 1 つ分も塗る（改行も選んでいる
+    /// 印・GitHub Issue #460）。`underline` なら字の下に字の色の細い線（GitHub Issue #476）。
+    fn span_fills(
+        &mut self,
+        ((left, top, line), underline): ((u32, u32, u32), bool),
         (lines, first): (&[String], usize),
         ((start_row, start_column), (end_row, end_column)): ((usize, u32), (usize, u32)),
     ) {
-        let half = self.metrics.half_width();
+        let half = if underline {
+            0
+        } else {
+            self.metrics.half_width()
+        };
+        // 下線は字の箱（行の高さの中で上下に中寄せ・`text_in`）の下の端。
+        let thickness = self.metrics.px(UNDERLINE);
+        let (raise, height, color) = if underline {
+            let spare = line.saturating_sub(self.metrics.line_height());
+            let bottom = (spare / 2).saturating_add(self.metrics.line_height());
+            (
+                bottom.saturating_sub(thickness),
+                thickness,
+                self.palette.text(),
+            )
+        } else {
+            (0, line, self.palette.selection())
+        };
         for (offset, text) in lines.iter().enumerate() {
             let row = first.saturating_add(offset);
             if !(start_row..=end_row).contains(&row) {
@@ -270,11 +319,12 @@ impl DetailPainter {
             self.fill(
                 area(
                     left.saturating_add(from),
-                    top.saturating_add(line.saturating_mul(visible)),
+                    top.saturating_add(line.saturating_mul(visible))
+                        .saturating_add(raise),
                     to.saturating_sub(from),
-                    line,
+                    height,
                 ),
-                self.palette.selection(),
+                color,
             );
         }
     }
