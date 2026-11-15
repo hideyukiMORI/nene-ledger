@@ -36,7 +36,7 @@ use crate::cursor_step::CursorStep;
 use crate::cut_mark::CutMark;
 use crate::cut_record::CutRecord;
 use crate::detail_content::DetailContent;
-use crate::detail_painter::{DetailPainter, body_extent, pane_index_at};
+use crate::detail_painter::{DetailPainter, body_extent, pane_char_at, pane_index_at};
 use crate::detail_pane::DetailPane;
 use crate::detail_place::DetailPlace;
 use crate::document_effect::DocumentEffect;
@@ -3462,6 +3462,7 @@ impl Document {
         }
         if let Intent::DoubleClick { at } = intent {
             if self.press_pane_text(at, SelectionMode::Collapse, window) {
+                self.select_pane_word((i64::from(at.x()), i64::from(at.y())), window);
                 return Some(DocumentEffect::Stay);
             }
             return Some(self.double_click(at, window));
@@ -3519,6 +3520,25 @@ impl Document {
         let (text, _) = editor.field().display();
         let (index, first) = pane_index_at((pane, metrics, &advances), &text, shown, at);
         editor.place_caret(index, extend);
+        self.detail_scroll = Some((cursor, first));
+    }
+
+    /// 詳細ペインで直している間に、窓の中の `at` の字を含む語を選ぶ（ダブルクリック・GitHub Issue #466）。
+    /// 見せている最初の行は変えない。
+    fn select_pane_word(&mut self, at: (i64, i64), window: WindowView) {
+        let shown = (self.detail_offset(), self.pane_caret());
+        let Some(pane) = self.pane_rect(window) else {
+            return;
+        };
+        let metrics = window.content_metrics();
+        let advances = self.advances_for(metrics);
+        let cursor = self.selection.cursor();
+        let Some(editor) = self.editor.as_mut() else {
+            return;
+        };
+        let (text, _) = editor.field().display();
+        let (index, first) = pane_char_at((pane, metrics, &advances), &text, shown, at);
+        editor.select_word(index);
         self.detail_scroll = Some((cursor, first));
     }
 
@@ -7879,6 +7899,49 @@ mod tests {
             pane_selection(&document, window)[0].size().width(),
             4 * half
         );
+    }
+
+    /// 詳細ペインの本文のダブルクリックで、指の下の字を含む語を選ぶ。字の右半分でもその字の語・行の右は最後の語・
+    /// 直していなければ直し始めて選ぶ。確定はしない（GitHub Issue #466）。
+    #[test]
+    fn double_clicking_the_pane_selects_the_word_under_the_pointer() {
+        let window = view(400, 600, WindowPlacement::Normal);
+        let mut document = editable();
+        document.set_detail(DetailPane::Open);
+        let caret = |shown: &Document| shown.editor().unwrap().field().caret();
+        let double_click = |shown: &mut Document, column: u32| {
+            let (x, y) = pane_text_at(shown, window, column);
+            shown.apply(pointing(x, y, SelectionMode::Collapse), window);
+            shown.apply(Intent::Release, window);
+            shown.apply(
+                Intent::DoubleClick {
+                    at: PixelPoint::new(x, y),
+                },
+                window,
+            );
+            shown.apply(Intent::Release, window);
+        };
+        // 直していないセル「0012」：直し始めて、数字の続きの全体を選ぶ。
+        double_click(&mut document, 1);
+        assert_eq!(document.editor().unwrap().surface(), EditSurface::Pane);
+        assert_eq!(caret(&document), TextCaret::new(4, 0));
+        assert!(!pane_selection(&document, window).is_empty());
+        document.apply(Intent::SelectAll, window);
+        typed(&mut document, "ab-cd 東京");
+        // 桁：a0 b1 -2 c3 d4 空白5 東6・7 京8・9。
+        let cases: [(u32, TextCaret); 5] = [
+            (1, TextCaret::new(2, 0)),
+            (2, TextCaret::new(3, 2)),
+            (5, TextCaret::new(6, 5)),
+            (7, TextCaret::new(8, 6)),
+            (30, TextCaret::new(8, 6)),
+        ];
+        for (column, expected) in cases {
+            double_click(&mut document, column);
+            assert_eq!(caret(&document), expected, "{column}");
+        }
+        assert_eq!(document.editor().unwrap().field().text(), "ab-cd 東京");
+        assert!(document.edits().is_empty());
     }
 
     /// UI が測った送り幅（全角が数字 2 つより狭い字体）で、押した所とカーソルの棒が実際の字に合う（GitHub Issue #462）。

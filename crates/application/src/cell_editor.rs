@@ -149,6 +149,11 @@ impl CellEditor {
         self.field = self.field.placed(index, extend);
     }
 
+    /// `index` 字目を含む語を選ぶ（ペインのダブルクリック・GitHub Issue #466）。
+    pub fn select_word(&mut self, index: usize) {
+        self.field = self.field.word_selected(index);
+    }
+
     /// Ctrl+A。欄の字をすべて選ぶ。
     pub fn select_all(&mut self) {
         self.field = self.field.selected_all();
