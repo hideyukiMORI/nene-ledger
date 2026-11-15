@@ -5,6 +5,7 @@ use alloc::vec::Vec;
 use nene_ledger_core::header_rows::HeaderRows;
 use nene_ledger_core::quoting::Quoting;
 use nene_ledger_core::text_encoding::TextEncoding;
+use nene_ledger_core::unclosed_quote::UnclosedQuote;
 
 use crate::reading_choice::ReadingChoice;
 
@@ -24,6 +25,8 @@ pub enum ReadingAspect {
     Quoting,
     /// 見出しの行。
     Header,
+    /// 閉じない引用符の読み方（ADR 0018 の決定 3・OPEN-15・GitHub Issue #511）。
+    UnclosedQuote,
 }
 
 impl ReadingAspect {
@@ -60,6 +63,10 @@ impl ReadingAspect {
             .into_iter()
             .map(|(quoting, quote)| ReadingChoice::quoting(quoting, quote))
             .collect(),
+            Self::UnclosedQuote => [UnclosedQuote::ToEnd, UnclosedQuote::Literal]
+                .into_iter()
+                .map(ReadingChoice::UnclosedQuote)
+                .collect(),
             Self::Header => core::iter::once(ReadingChoice::Header(None))
                 .chain((0..HEADER_ROWS).flat_map(|first| {
                     (1..=HeaderRows::MAX)
@@ -77,6 +84,7 @@ impl ReadingAspect {
             Self::Delimiter => "区切り",
             Self::Quoting => "引用符の扱い",
             Self::Header => "見出しの行",
+            Self::UnclosedQuote => "閉じない引用符の読み方",
         }
     }
 }

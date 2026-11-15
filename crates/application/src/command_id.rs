@@ -50,6 +50,8 @@ pub enum CommandId {
     ChooseDelimiter,
     /// 引用符の扱いを選んで開き直す。
     ChooseQuoting,
+    /// 閉じない引用符の読み方を選んで開き直す（ADR 0018 の決定 3・OPEN-15・GitHub Issue #511）。
+    ChooseUnclosedQuote,
     /// 見出しの行を選ぶ。
     ChooseHeader,
     /// 選んだ列を左へ移す（表示だけ・Issue #62）。
@@ -122,7 +124,7 @@ pub enum CommandId {
 
 impl CommandId {
     /// すべての操作（何も打たないときの順）。
-    pub const ALL: [Self; 50] = [
+    pub const ALL: [Self; 51] = [
         Self::Top,
         Self::Bottom,
         Self::GoTo,
@@ -138,6 +140,7 @@ impl CommandId {
         Self::ChooseEncoding,
         Self::ChooseDelimiter,
         Self::ChooseQuoting,
+        Self::ChooseUnclosedQuote,
         Self::ChooseHeader,
         Self::MoveColumnsLeft,
         Self::MoveColumnsRight,
@@ -224,6 +227,7 @@ impl CommandId {
             Self::ChooseEncoding
             | Self::ChooseDelimiter
             | Self::ChooseQuoting
+            | Self::ChooseUnclosedQuote
             | Self::ChooseHeader
             | Self::ChooseDialect => PaletteHeading::Reading,
             Self::ToggleDetail
@@ -259,6 +263,7 @@ impl CommandId {
             Self::ChooseEncoding => "文字コードを選んで開き直す…",
             Self::ChooseDelimiter => "区切りを選んで開き直す…",
             Self::ChooseQuoting => "引用符の扱いを選んで開き直す…",
+            Self::ChooseUnclosedQuote => "閉じない引用符の読み方を選んで開き直す…",
             Self::ChooseHeader => "見出しの行を選ぶ…",
             Self::MoveColumnsLeft => "選んだ列を左へ移す",
             Self::MoveColumnsRight => "選んだ列を右へ移す",
@@ -316,6 +321,7 @@ impl CommandId {
             Self::ChooseEncoding => "もじこーどをえらんでひらきなおす",
             Self::ChooseDelimiter => "くぎりをえらんでひらきなおす",
             Self::ChooseQuoting => "いんようふのあつかいをえらんでひらきなおす",
+            Self::ChooseUnclosedQuote => "とじないいんようふのよみかたをえらんでひらきなおす",
             Self::ChooseHeader => "みだしのぎょうをえらぶ",
             Self::MoveColumnsLeft => "えらんだれつをひだりへうつす",
             Self::MoveColumnsRight => "えらんだれつをみぎへうつす",
@@ -380,6 +386,7 @@ impl CommandId {
             Self::ChooseEncoding => &["encoding", "charset", "reopen", "utf", "sjis"],
             Self::ChooseDelimiter => &["delimiter", "separator", "reopen", "tab", "comma"],
             Self::ChooseQuoting => &["quote", "quoting", "escape", "reopen"],
+            Self::ChooseUnclosedQuote => &["unclosed", "unterminated", "broken row", "literal"],
             Self::ChooseHeader => &["header", "heading", "first row"],
             Self::MoveColumnsLeft => &["move column left", "column order"],
             Self::MoveColumnsRight => &["move column right", "column order"],
@@ -434,6 +441,7 @@ impl CommandId {
             Self::ChooseEncoding => &["エンコード", "文字化け", "シフトJIS", "ユニコード"],
             Self::ChooseDelimiter => &["区切り文字", "カンマ", "タブ", "セパレータ"],
             Self::ChooseQuoting => &["ダブルクォート", "クォート", "エスケープ"],
+            Self::ChooseUnclosedQuote => &["壊れた行", "閉じていない", "引用符が閉じない"],
             Self::ChooseHeader => &["ヘッダー", "列名"],
             // 「並べ替え」は行の並べ替え（ソート・まだ無い）と取り違えるので言い換えにしない（GitHub Issue #426）。
             Self::MoveColumnsLeft | Self::MoveColumnsRight | Self::ResetColumns => &["列の移動"],
@@ -488,6 +496,7 @@ impl CommandId {
             | Self::ChooseEncoding
             | Self::ChooseDelimiter
             | Self::ChooseQuoting
+            | Self::ChooseUnclosedQuote
             | Self::ChooseHeader
             | Self::ResetColumns
             | Self::ResetWidths
@@ -529,6 +538,7 @@ impl CommandId {
             Self::ChooseEncoding => Some(ReadingAspect::Encoding),
             Self::ChooseDelimiter => Some(ReadingAspect::Delimiter),
             Self::ChooseQuoting => Some(ReadingAspect::Quoting),
+            Self::ChooseUnclosedQuote => Some(ReadingAspect::UnclosedQuote),
             Self::ChooseHeader => Some(ReadingAspect::Header),
             Self::Top
             | Self::Bottom
@@ -603,6 +613,7 @@ impl CommandId {
             | Self::ChooseEncoding
             | Self::ChooseDelimiter
             | Self::ChooseQuoting
+            | Self::ChooseUnclosedQuote
             | Self::ChooseHeader
             | Self::ShowKeys
             | Self::ShowAbout => None,
