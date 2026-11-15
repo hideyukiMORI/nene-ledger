@@ -456,6 +456,7 @@ fn columns_status(notice: ColumnsNotice) -> String {
             "入れ替えた列が離れているので足し消しできません（先に「列の並びを元に戻す」）",
         ),
         ColumnsNotice::KeepOne => String::from("すべての列は消せません"),
+        ColumnsNotice::Moved(columns) => format!("{columns} 列を移しました（Ctrl+Z で戻す）"),
         ColumnsNotice::Duplicated(columns) => {
             format!("{columns} 列を複製しました（Ctrl+Z で戻す）")
         }
