@@ -4,6 +4,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::ops::Range;
 
+use nene_ledger_core::char_advances::{CharAdvances, SUBPIXELS};
 use nene_ledger_core::display_width::char_columns;
 
 /// 改行の印。🔴 `↵`（U+21B5）は日本語の字体（Noto Sans CJK JP）に無く、Issue #20 の画面で字の無い印になった。
@@ -218,6 +219,30 @@ pub fn fitted(text: &str, columns: u32) -> String {
     head
 }
 
+/// [`fitted`] を、UI が測った字の送り幅 `advances` で。幅 `room`（画素）に収まらなければ、収まる頭の部分の後ろに `…` を
+/// 付ける（GitHub Issue #532。見積もりでは、比例の字体でまだ入る値を早く切ったり、字の途中で切れたりした）。数えるのは
+/// 頭の部分だけで、値の長さに依らない。
+#[must_use]
+pub fn fitted_measured(text: &str, room: u32, advances: &CharAdvances) -> String {
+    let whole = room.saturating_mul(SUBPIXELS);
+    let head_room = whole.saturating_sub(advances.of(ELLIPSIS));
+    let mut head = String::new();
+    let mut used = 0_u32;
+    for character in text.chars() {
+        let next = used.saturating_add(advances.of(character));
+        if next > whole {
+            // 頭の部分は `…` の分を空けて収まる所まで。
+            head.push(ELLIPSIS);
+            return head;
+        }
+        if next <= head_room {
+            head.push(character);
+        }
+        used = next;
+    }
+    String::from(text)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -367,5 +392,21 @@ mod tests {
             mark_legend("\u{a0}\u{200b}\u{7}"),
             "␣ 詰めない空白 1・¦ 幅の無い字 1・· 制御文字 1"
         );
+    }
+
+    /// 測った送り幅では、幅の狭い字は見積もりより多く入り、幅の広い字は早く切れる（GitHub Issue #532）。
+    #[test]
+    fn measured_widths_decide_where_the_ellipsis_goes() {
+        // 半角 10 画素・全角と `…` は 20 画素。
+        let mut advances = CharAdvances::uniform(10);
+        assert_eq!(fitted_measured("abcdef", 60, &advances), "abcdef");
+        assert_eq!(fitted_measured("abcdefg", 60, &advances), "abcd…");
+        assert_eq!(fitted_measured("", 0, &advances), "");
+        assert_eq!(fitted_measured("abc", 10, &advances), "…");
+        // `i` が 4 画素の字体なら、同じ幅に多く入る。`m` が 20 画素なら早く切れる。
+        advances.set('i', 4 * SUBPIXELS);
+        advances.set('m', 20 * SUBPIXELS);
+        assert_eq!(fitted_measured("iiiiiiiiii", 60, &advances), "iiiiiiiiii");
+        assert_eq!(fitted_measured("mmmm", 60, &advances), "mm…");
     }
 }
