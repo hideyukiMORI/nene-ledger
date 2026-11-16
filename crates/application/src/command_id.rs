@@ -90,6 +90,8 @@ pub enum CommandId {
     Save,
     /// 名前を付けて保存する。
     SaveAs,
+    /// 文字コード・区切り・改行・引用符を変えて、別のファイルへ書き出す（ADR 0036）。
+    ExportAs,
     /// 新しい表を新しい窓で作る（ADR 0028 の決定 1）。
     NewTable,
     /// 1 手元に戻す（UNDO-01）。
@@ -124,9 +126,24 @@ pub enum CommandId {
     ShowAbout,
 }
 
+/// 「判別の候補から選ぶ…」の英語の検索語。
+const DIALECT_KEYWORDS: &[&str] = &[
+    "candidates",
+    "dialect",
+    "detect",
+    "guess",
+    "confidence",
+    "reopen",
+];
+
+/// 「形式を変えて書き出す…」の英語の検索語（文字コード・区切り・改行・引用符の名前でも引ける）。
+const EXPORT_KEYWORDS: &[&str] = &[
+    "export", "convert", "utf8", "utf-8", "shiftjis", "sjis", "bom", "tsv", "crlf", "quote",
+];
+
 impl CommandId {
     /// すべての操作（何も打たないときの順）。
-    pub const ALL: [Self; 52] = [
+    pub const ALL: [Self; 53] = [
         Self::Top,
         Self::Bottom,
         Self::GoTo,
@@ -162,6 +179,7 @@ impl CommandId {
         Self::OpenFile,
         Self::Save,
         Self::SaveAs,
+        Self::ExportAs,
         Self::NewTable,
         Self::Undo,
         Self::Redo,
@@ -194,7 +212,9 @@ impl CommandId {
     #[must_use]
     pub const fn section(self) -> PaletteHeading {
         match self {
-            Self::OpenFile | Self::Save | Self::SaveAs | Self::NewTable => PaletteHeading::File,
+            Self::OpenFile | Self::Save | Self::SaveAs | Self::ExportAs | Self::NewTable => {
+                PaletteHeading::File
+            }
             Self::Find
             | Self::FindNext
             | Self::FindPrevious
@@ -287,6 +307,7 @@ impl CommandId {
             Self::OpenFile => "ファイルを開く…",
             Self::Save => "変えた所を保存する",
             Self::SaveAs => "名前を付けて保存する",
+            Self::ExportAs => "形式を変えて書き出す…",
             Self::NewTable => "新しい表を作る",
             Self::Undo => "元に戻す",
             Self::Redo => "やり直す",
@@ -346,6 +367,7 @@ impl CommandId {
             Self::OpenFile => "ふぁいるをひらく",
             Self::Save => "かえたところをほぞんする",
             Self::SaveAs => "なまえをつけてほぞんする",
+            Self::ExportAs => "けいしきをかえてかきだす",
             Self::NewTable => "あたらしいひょうをつくる",
             Self::Undo => "もとにもどす",
             Self::Redo => "やりなおす",
@@ -381,14 +403,7 @@ impl CommandId {
             Self::ZoomOut => &["zoom out", "smaller", "font"],
             Self::ZoomReset => &["zoom reset", "actual size", "font"],
             Self::ChooseTheme => &["theme", "color", "colour", "scheme"],
-            Self::ChooseDialect => &[
-                "candidates",
-                "dialect",
-                "detect",
-                "guess",
-                "confidence",
-                "reopen",
-            ],
+            Self::ChooseDialect => DIALECT_KEYWORDS,
             Self::ChooseEncoding => &["encoding", "charset", "reopen", "utf", "sjis"],
             Self::ChooseDelimiter => &["delimiter", "separator", "reopen", "tab", "comma"],
             Self::ChooseQuoting => &["quote", "quoting", "escape", "reopen"],
@@ -410,7 +425,8 @@ impl CommandId {
             Self::Replace => &["replace", "find", "okikae", "chikan"],
             Self::OpenFile => &["open", "file", "load"],
             Self::Save => &["save", "write"],
-            Self::SaveAs => &["saveas", "save as", "export"],
+            Self::SaveAs => &["saveas", "save as"],
+            Self::ExportAs => EXPORT_KEYWORDS,
             Self::NewTable => &["new", "create", "blank"],
             Self::Undo => &["undo"],
             Self::Redo => &["redo"],
@@ -461,7 +477,17 @@ impl CommandId {
             Self::Replace => &["置換", "検索", "書き換え"],
             Self::OpenFile => &["読み込み", "オープン"],
             Self::Save => &["上書き保存", "書き出し"],
-            Self::SaveAs => &["別名", "エクスポート", "書き出し"],
+            Self::SaveAs => &["別名"],
+            Self::ExportAs => &[
+                "エクスポート",
+                "書き出し",
+                "変換",
+                "文字コード",
+                "改行",
+                "引用符",
+                "全項目",
+                "囲む",
+            ],
             Self::NewTable => &["新規", "作成"],
             Self::Undo => &["取り消し", "アンドゥ"],
             Self::Redo => &["リドゥ"],
@@ -496,6 +522,7 @@ impl CommandId {
             Self::MoveColumnsRight => Some("Ctrl+Shift+PageDown"),
             // 文字の大きさのキーは Ctrl+ホイール（キーの一覧の WheelZoom）と Ctrl+0（ADR 0020 の施主の判断）。
             Self::ToggleReadOnly
+            | Self::ExportAs
             | Self::ZoomIn
             | Self::ZoomOut
             | Self::ChooseTheme
@@ -579,6 +606,7 @@ impl CommandId {
             | Self::OpenFile
             | Self::Save
             | Self::SaveAs
+            | Self::ExportAs
             | Self::NewTable
             | Self::Undo
             | Self::Redo
@@ -605,6 +633,7 @@ impl CommandId {
             step,
             mode: SelectionMode::Collapse,
         };
+        let ragged = |forward| Intent::Root(RootCommand::FindRagged { forward });
         match self {
             Self::Top => Some(moving(CursorStep::Top)),
             Self::Bottom => Some(moving(CursorStep::Bottom)),
@@ -625,6 +654,7 @@ impl CommandId {
             | Self::ChooseUnclosedQuote
             | Self::ChooseHeader
             | Self::ShowKeys
+            | Self::ExportAs
             | Self::ShowAbout => None,
             Self::MoveColumnsLeft => Some(Intent::MoveColumns(ColumnShift::Left)),
             Self::MoveColumnsRight => Some(Intent::MoveColumns(ColumnShift::Right)),
@@ -639,10 +669,8 @@ impl CommandId {
             Self::FindPrevious => Some(Intent::FindAgain { forward: false }),
             Self::Replace => Some(Intent::OpenFind { replace: true }),
             Self::GoToUnclosedQuote => Some(Intent::Root(RootCommand::GoToUnclosedQuote)),
-            Self::NextRaggedRow => Some(Intent::Root(RootCommand::FindRagged { forward: true })),
-            Self::PreviousRaggedRow => {
-                Some(Intent::Root(RootCommand::FindRagged { forward: false }))
-            }
+            Self::NextRaggedRow => Some(ragged(true)),
+            Self::PreviousRaggedRow => Some(ragged(false)),
             Self::OpenFile => Some(Intent::Root(RootCommand::OpenFile)),
             Self::Save => Some(Intent::Save),
             Self::SaveAs => Some(Intent::SaveAs),
@@ -679,6 +707,7 @@ mod tests {
                 || command == CommandId::ChooseDialect
                 || command == CommandId::ShowKeys
                 || command == CommandId::ShowAbout
+                || command == CommandId::ExportAs
                 || command.reading_aspect().is_some();
             assert_eq!(command.intent().is_none(), opens_a_list);
             assert!(!opens_a_list || command.keys().is_none());

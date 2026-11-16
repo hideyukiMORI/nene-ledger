@@ -33,13 +33,6 @@ const BYTE_ORDER_MARK: &str = "\u{FEFF}";
 ///
 /// `target` は今のファイルと別でなければならない（ADR 0036 の決定 2）。既にあれば今の印と比べてから置き換える（上書きは
 /// 呼ぶ側が確かめてある）。表せない字のあるセルがあれば、書き始める前に数えて止める（決定 5）。
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "ADR 0036: 入口（パレットの「形式を変えて書き出す…」）は次の Issue で足す"
-    )
-)]
 pub(crate) fn start_exporting(
     changes: TableChanges<'_>,
     reader: &Reader,

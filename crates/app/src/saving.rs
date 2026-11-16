@@ -5,6 +5,7 @@ use std::ops::ControlFlow;
 use std::path::Path;
 
 use nene_ledger_application::added_row_shape::AddedRowShape;
+use nene_ledger_application::export_notice::ExportNotice;
 use nene_ledger_application::file_stamp::FileStamp;
 use nene_ledger_application::replace_failure::ReplaceFailure;
 use nene_ledger_application::save_plan_failure::SavePlanFailure;
@@ -208,6 +209,54 @@ fn representable(changes: &TableChanges<'_>, encoding: TextEncoding) -> Result<(
     Ok(())
 }
 
+/// 書き出す先の初めの名前：`元の名前-書き出し.<拡張子>`（ADR 0036 の決定 2）。新しい表は `無題-書き出し.<拡張子>`。
+fn export_name(current: Option<&Path>, extension: &str) -> String {
+    let stem = current.and_then(Path::file_stem).map_or_else(
+        || String::from(UNTITLED_STEM),
+        |stem| stem.to_string_lossy().into_owned(),
+    );
+    format!("{stem}-書き出し.{extension}")
+}
+
+/// 書き出す先を選ぶ画面の初め（Windows）：今のファイルのフォルダと、書き出しの名前。
+#[cfg(windows)]
+pub(crate) fn suggested_export_target<'path>(
+    current: Option<&'path Path>,
+    extension: &str,
+) -> (Option<&'path Path>, String) {
+    (
+        current.and_then(Path::parent),
+        export_name(current, extension),
+    )
+}
+
+/// 書き出す先を打つ欄の初め（X11）：今のファイルのフォルダの絶対の道筋と、書き出しの名前。
+#[cfg(not(windows))]
+pub(crate) fn suggested_export_entry(current: Option<&Path>, extension: &str) -> String {
+    nene_ledger_store::locating::folder_of(current)
+        .join(export_name(current, extension))
+        .to_string_lossy()
+        .into_owned()
+}
+
+/// 書き出せなかった理由の知らせと、表せない字のある最初のセル（表の行の位置・列の位置）。`encoding` は選んだ文字コード。
+pub(crate) fn export_notice_of(
+    failure: &SavingFailure,
+    encoding: TextEncoding,
+) -> (ExportNotice, Option<(u64, usize)>) {
+    if let SavingFailure::Save(SaveFailure::UnrepresentableCells { count, row, column }) = failure {
+        let notice = ExportNotice::Unrepresentable {
+            encoding,
+            cells: *count,
+        };
+        return (notice, Some((*row, *column)));
+    }
+    if matches!(failure, SavingFailure::Save(SaveFailure::SameAsSource)) {
+        return (ExportNotice::SameFile, None);
+    }
+    (ExportNotice::Failed(problem_of(failure)), None)
+}
+
 /// 名前を付けて保存の画面の初め（Windows）：今のファイルのフォルダと名前。新しい表はフォルダ無しと `無題.csv`。
 #[cfg(windows)]
 pub(crate) fn suggested_target(current: Option<&Path>) -> (Option<&Path>, String) {
@@ -235,6 +284,9 @@ pub(crate) fn suggested_entry(current: Option<&Path>) -> String {
 
 /// 新しい表を保存するときの、初めのファイルの名前。
 const UNTITLED_FILE: &str = "無題.csv";
+
+/// 新しい表から書き出すときの、初めのファイルの名前の頭。
+const UNTITLED_STEM: &str = "無題";
 
 /// 保存できなかった理由のうち、状態の行で示すもの。
 pub(crate) fn problem_of(failure: &SavingFailure) -> SaveProblem {
@@ -272,7 +324,7 @@ pub(crate) fn problem_of(failure: &SavingFailure) -> SaveProblem {
             | SaveFailure::Read(_)
             | SaveFailure::Spawn(_)
             | SaveFailure::Panicked
-            // 🔴 書き出しの知らせ（件数と所へ飛ぶ・同じファイルは断る）は、入口を作る Issue で足す（ADR 0036）。
+            // 書き出しだけの失敗。知らせは `export_notice_of` が先に分ける（ここへは来ない）。
             | SaveFailure::UnrepresentableCells { .. }
             | SaveFailure::SameAsSource,
         ) => SaveProblem::Other,
@@ -379,6 +431,46 @@ mod tests {
 
     fn text(value: &str) -> CellValue {
         CellValue::Text(String::from(value))
+    }
+
+    /// 書き出す先の初めの名前は `元の名前-書き出し.<拡張子>`。新しい表は `無題-書き出し`（ADR 0036 の決定 2）。
+    #[test]
+    fn the_export_name_keeps_the_stem_and_takes_the_chosen_extension() {
+        assert_eq!(
+            export_name(Some(Path::new("/srv/data/売上.2026.csv")), "tsv"),
+            "売上.2026-書き出し.tsv"
+        );
+        assert_eq!(export_name(None, "csv"), "無題-書き出し.csv");
+    }
+
+    /// 書き出しだけの失敗は、書き出しの知らせに分ける。表せない字のあるセルは、数と最初の所を渡す。
+    #[test]
+    fn export_failures_become_export_notices() {
+        let cells = SavingFailure::Save(SaveFailure::UnrepresentableCells {
+            count: 3,
+            row: 7,
+            column: 2,
+        });
+        assert_eq!(
+            export_notice_of(&cells, TextEncoding::EucJp),
+            (
+                ExportNotice::Unrepresentable {
+                    encoding: TextEncoding::EucJp,
+                    cells: 3
+                },
+                Some((7, 2))
+            )
+        );
+        let same = SavingFailure::Save(SaveFailure::SameAsSource);
+        assert_eq!(
+            export_notice_of(&same, TextEncoding::Utf8),
+            (ExportNotice::SameFile, None)
+        );
+        let cancelled = SavingFailure::Save(SaveFailure::Cancelled);
+        assert_eq!(
+            export_notice_of(&cancelled, TextEncoding::Utf8),
+            (ExportNotice::Failed(SaveProblem::Cancelled), None)
+        );
     }
 
     #[test]

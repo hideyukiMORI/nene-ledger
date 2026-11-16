@@ -13,6 +13,8 @@ use crate::command_id::CommandId;
 use crate::cursor_step::CursorStep;
 use crate::detail_key::DetailKey;
 use crate::detail_pane::DetailPane;
+use crate::export_format::ExportFormat;
+use crate::export_line::ExportLine;
 use crate::find_toggle::FindToggle;
 use crate::go_to_target::GoToTarget;
 use crate::guide_note::GuideNote;
@@ -232,6 +234,7 @@ impl CommandPalette {
             | PaletteMode::Themes { .. }
             | PaletteMode::Reading { .. }
             | PaletteMode::Candidates { .. }
+            | PaletteMode::Export { .. }
             | PaletteMode::SaveAs { .. } => &self.query,
         }
     }
@@ -258,6 +261,7 @@ impl CommandPalette {
             | PaletteMode::Themes { .. }
             | PaletteMode::Reading { .. }
             | PaletteMode::Candidates { .. }
+            | PaletteMode::Export { .. }
             | PaletteMode::SaveAs { .. } => None,
         }
     }
@@ -265,8 +269,22 @@ impl CommandPalette {
     /// 名前を付けて保存の保存先を打つ段で開く（X11・ADR 0028 の決定 4）。初めの道筋は `initial`（今のファイルのフォルダ）。
     #[must_use]
     pub fn open_save_as(initial: String) -> Self {
+        Self::open_target(initial, None)
+    }
+
+    /// 書き出す先を打つ段で開く（X11・ADR 0036 の決定 2）。初めの道筋は `initial`、形式は `format`。
+    #[must_use]
+    pub fn open_export_to(initial: String, format: ExportFormat) -> Self {
+        Self::open_target(initial, Some(format))
+    }
+
+    /// 保存先（`export` があれば書き出す先）を打つ段で開く。
+    fn open_target(initial: String, export: Option<ExportFormat>) -> Self {
         Self {
-            mode: PaletteMode::SaveAs { overwrite: false },
+            mode: PaletteMode::SaveAs {
+                overwrite: false,
+                export,
+            },
             query: initial,
             selected: 0,
             candidates: Vec::new(),
@@ -283,8 +301,11 @@ impl CommandPalette {
     /// 打った道筋のファイルが既にあるので、上書きしてよいかを尋ねる（もう一度 Enter で上書き・ADR 0028 の決定 5）。
     /// 道筋を打ち直せば尋ねるのをやめる。
     pub fn ask_overwrite(&mut self) {
-        if let PaletteMode::SaveAs { .. } = self.mode {
-            self.mode = PaletteMode::SaveAs { overwrite: true };
+        if let PaletteMode::SaveAs { export, .. } = self.mode {
+            self.mode = PaletteMode::SaveAs {
+                overwrite: true,
+                export,
+            };
         }
     }
 
@@ -329,6 +350,7 @@ impl CommandPalette {
             | PaletteMode::Find
             | PaletteMode::Replace { .. }
             | PaletteMode::SaveAs { .. } => Vec::new(),
+            PaletteMode::Export { .. } => ExportLine::ALL.map(PaletteItem::Export).to_vec(),
             PaletteMode::Keys => key_list(&self.query),
             PaletteMode::About => AboutLine::ALL.map(PaletteItem::About).to_vec(),
             PaletteMode::Themes { .. } => themes(&self.query),
@@ -423,7 +445,9 @@ impl CommandPalette {
     fn confirmed(&mut self, current_theme: usize) -> PaletteOutcome {
         match self.mode {
             PaletteMode::SaveAs { .. } if self.query.trim().is_empty() => PaletteOutcome::Stay,
-            PaletteMode::SaveAs { overwrite } => PaletteOutcome::SaveAs { overwrite },
+            PaletteMode::SaveAs { overwrite, export } => {
+                PaletteOutcome::SaveAs { overwrite, export }
+            }
             PaletteMode::Commands
             | PaletteMode::GoTo
             | PaletteMode::Find
@@ -432,6 +456,7 @@ impl CommandPalette {
             | PaletteMode::About
             | PaletteMode::Reading { .. }
             | PaletteMode::Candidates { .. }
+            | PaletteMode::Export { .. }
             | PaletteMode::Themes { .. } => self.confirm(current_theme),
         }
     }
@@ -464,6 +489,7 @@ impl CommandPalette {
                     PaletteOutcome::Run(Intent::GoTo(target))
                 })
             }),
+            PaletteMode::Export { format } => self.export_intent(intent, format),
             PaletteMode::Commands
             | PaletteMode::Keys
             | PaletteMode::About
@@ -472,6 +498,59 @@ impl CommandPalette {
             | PaletteMode::Candidates { .. }
             | PaletteMode::SaveAs { .. } => None,
         }
+    }
+
+    /// 書き出しの段の意図。← → は選んでいる面の値を前・次に替える。字は打てない（候補を絞らない）。ほかは `None`。
+    fn export_intent(&mut self, intent: Intent, format: ExportFormat) -> Option<PaletteOutcome> {
+        if matches!(intent, Intent::Type(_) | Intent::Erase) {
+            return Some(PaletteOutcome::Stay);
+        }
+        let Intent::Move { step, .. } = intent else {
+            return None;
+        };
+        let forward = match step {
+            CursorStep::Right => true,
+            CursorStep::Left => false,
+            CursorStep::Up
+            | CursorStep::Down
+            | CursorStep::PageUp
+            | CursorStep::PageDown
+            | CursorStep::RowStart
+            | CursorStep::RowEnd
+            | CursorStep::Top
+            | CursorStep::Bottom => return None,
+        };
+        if let Some(&PaletteItem::Export(ExportLine::Aspect(aspect))) =
+            self.items().get(self.selected())
+        {
+            self.mode = PaletteMode::Export {
+                format: format.turned(aspect, forward),
+            };
+        }
+        Some(PaletteOutcome::Stay)
+    }
+
+    /// 書き出しの段で決めた行 `line`。形式の面なら値を次に替え、書き出す行なら閉じて書き出す先を選ばせる。
+    fn export_confirmed(&mut self, line: ExportLine) -> PaletteOutcome {
+        let PaletteMode::Export { format } = self.mode else {
+            return PaletteOutcome::Stay;
+        };
+        match line {
+            ExportLine::Aspect(aspect) => {
+                self.mode = PaletteMode::Export {
+                    format: format.turned(aspect, true),
+                };
+                PaletteOutcome::Stay
+            }
+            ExportLine::Write => PaletteOutcome::Export(format),
+        }
+    }
+
+    /// 書き出しの形式を選ぶ段へ入る。`format` は初めの形式（今のファイルの形式・ADR 0036 の決定 1）。
+    pub fn enter_export(&mut self, format: ExportFormat) {
+        self.mode = PaletteMode::Export { format };
+        self.query.clear();
+        self.selected = 0;
     }
 
     /// 置換の欄で Ctrl+F は検索の欄へ（打った文字と条件を引き継ぐ）。探す文字が空なら、Enter と Alt+A は閉じずに「探す」
@@ -724,6 +803,7 @@ impl CommandPalette {
                 &PaletteItem::Command(_)
                 | &PaletteItem::Key(_)
                 | &PaletteItem::About(_)
+                | &PaletteItem::Export(_)
                 | &PaletteItem::Heading(_),
             )
             | None => PaletteOutcome::Stay,
@@ -776,6 +856,7 @@ impl CommandPalette {
             | PaletteMode::Replace { .. }
             | PaletteMode::Keys
             | PaletteMode::About
+            | PaletteMode::Export { .. }
             | PaletteMode::SaveAs { .. } => PaletteOutcome::Close,
             PaletteMode::Themes { original } => PaletteOutcome::Revert(original),
             PaletteMode::Reading { .. } | PaletteMode::Candidates { .. } => {
@@ -799,6 +880,7 @@ impl CommandPalette {
             PaletteMode::Themes { .. }
             | PaletteMode::Reading { .. }
             | PaletteMode::Candidates { .. }
+            | PaletteMode::Export { .. }
             | PaletteMode::SaveAs { .. } => true,
         };
         if same {
@@ -810,8 +892,15 @@ impl CommandPalette {
 
     /// 道筋を打ち直したので、上書きを尋ねるのをやめる。
     fn stop_asking(&mut self) {
-        if let PaletteMode::SaveAs { overwrite: true } = self.mode {
-            self.mode = PaletteMode::SaveAs { overwrite: false };
+        if let PaletteMode::SaveAs {
+            overwrite: true,
+            export,
+        } = self.mode
+        {
+            self.mode = PaletteMode::SaveAs {
+                overwrite: false,
+                export,
+            };
         }
     }
 
@@ -829,6 +918,7 @@ impl CommandPalette {
             Some(&PaletteItem::Candidate(candidate)) => {
                 PaletteOutcome::CommitReading(ReadingChoice::dialect(candidate.dialect()))
             }
+            Some(&PaletteItem::Export(line)) => self.export_confirmed(line),
             Some(&PaletteItem::Command(command)) => self.choose(command, current_theme),
         }
     }
@@ -847,6 +937,9 @@ impl CommandPalette {
         }
         if command == CommandId::ChooseDialect {
             return PaletteOutcome::OpenCandidates;
+        }
+        if command == CommandId::ExportAs {
+            return PaletteOutcome::OpenExport;
         }
         self.query.clear();
         if command == CommandId::ShowKeys {
@@ -1499,6 +1592,95 @@ mod tests {
         assert_eq!(palette.handle(Intent::Cancel, 0), PaletteOutcome::Close);
     }
 
+    /// 書き出しの段は、初めの形式から始め、Enter と ← → で選んでいる面の値だけを替え、字では絞らない。書き出す行の
+    /// Enter で、選んだ形式を合成ルートへ渡す（ADR 0036 の決定 1）。
+    #[test]
+    fn the_export_stage_turns_values_and_hands_over_the_chosen_format() {
+        let start = ExportFormat::starting(
+            nene_ledger_core::text_format::TextFormat::new(
+                nene_ledger_core::text_encoding::TextEncoding::ShiftJis,
+                nene_ledger_core::dialect::Dialect::rfc4180(),
+            ),
+            None,
+        );
+        let mut palette = CommandPalette::open();
+        palette.enter_export(start);
+        assert_eq!(
+            palette.items(),
+            ExportLine::ALL.map(PaletteItem::Export).to_vec()
+        );
+        let side = |step| Intent::Move {
+            step,
+            mode: SelectionMode::Collapse,
+        };
+        // 文字コード：Enter で次（EUC-JP）、← で前（Shift_JIS）。字を打っても絞らない。
+        let stays = [
+            Intent::Confirm,
+            side(CursorStep::Left),
+            Intent::Type('x'),
+            Intent::Erase,
+        ]
+        .map(|intent| palette.handle(intent, 0));
+        assert_eq!(stays, [PaletteOutcome::Stay; 4]);
+        assert_eq!(palette.query(), "");
+        assert_eq!(palette.mode(), PaletteMode::Export { format: start });
+        // 区切り：→ でタブ。
+        palette.handle(side(CursorStep::Down), 0);
+        palette.handle(side(CursorStep::Right), 0);
+        let tab = start.turned(crate::export_aspect::ExportAspect::Delimiter, true);
+        assert_eq!(palette.mode(), PaletteMode::Export { format: tab });
+        // 書き出す行：← → は何も替えず、Enter で形式を渡す。
+        palette.handle(side(CursorStep::Bottom), 0);
+        palette.handle(side(CursorStep::Right), 0);
+        assert_eq!(palette.mode(), PaletteMode::Export { format: tab });
+        assert_eq!(
+            palette.handle(Intent::Confirm, 0),
+            PaletteOutcome::Export(tab)
+        );
+        assert_eq!(palette.handle(Intent::Cancel, 0), PaletteOutcome::Close);
+    }
+
+    /// 操作の一覧の「形式を変えて書き出す…」は、書き出しの段を開かせる（形式は合成ルートが渡す）。
+    #[test]
+    fn the_export_command_asks_the_root_to_open_the_stage() {
+        let mut palette = CommandPalette::open();
+        palette.insert_text("export");
+        assert_eq!(
+            palette.handle(Intent::Confirm, 0),
+            PaletteOutcome::OpenExport
+        );
+    }
+
+    /// 書き出す先の欄は、上書きを尋ねても打ち直しても形式を持ち続ける（ADR 0036 の決定 2）。
+    #[test]
+    fn the_export_target_stage_keeps_the_format() {
+        let tab = ExportFormat::starting(
+            nene_ledger_core::text_format::TextFormat::new(
+                nene_ledger_core::text_encoding::TextEncoding::Utf8,
+                nene_ledger_core::dialect::Dialect::rfc4180(),
+            ),
+            None,
+        )
+        .turned(crate::export_aspect::ExportAspect::Delimiter, true);
+        let mut target = CommandPalette::open_export_to(String::from("/tmp/a.tsv"), tab);
+        target.ask_overwrite();
+        assert_eq!(
+            target.handle(Intent::Confirm, 0),
+            PaletteOutcome::SaveAs {
+                overwrite: true,
+                export: Some(tab),
+            }
+        );
+        target.handle(Intent::Type('x'), 0);
+        assert_eq!(
+            target.handle(Intent::Confirm, 0),
+            PaletteOutcome::SaveAs {
+                overwrite: false,
+                export: Some(tab),
+            }
+        );
+    }
+
     /// 名前を付けて保存の欄は、既にあるファイルなら一度尋ね、もう一度 Enter を受けるまで上書きの結果を出さない。
     /// 道筋を打ち直せば尋ねるのをやめる（ADR 0028 の決定 5・強制の 3 つ目）。
     #[test]
@@ -1510,21 +1692,42 @@ mod tests {
         }
         assert_eq!(
             palette.handle(Intent::Confirm, 0),
-            PaletteOutcome::SaveAs { overwrite: false }
+            PaletteOutcome::SaveAs {
+                overwrite: false,
+                export: None,
+            }
         );
         // 合成ルートがファイルを見つけて尋ねる。
         palette.ask_overwrite();
-        assert_eq!(palette.mode(), PaletteMode::SaveAs { overwrite: true });
+        assert_eq!(
+            palette.mode(),
+            PaletteMode::SaveAs {
+                overwrite: true,
+                export: None,
+            }
+        );
         assert_eq!(
             palette.handle(Intent::Confirm, 0),
-            PaletteOutcome::SaveAs { overwrite: true }
+            PaletteOutcome::SaveAs {
+                overwrite: true,
+                export: None,
+            }
         );
         // 打ち直すと、もう一度確かめる。
         palette.handle(Intent::Erase, 0);
-        assert_eq!(palette.mode(), PaletteMode::SaveAs { overwrite: false });
+        assert_eq!(
+            palette.mode(),
+            PaletteMode::SaveAs {
+                overwrite: false,
+                export: None,
+            }
+        );
         assert_eq!(
             palette.handle(Intent::Confirm, 0),
-            PaletteOutcome::SaveAs { overwrite: false }
+            PaletteOutcome::SaveAs {
+                overwrite: false,
+                export: None,
+            }
         );
         assert_eq!(palette.handle(Intent::Cancel, 0), PaletteOutcome::Close);
     }
@@ -1580,7 +1783,13 @@ mod tests {
         ));
         let mut asking = asking_to_overwrite();
         asking.insert_text("x");
-        assert_eq!(asking.mode(), PaletteMode::SaveAs { overwrite: false });
+        assert_eq!(
+            asking.mode(),
+            PaletteMode::SaveAs {
+                overwrite: false,
+                export: None,
+            }
+        );
     }
 
     /// 名前を付けて保存の段で、上書きを尋ねている欄（打てば尋ねるのをやめる）。

@@ -18,6 +18,8 @@
 #   char:<ASCII の字>    字を送る
 #   vk:<仮想キーの番号>   修飾の無いキーを送る（13 Enter・9 Tab・27 Esc・113 F2）
 #   keys:<SendKeys の字>  窓を前面にしてキーを送る（^s ＝ Ctrl+S・^z ＝ Ctrl+Z・^+p ＝ Ctrl+Shift+P）
+#   dialog:title / dialog:ok / dialog:cancel   このプロセスが出している OS の画面（名前を付けて保存・書き出す先）の
+#                        名前を書く・既定のボタンを押す・やめる（WM_COMMAND。前面にしなくてよい）。画面が無ければ終了コード 5
 #
 # 🔴 見られないもの：マウスのカーソルの形・IME の確定前の文字列と候補の窓・手で触った手応え・画面の倍率ごとの見え。
 # これらは施主の実機の確認（QLT-013）のまま。このファイルは BOM 付きの UTF-8（Windows PowerShell 5.1 が BOM の無い
@@ -38,6 +40,18 @@ public static class NeneWin {
   [DllImport("user32.dll", EntryPoint="PostMessageW")] public static extern bool PostMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
   [DllImport("user32.dll")] public static extern bool MoveWindow(IntPtr hWnd, int x, int y, int w, int h, bool repaint);
   [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
+  [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern IntPtr FindWindowEx(IntPtr parent, IntPtr after, string cls, string title);
+  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
+  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
+  [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowText(IntPtr hWnd, System.Text.StringBuilder text, int max);
+  public static IntPtr DialogOf(uint pid) {
+    IntPtr found = IntPtr.Zero;
+    while ((found = FindWindowEx(IntPtr.Zero, found, "#32770", null)) != IntPtr.Zero) {
+      uint owner; GetWindowThreadProcessId(found, out owner);
+      if (owner == pid && IsWindowVisible(found)) { return found; }
+    }
+    return IntPtr.Zero;
+  }
 }
 "@
 [void][NeneWin]::SetProcessDPIAware()
@@ -82,6 +96,16 @@ foreach ($command in $Commands) {
     'uni' { foreach ($h in $value.Split(',')) { [void][NeneWin]::PostMessage($hwnd, 0x0102, [IntPtr][Convert]::ToInt32($h, 16), [IntPtr]1); Start-Sleep -Milliseconds 15 } }
     'dbl' { [void][NeneWin]::PostMessage($hwnd, 0x0203, [IntPtr]1, (Point $value)) }
     'title' { $process.Refresh(); Write-Output ("title " + $process.MainWindowTitle) }
+    'dialog' {
+      $dialog = [NeneWin]::DialogOf([uint32]$ProcessId)
+      if ($dialog -eq [IntPtr]::Zero) { Write-Output "no dialog"; exit 5 }
+      switch ($value) {
+        'title' { $text = New-Object System.Text.StringBuilder 256; [void][NeneWin]::GetWindowText($dialog, $text, 256); Write-Output ("dialog " + $text.ToString()) }
+        'ok' { [void][NeneWin]::PostMessage($dialog, 0x0111, [IntPtr]1, [IntPtr]::Zero) }
+        'cancel' { [void][NeneWin]::PostMessage($dialog, 0x0111, [IntPtr]2, [IntPtr]::Zero) }
+        default { Write-Output "unknown: $command"; exit 4 }
+      }
+    }
     default { Write-Output "unknown: $command"; exit 4 }
   }
 }

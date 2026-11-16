@@ -46,11 +46,22 @@ pub fn choose_file() -> Option<PathBuf> {
 /// 既にあるファイルを選べば、OS の画面が上書きしてよいかを尋ねる（`OFN_OVERWRITEPROMPT`・決定 5）。やめれば `None`。
 /// 拡張子を打たなければ `.csv` を付ける。
 #[must_use]
+pub fn choose_save_file(folder: Option<&Path>, name: &str) -> Option<PathBuf> {
+    save_dialog(folder, name, w!("名前を付けて保存 — NeNe Ledger"))
+}
+
+/// 「書き出す先」の画面で、書き出す先を選ばせる（ADR 0036 の決定 2）。受け方は [`choose_save_file`] と同じ。
+#[must_use]
+pub fn choose_export_file(folder: Option<&Path>, name: &str) -> Option<PathBuf> {
+    save_dialog(folder, name, w!("書き出す先 — NeNe Ledger"))
+}
+
+/// 保存先を選ばせる OS の画面（題名 `title`）。
 #[expect(
     unsafe_code,
     reason = "RS-010: Win32 の GetSaveFileNameW を呼ぶ（ADR 0002 の 4・ADR 0028 の決定 4）"
 )]
-pub fn choose_save_file(folder: Option<&Path>, name: &str) -> Option<PathBuf> {
+fn save_dialog(folder: Option<&Path>, name: &str, title: PCWSTR) -> Option<PathBuf> {
     let mut buffer = vec![0_u16; PATH_LIMIT];
     for (slot, unit) in buffer.iter_mut().zip(name.encode_utf16()) {
         *slot = unit;
@@ -75,7 +86,7 @@ pub fn choose_save_file(folder: Option<&Path>, name: &str) -> Option<PathBuf> {
         // 持ち主は今の窓（画面を出している間は押せなくなる・閉じられない）。
         // SAFETY: 呼んだスレッドの今の窓を尋ねるだけ。
         hwndOwner: unsafe { GetActiveWindow() },
-        lpstrTitle: w!("名前を付けて保存 — NeNe Ledger"),
+        lpstrTitle: title,
         lpstrDefExt: w!("csv"),
         Flags: OFN_EXPLORER | OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR,
         ..OPENFILENAMEW::default()

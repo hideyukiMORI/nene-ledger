@@ -22,6 +22,9 @@ use nene_ledger_core::theme_catalog::{COUNT, at};
 use crate::command_id::CommandId;
 use crate::command_palette::CommandPalette;
 use crate::detail_pane::DetailPane;
+use crate::export_aspect::ExportAspect;
+use crate::export_format::ExportFormat;
+use crate::export_line::ExportLine;
 use crate::find_toggle::FindToggle;
 use crate::go_to_target::GoToTarget;
 /// 候補の行のスクロールバーの幅・行との隙間・つまみの最小の長さ（論理 px・パレットの余白 12 の中に収める）。
@@ -52,6 +55,8 @@ const TEXT_INSET: u32 = 12;
 /// 上辺の強調の線の太さ（影の代わり）。
 const ACCENT: u32 = 2;
 /// 配色の見本の 1 辺と間。
+/// 書き出しの段の、値の列の左（名前の左からの画素・面の名前「文字コード」より広く取る）。
+const EXPORT_VALUE: u32 = 112;
 const SWATCH: u32 = 12;
 const SWATCH_GAP: u32 = 2;
 
@@ -339,6 +344,7 @@ impl<'state> PalettePainter<'state> {
             | PaletteMode::Find
             | PaletteMode::Replace { .. }
             | PaletteMode::About
+            | PaletteMode::Export { .. }
             | PaletteMode::SaveAs { .. } => None,
             PaletteMode::Commands => Some(CommandId::ALL.len()),
             PaletteMode::Keys => Some(key_list("").len()),
@@ -367,6 +373,12 @@ impl<'state> PalettePainter<'state> {
                 "Enter で開き直す · Esc で戻す · 試し中: {}",
                 ReadingChoice::dialect(candidate.dialect()).name()
             ),
+            Some(&PaletteItem::Export(ExportLine::Aspect(_))) => {
+                String::from("Enter か ← → で値を替える · 今のファイルは変えません")
+            }
+            Some(&PaletteItem::Export(ExportLine::Write)) => {
+                String::from("Enter で書き出す先を選ぶ · 今のファイルは変えません")
+            }
             Some(
                 &PaletteItem::Command(_)
                 | &PaletteItem::Key(_)
@@ -390,8 +402,8 @@ impl<'state> PalettePainter<'state> {
             self.find_line();
             return;
         }
-        if let PaletteMode::SaveAs { overwrite } = self.palette.mode() {
-            self.save_as_line(overwrite);
+        if let PaletteMode::SaveAs { overwrite, export } = self.palette.mode() {
+            self.save_as_line(overwrite, export);
             return;
         }
         let kind = match self.palette.mode() {
@@ -399,6 +411,7 @@ impl<'state> PalettePainter<'state> {
             | PaletteMode::Find
             | PaletteMode::Replace { .. }
             | PaletteMode::Commands
+            | PaletteMode::Export { .. }
             | PaletteMode::SaveAs { .. } => "操作",
             PaletteMode::Keys => "キー",
             PaletteMode::About => "行",
@@ -561,12 +574,17 @@ impl<'state> PalettePainter<'state> {
         );
     }
 
-    /// 保存先の段の 1 行。上書きを尋ねていればその問い、そうでなければ Enter で保存する案内（ADR 0028 の決定 5）。
-    fn save_as_line(&mut self, overwrite: bool) {
-        let text = if overwrite {
-            String::from("このファイルは既にあります。Enter をもう一度で上書き・Esc でやめる")
-        } else {
-            String::from("Enter で、この道筋に名前を付けて保存する（方言と文字コードは今のまま）")
+    /// 保存先の段の 1 行。上書きを尋ねていればその問い、そうでなければ Enter で保存する（書き出す）案内（ADR 0028 の
+    /// 決定 5・ADR 0036 の決定 2）。
+    fn save_as_line(&mut self, overwrite: bool, export: Option<ExportFormat>) {
+        let text = match (overwrite, export) {
+            (true, _) => {
+                String::from("このファイルは既にあります。Enter をもう一度で上書き・Esc でやめる")
+            }
+            (false, None) => String::from(
+                "Enter で、この道筋に名前を付けて保存する（方言と文字コードは今のまま）",
+            ),
+            (false, Some(format)) => format!("Enter で書き出す（{}）", format.describe()),
         };
         let row = self.layout.row(0);
         let left = row.origin().x().saturating_add(self.px(TEXT_INSET));
@@ -596,6 +614,46 @@ impl<'state> PalettePainter<'state> {
             .join(" · ")
     }
 
+    /// 書き出しの段の右の字：選んでいる形式の面なら替え方、書き出す行なら決めるキー。選んでいない面には出さない
+    /// （全部の行に並べると、値と競って読みにくい）。
+    fn export_aside(line: ExportLine, selected: bool) -> String {
+        match line {
+            ExportLine::Aspect(_) if selected => String::from("← →"),
+            ExportLine::Aspect(_) => String::new(),
+            ExportLine::Write => String::from("Enter"),
+        }
+    }
+
+    /// 書き出しの段の 1 行の名前と右の字。形式の面は、名前と値の 2 列で書く（値の頭をそろえる・ADR 0036 の決定 1）。
+    fn export_row(
+        &mut self,
+        (row, left): (PixelRect, u32),
+        slot: usize,
+        line: ExportLine,
+    ) -> (String, String) {
+        if let ExportLine::Aspect(aspect) = line {
+            self.export_value(row, left, aspect);
+        }
+        let selected = self.layout.first().saturating_add(slot) == self.palette.selected();
+        (
+            String::from(line.name()),
+            Self::export_aside(line, selected),
+        )
+    }
+
+    /// 書き出しの段の、面 `aspect` の今の値を値の列に書く（名前の左 `left` から決まった幅だけ右）。
+    fn export_value(&mut self, row: PixelRect, left: u32, aspect: ExportAspect) {
+        let PaletteMode::Export { format } = self.palette.mode() else {
+            return;
+        };
+        let at = left.saturating_add(self.px(EXPORT_VALUE));
+        self.text_at(
+            from_left(row, at),
+            String::from(format.value_name(aspect)),
+            self.colors.cursor(),
+        );
+    }
+
     /// 配色の右の字：明暗と、開いたときの配色の印（GitHub Issue #312）。
     fn theme_aside(&self, position: usize) -> String {
         let appearance = match at(position).appearance() {
@@ -615,6 +673,7 @@ impl<'state> PalettePainter<'state> {
             | PaletteMode::About
             | PaletteMode::Reading { .. }
             | PaletteMode::Candidates { .. }
+            | PaletteMode::Export { .. }
             | PaletteMode::SaveAs { .. } => String::from(appearance),
         }
     }
@@ -662,6 +721,7 @@ impl<'state> PalettePainter<'state> {
             }
             PaletteItem::Key(guide) => (String::from(guide.name()), String::from(guide.keys())),
             PaletteItem::About(line) => (line.text(), String::new()),
+            PaletteItem::Export(line) => self.export_row((row, left), slot, line),
             // 上で描いて戻っている。
             PaletteItem::Heading(heading) => (String::from(heading.name()), String::new()),
             PaletteItem::Theme(position) => {
@@ -703,6 +763,7 @@ impl<'state> PalettePainter<'state> {
             | PaletteMode::Replace { .. }
             | PaletteMode::Keys
             | PaletteMode::About
+            | PaletteMode::Export { .. }
             | PaletteMode::SaveAs { .. }
             | PaletteMode::Themes { .. } => false,
         }
@@ -890,7 +951,13 @@ fn placeholder(mode: PaletteMode) -> &'static str {
         PaletteMode::GoTo => "行の番号（例: 1200、列も選ぶなら 1200,3）",
         PaletteMode::Find => "探す文字（Enter で次・Shift+Enter で前）",
         PaletteMode::Replace { .. } => "探す文字",
-        PaletteMode::SaveAs { .. } => "保存先のファイルの道筋（例: /srv/data/表.csv）",
+        PaletteMode::SaveAs { export: None, .. } => {
+            "保存先のファイルの道筋（例: /srv/data/表.csv）"
+        }
+        PaletteMode::SaveAs {
+            export: Some(_), ..
+        } => "書き出す先のファイルの道筋（例: /srv/data/表-書き出し.csv）",
+        PaletteMode::Export { .. } => "書き出す形式を選ぶ（↑ ↓ で行 · ← → で値）",
         PaletteMode::Keys => "キーか操作の名前で絞る（例: ctrl, shift, kopi-）",
         PaletteMode::About => "このアプリについて（Esc で閉じる）",
         PaletteMode::Themes { .. } => "配色の名前を英字で（例: solarized）",
@@ -975,7 +1042,7 @@ mod tests {
         let commands = palette.paint(view(), colors(), DetailPane::Open);
         let shown = texts(&commands);
         assert!(shown.contains(&"したいことを打って探す（例: 保存・置換・文字化け）"));
-        assert!(shown.contains(&"52 / 52"));
+        assert!(shown.contains(&"53 / 53"));
         // 空の一覧は見出しから：よく使う（開く・保存・探す・置換・元に戻す）と、その下の分類（GitHub Issue #420）。
         assert!(shown.contains(&"よく使う") && shown.contains(&"ファイル"));
         assert!(shown.contains(&"ファイルを開く…") && shown.contains(&"Ctrl+O"));
@@ -1061,7 +1128,7 @@ mod tests {
         let commands = palette.paint(view(), colors(), DetailPane::Closed);
         let shown = texts(&commands);
         assert!(shown.contains(&"“xyz” に合う操作は無い"));
-        assert!(shown.contains(&"0 / 52") && shown.contains(&"xyz"));
+        assert!(shown.contains(&"0 / 53") && shown.contains(&"xyz"));
         assert!(fills(&commands, colors().selection()).is_empty());
     }
 
@@ -1449,6 +1516,43 @@ mod tests {
         );
         let short = CommandPalette::open_save_as(String::from("/tmp/a.csv"));
         assert!(texts(&short.paint(view(), colors(), DetailPane::Closed)).contains(&"/tmp/a.csv"));
+    }
+
+    /// 書き出しの段は、面の名前と今の値を 2 列で見せ、案内の行で「今のファイルは変えない」と言う。書き出す先の欄は、
+    /// 選んだ形式を言う（ADR 0036 の決定 1・2）。
+    #[test]
+    fn the_export_stage_shows_each_value_and_says_the_file_is_left_alone() {
+        let format = ExportFormat::starting(
+            nene_ledger_core::text_format::TextFormat::new(
+                nene_ledger_core::text_encoding::TextEncoding::ShiftJis,
+                nene_ledger_core::dialect::Dialect::rfc4180(),
+            ),
+            Some(nene_ledger_core::line_ending::LineEnding::Lf),
+        );
+        let mut palette = CommandPalette::open();
+        palette.enter_export(format);
+        let commands = palette.paint(view(), colors(), DetailPane::Closed);
+        let shown = texts(&commands);
+        for wanted in [
+            "文字コード",
+            "Shift_JIS（CP932）",
+            "区切り",
+            "カンマ",
+            "改行",
+            "LF",
+            "引用符",
+            "要るときだけ",
+            "この形式で書き出す…",
+            "Enter か ← → で値を替える · 今のファイルは変えません",
+        ] {
+            assert!(shown.contains(&wanted), "{wanted} in {shown:?}");
+        }
+        let target = CommandPalette::open_export_to(String::from("/tmp/a.csv"), format);
+        assert!(
+            texts(&target.paint(view(), colors(), DetailPane::Closed)).contains(
+                &"Enter で書き出す（Shift_JIS（CP932） · カンマ · LF · 引用符 要るときだけ）"
+            )
+        );
     }
 
     /// 2 段目の文言と印：文字コードの日本語の注・今の配色の印・見出しの段の案内・このアプリについては選ぶ色を付けない

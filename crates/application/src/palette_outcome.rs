@@ -1,5 +1,6 @@
 //! パレットに意図を渡した結果、合成ルートがすること。
 
+use crate::export_format::ExportFormat;
 use crate::intent::Intent;
 use crate::reading_aspect::ReadingAspect;
 use crate::reading_choice::ReadingChoice;
@@ -34,7 +35,13 @@ pub enum PaletteOutcome {
     SaveAs {
         /// 上書きを確かめたか。
         overwrite: bool,
+        /// 書き出す先なら、その形式（ADR 0036 の決定 2）。名前を付けて保存なら `None`。
+        export: Option<ExportFormat>,
     },
+    /// 書き出しの形式を選ぶ段を開く（合成ルートが今の形式を渡して `CommandPalette::enter_export` を呼ぶ・ADR 0036）。
+    OpenExport,
+    /// 閉じて、この形式で書き出す先を選ばせる（ADR 0036 の決定 2）。
+    Export(ExportFormat),
     /// 開いたまま、打った文字を今の条件で探す（合成ルートが `CommandPalette::query` と `find_options` を読む）。
     /// `forward` なら次（Enter・F3）、そうでなければ前（Shift+Enter・Shift+F3）。
     Find {

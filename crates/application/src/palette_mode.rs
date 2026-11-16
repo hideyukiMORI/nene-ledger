@@ -1,5 +1,6 @@
 //! パレットの段。
 
+use crate::export_format::ExportFormat;
 use crate::reading_aspect::ReadingAspect;
 use crate::reading_choice::ReadingChoice;
 
@@ -31,6 +32,13 @@ pub enum PaletteMode {
     SaveAs {
         /// 上書きを尋ねているか。
         overwrite: bool,
+        /// 書き出す先を打っているなら、その形式（ADR 0036 の決定 2）。名前を付けて保存なら `None`。
+        export: Option<ExportFormat>,
+    },
+    /// 書き出しの形式を選ぶ段（ADR 0036 の決定 1）。`format` は今選んでいる形式（初めは今のファイルの形式）。
+    Export {
+        /// 選んでいる形式。
+        format: ExportFormat,
     },
     /// 探す文字を打つ段（Ctrl+F・ADR 0030 の決定 1）。条件は `CommandPalette::find_options`。
     Find,
@@ -48,7 +56,7 @@ pub enum PaletteMode {
 }
 
 impl PaletteMode {
-    /// 選んでいる候補をその場で試す段か（配色・読み方・判別の候補）。試しの案内の行を持つ。
+    /// 選んでいる候補をその場で試す段か（配色・読み方・判別の候補）。試した表が見えるように、窓の下へ寄せる。
     #[must_use]
     pub fn tries_the_selection(self) -> bool {
         match self {
@@ -59,7 +67,14 @@ impl PaletteMode {
             | Self::Replace { .. }
             | Self::Keys
             | Self::About
+            | Self::Export { .. }
             | Self::SaveAs { .. } => false,
         }
+    }
+
+    /// 欄の下に案内の行を持つ段か（その場で試す段と、値を替える書き出しの形式の段）。
+    #[must_use]
+    pub fn has_hint(self) -> bool {
+        self.tries_the_selection() || matches!(self, Self::Export { .. })
     }
 }

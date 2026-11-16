@@ -45,6 +45,15 @@ impl GoToTarget {
         }
     }
 
+    /// レコード `record`（0 始まり）の、元の列 `column`（0 始まり）へ飛ぶ先。
+    #[must_use]
+    pub const fn at_cell(record: u64, column: usize) -> Self {
+        Self {
+            record,
+            column: Some(column),
+        }
+    }
+
     /// レコードの番号（0 始まり）。
     #[must_use]
     pub fn record(self) -> u64 {
