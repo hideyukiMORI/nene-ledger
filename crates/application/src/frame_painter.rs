@@ -20,7 +20,9 @@ use nene_ledger_core::row_id::RowId;
 use nene_ledger_core::table_layout::TableLayout;
 use nene_ledger_core::text_role::TextRole;
 
-use crate::cell_display::{fitted, fitted_spans, mark_spans, shown_spans, single_line};
+use crate::cell_display::{
+    fitted, fitted_measured, fitted_spans, mark_spans, shown_spans, single_line,
+};
 use crate::cell_mark::CellMark;
 use crate::editing_cell::EditingCell;
 use crate::ranges::Ranges;
@@ -931,7 +933,12 @@ impl<'view> FramePainter<'view> {
                 .saturating_add(spare / 2)
                 .saturating_add(self.metrics.ascent()),
         );
-        (fitted(text, columns), baseline)
+        // UI が字の送り幅を測っていれば、その幅で省略の位置を決める（測る前は半角 1・全角 2 の見積もり・GitHub Issue #532）。
+        let shown = match self.advances {
+            Some(advances) => fitted_measured(text, room, advances),
+            None => fitted(text, columns),
+        };
+        (shown, baseline)
     }
 }
 
