@@ -688,6 +688,7 @@ impl Document {
             SaveProblem::ChangedOutside
             | SaveProblem::Locked
             | SaveProblem::HardLinked
+            | SaveProblem::NoSpace { .. }
             | SaveProblem::Interrupted
             | SaveProblem::Unplannable
             | SaveProblem::Untitled

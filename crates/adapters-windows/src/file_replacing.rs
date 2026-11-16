@@ -1,4 +1,4 @@
-//! `ReplaceFileW` による置き換え（ADR 0025 の決定 3・4・施主の判断 1・3）。
+//! `ReplaceFileW` による置き換えと、保存先の空き（ADR 0025 の決定 2・3・4・施主の判断 1・3）。
 
 use std::path::Path;
 use std::time::Duration;
@@ -10,7 +10,9 @@ use windows::Win32::Foundation::{
     ERROR_UNABLE_TO_MOVE_REPLACEMENT, ERROR_UNABLE_TO_MOVE_REPLACEMENT_2,
     ERROR_UNABLE_TO_REMOVE_REPLACED, WIN32_ERROR,
 };
-use windows::Win32::Storage::FileSystem::{REPLACEFILE_IGNORE_MERGE_ERRORS, ReplaceFileW};
+use windows::Win32::Storage::FileSystem::{
+    GetDiskFreeSpaceExW, REPLACEFILE_IGNORE_MERGE_ERRORS, ReplaceFileW,
+};
 use windows::core::{HRESULT, HSTRING, PCWSTR};
 
 /// 最初の再試行までの待ち。倍にしながら `RETRIES` 回まで試す（合わせて約 1.6 秒・施主の判断 3）。
@@ -45,6 +47,24 @@ impl Replacing for FileReplacing {
             attempt = attempt.saturating_add(1);
         }
     }
+
+    fn free_space(&self, folder: &Path) -> Option<u64> {
+        free_bytes(&HSTRING::from(folder))
+    }
+}
+
+/// フォルダ `folder` のあるボリュームの、今の利用者が使える空きのバイト数（割り当ての上限があればその内・SAVE-02・
+/// GitHub Issue #515）。読めなければ `None`。
+#[expect(
+    unsafe_code,
+    reason = "RS-010: Win32 の GetDiskFreeSpaceExW を呼ぶ（ADR 0002 の 4・ADR 0025 の決定 2）"
+)]
+fn free_bytes(folder: &HSTRING) -> Option<u64> {
+    let mut available = 0_u64;
+    // SAFETY: フォルダの名前は呼び出しの間生きている HSTRING（ヌルで終わる UTF-16）。受け取る先は、呼び出しの間
+    // 生きている u64 への書き込める参照 1 つだけで、ほかの 2 つは受け取らない（NULL）。
+    unsafe { GetDiskFreeSpaceExW(folder, Some(&raw mut available), None, None) }.ok()?;
+    Some(available)
 }
 
 #[expect(
@@ -98,6 +118,21 @@ mod tests {
         let _cleared = fs::remove_dir_all(&folder);
         fs::create_dir_all(&folder).unwrap();
         folder
+    }
+
+    /// 一時フォルダのあるボリュームの空きを読める。無いフォルダは読めない（確かめずに書く側に倒れる・SAVE-02）。
+    #[test]
+    fn the_free_space_of_a_folder_is_read() {
+        let folder = folder("space");
+        assert!(
+            FileReplacing
+                .free_space(&folder)
+                .is_some_and(|free| free > 0)
+        );
+        assert_eq!(
+            FileReplacing.free_space(&folder.join("no-such-folder")),
+            None
+        );
     }
 
     /// 掴まれていない原本は、一時ファイルの中身に置き換わり、一時ファイルは無くなる（ADR 0025 の決定 4）。

@@ -75,7 +75,7 @@ where
 {
     let opened = match expected {
         SaveTarget::Existing(opened) => opened,
-        SaveTarget::Absent => return save_absent(target, encoding, source, produce),
+        SaveTarget::Absent => return save_absent(target, encoding, (source, replacing), produce),
     };
     let target =
         std::fs::canonicalize(target).map_err(|error| SaveFailure::Target(error.kind()))?;
@@ -85,6 +85,8 @@ where
     // Unix では、開いているほかのプロセスがあっても `rename` で置き換えられる（確かめることは無い）。
     #[cfg(windows)]
     crate::lock_probe::probe(&target).map_err(SaveFailure::Blocked)?;
+    // 一時ファイルに全体を書くので、原本と同じだけの空きが要る（SAVE-02）。
+    enough_space(replacing, target.parent(), Some(metadata.len()))?;
     let (file, temporary) = create_beside(&target).map_err(SaveFailure::Write)?;
     if let Err(failure) = write_streamed(file, encoding, source, produce)
         .and_then(|()| unchanged_since(&target, opened))
@@ -108,14 +110,15 @@ where
 /// # Errors
 ///
 /// [`SaveFailure`] のとおり。
-fn save_absent<S, P>(
+fn save_absent<S, R, P>(
     target: &Path,
     encoding: TextEncoding,
-    source: &mut S,
+    (source, replacing): (&mut S, &R),
     produce: P,
 ) -> Result<(), SaveFailure>
 where
     S: SourceBytes<Failure = ErrorKind>,
+    R: Replacing<Location = Path>,
     P: FnOnce(&mut dyn PlanSink) -> Result<(), SaveFailure>,
 {
     let name = target
@@ -129,6 +132,7 @@ where
         std::fs::canonicalize(folder).map_err(|error| SaveFailure::Target(error.kind()))?;
     let created = folder.join(name);
     still_absent(&created)?;
+    enough_space(replacing, Some(&folder), source.size())?;
     let (file, temporary) = create_beside(&created).map_err(SaveFailure::Write)?;
     if let Err(failure) = write_streamed(file, encoding, source, produce)
         .and_then(|()| still_absent(&created))
@@ -143,6 +147,23 @@ where
     })?;
     sync_folder(&folder);
     Ok(())
+}
+
+/// 書き始める前に、フォルダ `folder` のボリュームの空きが、書く量の見積もり `needed` に足りるか（SAVE-02・ADR 0025 の
+/// 決定 2）。見積もりは原本の大きさ（書き換えの増分は入れない。足りなくなれば、書いている途中で一時ファイルを消して
+/// 止まる）。空きか見積もりが分からなければ確かめない。
+fn enough_space<R: Replacing<Location = Path>>(
+    replacing: &R,
+    folder: Option<&Path>,
+    needed: Option<u64>,
+) -> Result<(), SaveFailure> {
+    let (Some(folder), Some(needed)) = (folder, needed) else {
+        return Ok(());
+    };
+    match replacing.free_space(folder) {
+        Some(free) if free < needed => Err(SaveFailure::NoSpace { needed, free }),
+        Some(_) | None => Ok(()),
+    }
 }
 
 /// 原本が読み始めたときのままか（名前を付けて保存で、原本が保存先と別のとき・GitHub Issue #126）。

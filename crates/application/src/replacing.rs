@@ -18,4 +18,11 @@ pub trait Replacing {
         replacement: &Self::Location,
         target: &Self::Location,
     ) -> Result<(), ReplaceFailure>;
+
+    /// フォルダ `folder` のあるボリュームの、今の利用者が使える空きのバイト数（保存を書き始める前に確かめる・SAVE-02・
+    /// ADR 0025 の決定 2・GitHub Issue #515）。OS から読めない・読む口が無いなら `None`（確かめずに書く）。既定は `None`
+    /// （std には空きを読む API が無い。Unix は `rustix` を足すかを M2 の終わりに決める・ADR 0025 の施主の判断 6）。
+    fn free_space(&self, _folder: &Self::Location) -> Option<u64> {
+        None
+    }
 }

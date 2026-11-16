@@ -261,6 +261,10 @@ pub(crate) fn problem_of(failure: &SavingFailure) -> SaveProblem {
             .next()
             .map_or(SaveProblem::Other, SaveProblem::Unrepresentable),
         SavingFailure::Save(SaveFailure::HardLinked(_)) => SaveProblem::HardLinked,
+        SavingFailure::Save(SaveFailure::NoSpace { needed, free }) => SaveProblem::NoSpace {
+            needed: *needed,
+            free: *free,
+        },
         SavingFailure::Save(SaveFailure::Cancelled) => SaveProblem::Cancelled,
         SavingFailure::Save(
             SaveFailure::Target(_)
@@ -304,6 +308,9 @@ pub(crate) fn describe(failure: &SavingFailure) -> String {
         SavingFailure::Save(SaveFailure::Cancelled) => {
             String::from("保存をやめた（一時ファイルは消した・原本は元のまま）")
         }
+        SavingFailure::Save(SaveFailure::NoSpace { needed, free }) => format!(
+            "保存先の空きが足りないので、保存を始めなかった（要る {needed} バイト・空き {free} バイト・原本は元のまま）"
+        ),
         SavingFailure::Save(save) => format!("保存できなかった: {save:?}"),
     }
 }

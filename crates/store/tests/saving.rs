@@ -432,6 +432,87 @@ mod saving {
         assert!(leftovers(&dir).is_empty());
     }
 
+    /// 空きを答える置き換え（置き換えは普通に行う）。
+    struct Roomy(u64);
+
+    impl Replacing for Roomy {
+        type Location = Path;
+
+        fn replace(&self, replacement: &Path, target: &Path) -> Result<(), ReplaceFailure> {
+            RenameReplacing.replace(replacement, target)
+        }
+
+        fn free_space(&self, _: &Path) -> Option<u64> {
+            Some(self.0)
+        }
+    }
+
+    /// 保存先の空きが原本の大きさより少なければ、書き始めない：原本はそのまま・一時ファイルも作らない。足りれば
+    /// 普通に保存する（SAVE-02・ADR 0025 の決定 2・GitHub Issue #515）。
+    #[test]
+    fn a_volume_without_room_is_refused_before_anything_is_written() {
+        let dir = folder("space");
+        let target = dir.join("t.csv");
+        let original = b"id,name\r\n1,a\r\n".to_vec();
+        std::fs::write(&target, &original).unwrap();
+        let mut plan = whole(original.len());
+        plan.text("2,b\r\n");
+        let length = u64::try_from(original.len()).unwrap();
+        let saved_with = |free: u64| {
+            save(
+                &target,
+                (
+                    &plan,
+                    TextEncoding::Utf8,
+                    SaveTarget::Existing(stamp_of(&target).unwrap()),
+                ),
+                &mut Bytes(original.clone()),
+                &Roomy(free),
+            )
+        };
+        assert_eq!(
+            saved_with(length - 1),
+            Err(SaveFailure::NoSpace {
+                needed: length,
+                free: length - 1
+            })
+        );
+        assert_eq!(std::fs::read(&target).unwrap(), original);
+        assert!(leftovers(&dir).is_empty());
+        saved_with(length).unwrap();
+        assert_eq!(std::fs::read(&target).unwrap().len(), original.len() + 5);
+    }
+
+    /// 名前を付けて保存でも、原本の大きさが分かれば、保存先の空きを先に確かめる。
+    #[test]
+    fn saving_as_checks_the_room_when_the_source_tells_its_size() {
+        struct Sized(Vec<u8>);
+        impl SourceBytes for Sized {
+            type Failure = ErrorKind;
+
+            fn read_at(&mut self, offset: u64, buffer: &mut [u8]) -> Result<usize, ErrorKind> {
+                Bytes(self.0.clone()).read_at(offset, buffer)
+            }
+
+            fn size(&self) -> Option<u64> {
+                u64::try_from(self.0.len()).ok()
+            }
+        }
+        let dir = folder("space-as");
+        let target = dir.join("copy.csv");
+        let original = b"id\r\n1\r\n".to_vec();
+        let plan = whole(original.len());
+        let refused = save(
+            &target,
+            (&plan, TextEncoding::Utf8, SaveTarget::Absent),
+            &mut Sized(original.clone()),
+            &Roomy(3),
+        );
+        assert_eq!(refused, Err(SaveFailure::NoSpace { needed: 7, free: 3 }));
+        assert!(!target.exists());
+        assert!(leftovers(&dir).is_empty());
+    }
+
     /// まだ無いはずのファイルができていれば、書かない（上書きの確認を飛ばさない）。
     #[test]
     fn saving_as_a_new_file_refuses_a_file_that_appeared() {
