@@ -916,7 +916,19 @@ impl Document {
         }
         // 見出しも渡す（まだ幅を決めていない列の仮の幅と、初めて窓に入った列の幅に見出しの名前を含める・ADR 0033 の決定 3）。
         let fresh: Vec<&ViewRow> = self.header.iter().chain(view.rows()).collect();
+        // この読みで初めて幅が決まる列（新しい列・まだ決めていなかった列）は、測った字の幅でも入り切るようにする
+        // （GitHub Issue #530。決めてある列の幅は変えない・VIEW-02）。
+        let was_open: Vec<bool> = (0..self.widths.columns().len())
+            .map(|column| self.widths.is_unsettled(column))
+            .collect();
         widen_to(&mut self.widths, &fresh);
+        if let Some(advances) = self.advances.as_deref() {
+            let settled: Vec<usize> = (0..self.widths.columns().len())
+                .filter(|&column| was_open.get(column).copied().unwrap_or(true))
+                .filter(|&column| !self.widths.is_unsettled(column))
+                .collect();
+            widen_measured(&mut self.widths, advances, &fresh, settled);
+        }
         self.view = view;
         self.cuts.clear();
     }
@@ -4052,21 +4064,9 @@ impl Document {
     /// あるので、測った幅では入り切らない列（`m`・`w` の多い英字の見出しなど）を、見出しと今の窓の行に合わせて広げる
     /// （狭めない・利用者が変えた幅は別に持つのでそのまま・GitHub Issue #528）。
     pub fn set_advances(&mut self, advances: &CharAdvances) {
-        let half = advances.of('0').max(1);
-        let needed: Vec<u32> = (0..self.widths.columns().len())
-            .map(|column| {
-                self.header
-                    .iter()
-                    .chain(self.view.rows())
-                    .filter_map(|row| row.cells().get(column))
-                    .map(|value| measured_columns(advances, value, half))
-                    .max()
-                    .unwrap_or(0)
-            })
-            .collect();
-        for (column, columns) in needed.into_iter().enumerate() {
-            self.widths.widen_to(column, columns);
-        }
+        let shown: Vec<&ViewRow> = self.header.iter().chain(self.view.rows()).collect();
+        let all = 0..self.widths.columns().len();
+        widen_measured(&mut self.widths, advances, &shown, all);
         self.advances = Some(Box::new(advances.clone()));
     }
 
@@ -6681,6 +6681,25 @@ fn on_frame(
     (in_columns && (above || below)) || (in_rows && (before || after))
 }
 
+/// 列 `columns` の幅を、行 `rows` の値が測った字の送り幅 `advances` で入り切るまで広げる（狭めない・GitHub Issue #528）。
+fn widen_measured<I: IntoIterator<Item = usize>>(
+    widths: &mut ColumnWidths,
+    advances: &CharAdvances,
+    rows: &[&ViewRow],
+    columns: I,
+) {
+    let half = advances.of('0').max(1);
+    for column in columns {
+        let needed = rows
+            .iter()
+            .filter_map(|row| row.cells().get(column))
+            .map(|value| measured_columns(advances, value, half))
+            .max()
+            .unwrap_or(0);
+        widths.widen_to(column, needed);
+    }
+}
+
 /// 値 `value` を 1 行にして描くのに要る幅を、半角の幅 `half`（`SUBPIXELS` 分の 1 画素）の何字ぶんかで（切り上げ）。
 fn measured_columns(advances: &CharAdvances, value: &str, half: u32) -> u32 {
     let width = single_line(value).chars().fold(0_u32, |sum, character| {
@@ -8064,9 +8083,15 @@ mod tests {
         advances.set('m', 16 * SUBPIXELS);
         document.set_advances(&advances);
         assert_eq!(document.widths().columns(), [12, MIN_COLUMN_COLUMNS]);
+        // 後から窓に入って初めて幅が決まる列（ここでは 3 列目が増えた）も、測った幅で決まる。決めてある列は変えない。
+        document.show(
+            0,
+            table(&[&["memo", "id", "www"], &["mmmmmmmm", "1", "mm"]]),
+        );
+        assert_eq!(document.widths().columns(), [12, MIN_COLUMN_COLUMNS, 4]);
         // 等幅に戻っても（文字の大きさを変えた後など）、狭めない。
         document.set_advances(&CharAdvances::uniform(8));
-        assert_eq!(document.widths().columns(), [12, MIN_COLUMN_COLUMNS]);
+        assert_eq!(document.widths().columns(), [12, MIN_COLUMN_COLUMNS, 4]);
         assert!(document.advances().is_some());
     }
 
