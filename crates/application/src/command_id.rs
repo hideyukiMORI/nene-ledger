@@ -86,6 +86,8 @@ pub enum CommandId {
     PreviousRaggedRow,
     /// ファイルを選んで新しい窓で開く（Ctrl+O・GitHub Issue #344）。
     OpenFile,
+    /// 原本を同じ読み方のまま読み直す（F5・ADR 0039 の決定 2）。
+    Reload,
     /// 書き換えを保存する（ADR 0026 の決定 6）。
     Save,
     /// 名前を付けて保存する。
@@ -126,6 +128,14 @@ pub enum CommandId {
     ShowAbout,
 }
 
+/// カーソルを `step` で動かす意図（選択は畳む）。
+const fn moving(step: CursorStep) -> Intent {
+    Intent::Move {
+        step,
+        mode: SelectionMode::Collapse,
+    }
+}
+
 /// 「判別の候補から選ぶ…」の英語の検索語。
 const DIALECT_KEYWORDS: &[&str] = &[
     "candidates",
@@ -143,7 +153,7 @@ const EXPORT_KEYWORDS: &[&str] = &[
 
 impl CommandId {
     /// すべての操作（何も打たないときの順）。
-    pub const ALL: [Self; 53] = [
+    pub const ALL: [Self; 54] = [
         Self::Top,
         Self::Bottom,
         Self::GoTo,
@@ -177,6 +187,7 @@ impl CommandId {
         Self::PreviousRaggedRow,
         Self::GoToUnclosedQuote,
         Self::OpenFile,
+        Self::Reload,
         Self::Save,
         Self::SaveAs,
         Self::ExportAs,
@@ -212,9 +223,12 @@ impl CommandId {
     #[must_use]
     pub const fn section(self) -> PaletteHeading {
         match self {
-            Self::OpenFile | Self::Save | Self::SaveAs | Self::ExportAs | Self::NewTable => {
-                PaletteHeading::File
-            }
+            Self::OpenFile
+            | Self::Reload
+            | Self::Save
+            | Self::SaveAs
+            | Self::ExportAs
+            | Self::NewTable => PaletteHeading::File,
             Self::Find
             | Self::FindNext
             | Self::FindPrevious
@@ -306,6 +320,7 @@ impl CommandId {
             Self::Replace => "置き換える（探して）",
             Self::OpenFile => "ファイルを開く…",
             Self::Save => "変えた所を保存する",
+            Self::Reload => "ファイルを読み直す",
             Self::SaveAs => "名前を付けて保存する",
             Self::ExportAs => "形式を変えて書き出す…",
             Self::NewTable => "新しい表を作る",
@@ -366,6 +381,7 @@ impl CommandId {
             Self::Replace => "おきかえる",
             Self::OpenFile => "ふぁいるをひらく",
             Self::Save => "かえたところをほぞんする",
+            Self::Reload => "ふぁいるをよみなおす",
             Self::SaveAs => "なまえをつけてほぞんする",
             Self::ExportAs => "けいしきをかえてかきだす",
             Self::NewTable => "あたらしいひょうをつくる",
@@ -425,6 +441,7 @@ impl CommandId {
             Self::Replace => &["replace", "find", "okikae", "chikan"],
             Self::OpenFile => &["open", "file", "load"],
             Self::Save => &["save", "write"],
+            Self::Reload => &["reload", "refresh", "revert", "reread"],
             Self::SaveAs => &["saveas", "save as"],
             Self::ExportAs => EXPORT_KEYWORDS,
             Self::NewTable => &["new", "create", "blank"],
@@ -477,6 +494,7 @@ impl CommandId {
             Self::Replace => &["置換", "検索", "書き換え"],
             Self::OpenFile => &["読み込み", "オープン"],
             Self::Save => &["上書き保存", "書き出し"],
+            Self::Reload => &["再読み込み", "リロード", "更新", "外で変わった"],
             Self::SaveAs => &["別名"],
             Self::ExportAs => &[
                 "エクスポート",
@@ -559,6 +577,7 @@ impl CommandId {
             Self::Replace => Some("Ctrl+H"),
             Self::OpenFile => Some("Ctrl+O"),
             Self::Save => Some("Ctrl+S"),
+            Self::Reload => Some("F5"),
             Self::SaveAs => Some("Ctrl+Shift+S"),
             Self::NewTable => Some("Ctrl+N"),
             Self::Undo => Some("Ctrl+Z"),
@@ -606,6 +625,7 @@ impl CommandId {
             | Self::OpenFile
             | Self::Save
             | Self::SaveAs
+            | Self::Reload
             | Self::ExportAs
             | Self::NewTable
             | Self::Undo
@@ -629,10 +649,6 @@ impl CommandId {
     /// 実行する意図。配色と読み方を選ぶ操作は 2 段目を開くので `None`。
     #[must_use]
     pub fn intent(self) -> Option<Intent> {
-        let moving = |step| Intent::Move {
-            step,
-            mode: SelectionMode::Collapse,
-        };
         let ragged = |forward| Intent::Root(RootCommand::FindRagged { forward });
         match self {
             Self::Top => Some(moving(CursorStep::Top)),
@@ -673,6 +689,7 @@ impl CommandId {
             Self::PreviousRaggedRow => Some(ragged(false)),
             Self::OpenFile => Some(Intent::Root(RootCommand::OpenFile)),
             Self::Save => Some(Intent::Save),
+            Self::Reload => Some(Intent::Root(RootCommand::Reload)),
             Self::SaveAs => Some(Intent::SaveAs),
             Self::NewTable => Some(Intent::Root(RootCommand::NewTable)),
             Self::Undo => Some(Intent::Undo),

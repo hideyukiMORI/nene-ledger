@@ -19,6 +19,9 @@ pub trait Session {
     /// 今の窓 `view` の画面。
     fn frame(&self, view: WindowView) -> Frame;
 
+    /// 窓が前面に来た。原本が外から変わっていないかを確かめる（ADR 0039 の決定 1）。`view` は今の窓。
+    fn activated(&mut self, view: WindowView);
+
     /// 起こされた。作業のスレッドの知らせと時計の刻みを状態に取り込む。`view` は今の窓。
     fn refresh(&mut self, view: WindowView);
 

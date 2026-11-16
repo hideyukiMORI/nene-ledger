@@ -45,6 +45,7 @@ const XK_H: u32 = 0x68;
 const XK_W: u32 = 0x77;
 const XK_R: u32 = 0x72;
 const XK_F3: u32 = 0xffc0;
+const XK_F5: u32 = 0xffc2;
 const XK_F8: u32 = 0xffc5;
 const XK_U: u32 = 0x75;
 const XK_T: u32 = 0x74;
@@ -218,6 +219,8 @@ fn editing_intent(keysym: u32, typed: Option<char>, state: KeyButMask) -> Option
         XK_F3 => Some(Intent::FindAgain { forward: true }),
         // 列の数が見出しと違う次の・前の行へ（VS Code の「次の問題へ」と同じ F8・GitHub Issue #377）。
         XK_F8 => Some(Intent::Root(RootCommand::FindRagged { forward: !shift })),
+        // 原本を読み直す（ブラウザーとエクスプローラーと同じ F5・ADR 0039 の決定 2）。
+        XK_F5 => Some(Intent::Root(RootCommand::Reload)),
         XK_ESCAPE => Some(Intent::Cancel),
         XK_RETURN | XK_KP_ENTER => Some(return_intent(state)),
         XK_TAB if shift => Some(Intent::Advance(CursorStep::Left)),
@@ -714,6 +717,15 @@ mod tests {
         assert_eq!(
             key_intent(XK_Z, Some('z'), plain()),
             Some(Intent::Type('z'))
+        );
+    }
+
+    /// F5 は原本を読み直す（ADR 0039 の決定 2）。
+    #[test]
+    fn f5_reloads_the_file() {
+        assert_eq!(
+            key_intent(XK_F5, None, plain()),
+            Some(Intent::Root(RootCommand::Reload))
         );
     }
 

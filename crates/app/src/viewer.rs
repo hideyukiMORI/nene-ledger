@@ -21,6 +21,8 @@ use nene_ledger_application::job_progress::JobProgress;
 use nene_ledger_application::job_report::JobReport;
 use nene_ledger_application::note_tone::NoteTone;
 use nene_ledger_application::notice::Notice;
+use nene_ledger_application::outside_change::OutsideChange;
+use nene_ledger_application::outside_notice::OutsideNotice;
 use nene_ledger_application::palette_layout::PaletteLayout;
 use nene_ledger_application::palette_mode::PaletteMode;
 use nene_ledger_application::palette_outcome::PaletteOutcome;
@@ -43,6 +45,8 @@ use nene_ledger_application::window_view::WindowView;
 use nene_ledger_application::zoom_level::ZoomLevel;
 use nene_ledger_core::char_advances::CharAdvances;
 use nene_ledger_core::find_query::FindQuery;
+use nene_ledger_core::header_rows::HeaderRows;
+use nene_ledger_core::text_format::TextFormat;
 use std::path::{Path, PathBuf};
 
 use nene_ledger_core::frame::Frame;
@@ -375,6 +379,8 @@ impl Viewer {
             let failure = SavingFailure::Save(failure);
             warn(&describe(&failure));
             self.document.save_failed(problem_of(&failure));
+            // 外からの変更で保存できなかったのなら、読み直すまで動かさない（ADR 0039）。
+            self.check_outside();
             return;
         }
         // 前の索引の仕事と集計は、置き換える前のファイルのもの。捨ててから開き直す。名前を付けて保存したなら、
@@ -385,6 +391,7 @@ impl Viewer {
         match self.reader.reopen_saved(saved_as) {
             Ok(job) => {
                 self.job = job;
+                self.document.set_outside(None);
                 let reread = match (title, self.reader.line_endings()) {
                     (Some(title), Some(endings)) => self.document.saved_as(title, endings),
                     (Some(title), None) => {
@@ -1011,6 +1018,7 @@ impl Viewer {
                 self.sync_ticker();
                 return copied;
             }
+            RootCommand::Reload => return self.reload(view),
             RootCommand::DuplicateRows => self.duplicate(false),
             RootCommand::DuplicateColumns => self.duplicate(true),
         }
@@ -1114,21 +1122,70 @@ impl Viewer {
         let Ok(rows) = self.reader.read_trial(format, header) else {
             return false;
         };
-        let summary = FormatSummary::new(format, base.format_summary().line_endings());
-        let (cells, cuts) = rows.into_parts();
-        let mut trial = Document::open(base.title().to_owned(), summary, header, cells);
-        trial.mark_cut(cuts);
-        trial.set_detail(base.detail());
-        trial.set_detail_lines(base.detail_lines());
-        // 測った字の送り幅を引き継ぐ（作り直した表は持っていない。欄の字の位置と列の幅が見積もりに戻る・GitHub Issue #528）。
-        if let Some(advances) = base.advances() {
-            trial.set_advances(advances);
-        }
+        let trial = rebuilt(base, (format, header), rows);
         let original = core::mem::replace(&mut self.document, trial);
         if self.trial.is_none() {
             self.trial = Some(original);
         }
         true
+    }
+
+    /// 窓が前面に来たとき（と保存できなかったとき）に、原本の今の印を開いたときの印と比べる（ADR 0039 の決定 1）。
+    /// 自分の保存の間は比べない（置き換えの途中の印を見ない）。新しい表には比べる原本が無い。
+    fn check_outside(&mut self) {
+        if self.saving.is_some() {
+            return;
+        }
+        let Some(path) = self.reader.path() else {
+            return;
+        };
+        let now = nene_ledger_store::stamping::stamp_of(path).ok();
+        let change = match (now, self.reader.opened()) {
+            (None, _) => Some(OutsideChange::Missing),
+            (Some(now), Some(opened)) if now != opened => Some(OutsideChange::Changed),
+            (Some(_), Some(_) | None) => None,
+        };
+        self.document.set_outside(change);
+    }
+
+    /// F5：原本を、同じ読み方のまま読み直す（索引を作り直す・カーソルの行と列は保つ・ADR 0039 の決定 2）。書き換えが
+    /// あれば、捨てることになるので一度尋ねる（続けてもう一度 F5 で読み直す）。
+    fn reload(&mut self, view: WindowView) -> Option<ClipboardText> {
+        self.palette = None;
+        if self.reader.path().is_none() {
+            self.document
+                .notify(Notice::Outside(OutsideNotice::NothingToReload));
+            return None;
+        }
+        if self.saving.is_some() || !self.document.reload_requested() {
+            return None;
+        }
+        let target = self.document.cursor_target();
+        let reading = (
+            self.document.format_summary().format(),
+            self.document.header_record(),
+        );
+        let fresh = self.reader.reopen_saved(None).and_then(|job| {
+            let rows = self.reader.read_trial(reading.0, reading.1)?;
+            Ok((job, rebuilt(&self.document, reading, rows)))
+        });
+        let Ok((job, fresh)) = fresh else {
+            // 開けない・読めない。表は前のままで、読み直すまで動かさない。
+            self.check_outside();
+            self.document
+                .notify(Notice::Outside(OutsideNotice::ReloadFailed));
+            return None;
+        };
+        // 前の索引の仕事・集計・検索は、読み直す前のファイルのもの。
+        self.job = job;
+        (self.totals, self.ragged, self.trial) = (None, None, None);
+        (self.finding, self.replacing) = (None, None);
+        self.document = fresh;
+        let moved = self.document.apply(Intent::GoTo(target), view);
+        let copied = self.effect(moved);
+        self.document
+            .notify(Notice::Outside(OutsideNotice::Reloaded));
+        copied
     }
 
     /// 読み方の候補 `choice` で開き直す。試した画面を残し、索引を作り直して、裏の集計は捨てる。開き直せなければ元に戻す。
@@ -1271,6 +1328,10 @@ impl Viewer {
 }
 
 impl Session for Viewer {
+    fn activated(&mut self, _view: WindowView) {
+        self.check_outside();
+    }
+
     fn close(&mut self) -> bool {
         // 尋ねる画面はパレットより前に出す。
         self.palette = None;
@@ -1455,6 +1516,26 @@ fn moved_cuts(cuts: Vec<CutRecord>, first: u64, line: u64) -> impl Iterator<Item
         let moved = line.saturating_add(cut.record().saturating_sub(first));
         CutRecord::new(moved, cut.total_bytes())
     })
+}
+
+/// 表 `base` と同じ題名・詳細ペイン・測った字の幅で、読み方 `(format, header)` と先頭の行 `rows` から作り直した表
+/// （読み方を試すとき・読み直すとき）。
+fn rebuilt(
+    base: &Document,
+    (format, header): (TextFormat, Option<HeaderRows>),
+    rows: crate::rows::Rows,
+) -> Document {
+    let summary = FormatSummary::new(format, base.format_summary().line_endings());
+    let (cells, cuts) = rows.into_parts();
+    let mut fresh = Document::open(base.title().to_owned(), summary, header, cells);
+    fresh.mark_cut(cuts);
+    fresh.set_detail(base.detail());
+    fresh.set_detail_lines(base.detail_lines());
+    // 測った字の送り幅を引き継ぐ（作り直した表は持っていない。欄の字の位置と列の幅が見積もりに戻る・GitHub Issue #528）。
+    if let Some(advances) = base.advances() {
+        fresh.set_advances(advances);
+    }
+    fresh
 }
 
 /// 開いているパレット `open` が意図を受けた結果（押した位置は候補の行か、パレットの外か）。

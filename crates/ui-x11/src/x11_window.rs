@@ -69,6 +69,20 @@ pub(crate) struct X11Window {
     keys: KeyMap,
 }
 
+/// 窓が受けるイベント。前面に来たこと（`FOCUS_CHANGE`）は、原本が外から変わっていないかを確かめるのに使う
+/// （ADR 0039 の決定 1）。
+fn wanted_events() -> EventMask {
+    EventMask::EXPOSURE
+        | EventMask::STRUCTURE_NOTIFY
+        | EventMask::PROPERTY_CHANGE
+        | EventMask::KEY_PRESS
+        | EventMask::BUTTON_PRESS
+        | EventMask::BUTTON_RELEASE
+        | EventMask::POINTER_MOTION
+        | EventMask::LEAVE_WINDOW
+        | EventMask::FOCUS_CHANGE
+}
+
 impl X11Window {
     /// 窓を作って見せる。`title` は窓の題名（UTF-8）。
     pub(crate) fn open(size: PixelSize, title: &str) -> Result<Self, UiFailure> {
@@ -103,16 +117,7 @@ impl X11Window {
             screen.root_visual,
             &CreateWindowAux::new()
                 .background_pixel(screen.white_pixel)
-                .event_mask(
-                    EventMask::EXPOSURE
-                        | EventMask::STRUCTURE_NOTIFY
-                        | EventMask::PROPERTY_CHANGE
-                        | EventMask::KEY_PRESS
-                        | EventMask::BUTTON_PRESS
-                        | EventMask::BUTTON_RELEASE
-                        | EventMask::POINTER_MOTION
-                        | EventMask::LEAVE_WINDOW,
-                ),
+                .event_mask(wanted_events()),
         )?;
         let gc = connection.generate_id()?;
         connection.create_gc(gc, window, &CreateGCAux::new())?;
