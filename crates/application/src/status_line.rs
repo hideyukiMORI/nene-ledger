@@ -17,6 +17,8 @@ use crate::find_notice::FindNotice;
 use crate::format_summary::FormatSummary;
 use crate::job_state::JobState;
 use crate::notice::Notice;
+use crate::outside_change::OutsideChange;
+use crate::outside_notice::OutsideNotice;
 use crate::paste_notice::PasteNotice;
 use crate::read_only_notice::ReadOnlyNotice;
 use crate::replace_notice::ReplaceNotice;
@@ -373,6 +375,7 @@ pub fn notice_status(notice: Notice) -> String {
         Notice::DialectUnsure { top, rival } => dialect_unsure_status(top, rival),
         Notice::Unrepresentable(found) => unrepresentable_status(found),
         Notice::Export(export) => export_status(export),
+        Notice::Outside(outside) => outside_status(outside),
         Notice::Trim(trimmed) => trim_status(trimmed),
     }
 }
@@ -530,6 +533,38 @@ fn size_status(bytes: u64) -> String {
                 format!("{}.{} {name}", group_digits(tenths / 10), tenths % 10)
             },
         )
+}
+
+/// 外からの変更と読み直しの知らせの文言（ADR 0039）。何が起きて、何をすればよいかを言う（FR-023）。
+#[must_use]
+pub fn outside_status(notice: OutsideNotice) -> String {
+    let text = match notice {
+        OutsideNotice::Stale {
+            change: OutsideChange::Changed,
+            edited: false,
+        } => "ファイルが外で変わりました · F5 で読み直す",
+        OutsideNotice::Stale {
+            change: OutsideChange::Changed,
+            edited: true,
+        } => "ファイルが外で変わりました · 直した値は残っています · 捨てて読み直すなら F5",
+        OutsideNotice::Stale {
+            change: OutsideChange::Missing,
+            edited: false,
+        } => "ファイルが見つかりません（消されたか動かされました）· 戻したら F5 で読み直す",
+        OutsideNotice::Stale {
+            change: OutsideChange::Missing,
+            edited: true,
+        } => "ファイルが見つかりません（消されたか動かされました）· 直した値は残っています",
+        OutsideNotice::DiscardToReload => {
+            "直した値を捨てて読み直すなら、もう一度 F5（ほかのキーでやめる）"
+        }
+        OutsideNotice::Reloaded => "読み直しました（読み方は同じ）",
+        OutsideNotice::ReloadFailed => {
+            "読み直せませんでした（ファイルを開けません）。表は前のままです"
+        }
+        OutsideNotice::NothingToReload => "新しい表には、読み直すファイルがありません",
+    };
+    String::from(text)
 }
 
 /// 離れた範囲をコピーできなかった文言。

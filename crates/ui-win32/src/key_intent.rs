@@ -49,6 +49,7 @@ const VK_H: u16 = 0x48;
 const VK_W: u16 = 0x57;
 const VK_R: u16 = 0x52;
 const VK_F3: u16 = 0x72;
+const VK_F5: u16 = 0x74;
 const VK_F8: u16 = 0x77;
 const VK_P: u16 = 0x50;
 const VK_S: u16 = 0x53;
@@ -100,6 +101,8 @@ pub(crate) fn key_intent(key: u16, modifiers: Modifiers) -> Option<Intent> {
         VK_F3 => return Some(Intent::FindAgain { forward: !shift }),
         // 列の数が見出しと違う次の・前の行へ（VS Code の「次の問題へ」と同じ F8・GitHub Issue #377）。
         VK_F8 => return Some(Intent::Root(RootCommand::FindRagged { forward: !shift })),
+        // 原本を読み直す（ブラウザーとエクスプローラーと同じ F5・ADR 0039 の決定 2）。
+        VK_F5 => return Some(Intent::Root(RootCommand::Reload)),
         // 検索の欄の条件の切り替え（ADR 0030 の決定 3）。`WM_SYSKEYDOWN` で届く。表の上では何もしない。
         VK_C if alt && !control => return Some(Intent::FindToggle(FindToggle::Case)),
         VK_W if alt && !control => return Some(Intent::FindToggle(FindToggle::WholeCell)),
@@ -461,6 +464,15 @@ mod tests {
             Some(Intent::Root(RootCommand::FindRagged { forward: false }))
         );
         assert_eq!(key_intent(VK_V, control()), Some(Intent::Paste));
+    }
+
+    /// F5 は原本を読み直す（ADR 0039 の決定 2）。
+    #[test]
+    fn f5_reloads_the_file() {
+        assert_eq!(
+            key_intent(VK_F5, plain()),
+            Some(Intent::Root(RootCommand::Reload))
+        );
     }
 
     /// 2 度目の押しに続く押しは、OS のダブルクリックの間と矩形の内なら 3 度目。3 度目は Shift・Ctrl が無ければ

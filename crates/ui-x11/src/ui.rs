@@ -8,6 +8,7 @@ use nene_ledger_application::pointer_shape::PointerShape;
 use nene_ledger_application::selection_mode::SelectionMode;
 use nene_ledger_application::session::Session;
 use nene_ledger_application::wakeup::Wakeup;
+use nene_ledger_application::window_view::WindowView;
 use nene_ledger_application::zoom_level::ZoomLevel;
 use nene_ledger_core::chrome_hit::ChromeHit;
 use nene_ledger_core::pixel_point::PixelPoint;
@@ -164,8 +165,7 @@ impl Ui {
             Some(PasteReceipt::Pending) => return Ok(Step::Wait),
             None => {}
         }
-        if self.window.is_wake(event) {
-            session.refresh(screen.view());
+        if self.roused(session, event, screen.view()) {
             return Ok(Step::Redraw);
         }
         Ok(
@@ -175,6 +175,20 @@ impl Ui {
                 Step::Wait
             },
         )
+    }
+
+    /// 裏の仕事に起こされたか、窓が前面に来たか。起こされたなら知らせを取り込ませ、前面に来たなら原本が外から変わって
+    /// いないかを確かめさせる（ADR 0039 の決定 1）。どちらでもなければ `false`。
+    fn roused<S: Session>(&self, session: &mut S, event: &Event, view: WindowView) -> bool {
+        if self.window.is_wake(event) {
+            session.refresh(view);
+            return true;
+        }
+        let focused = matches!(event, Event::FocusIn(_));
+        if focused {
+            session.activated(view);
+        }
+        focused
     }
 
     /// キーとボタンを意図にして渡す。コピーで文字列が返れば、そのキーの時刻でクリップボードの持ち主になる。

@@ -71,6 +71,9 @@ use crate::job_state::JobState;
 use crate::line_hit::LineHit;
 use crate::note_tone::NoteTone;
 use crate::notice::Notice;
+use crate::outside_change::OutsideChange;
+use crate::outside_notice::OutsideNotice;
+use crate::outside_watch::OutsideWatch;
 use crate::paste_notice::PasteNotice;
 use crate::paste_request::PasteRequest;
 use crate::pending_paste::PendingPaste;
@@ -204,6 +207,9 @@ pub struct Document {
     filling: Option<CellEditor>,
     /// 裏で保存か書き出しをしている間は、その種類（直すことと保存を受けない）。していなければ `None`。
     writing: Option<WriteKind>,
+    /// 原本が外から変わったか（変わっていれば、読み直すまで表を動かさない）と、書き換えを捨てて読み直す問いの状態
+    /// （ADR 0039）。
+    outside: OutsideWatch,
     /// 閉じる手順（ADR 0026 の決定 7）。
     closing: CloseState,
     /// 元に戻す・やり直すの履歴（UNDO-01）。保存の後も残す。
@@ -309,7 +315,6 @@ impl Document {
         let header = header_rows_in(header, &rows);
         let source_width = rows.iter().map(CellRow::len).max().unwrap_or(0);
         let view = TableView::from_records(0, rows, lines_of(&header));
-        let header_source = header.iter().map(|row| row.values().to_strings()).collect();
         let mut widths = ColumnWidths::fit(&[]);
         let shown: Vec<&ViewRow> = header.iter().chain(view.rows()).collect();
         widen_to(&mut widths, &shown);
@@ -318,6 +323,7 @@ impl Document {
             title,
             format,
             widths,
+            header_source: header.iter().map(|row| row.values().to_strings()).collect(),
             header,
             view,
             first_column: 0,
@@ -348,11 +354,11 @@ impl Document {
             rows: RowOrder::whole(),
             columns: ColumnOrder::whole(),
             source_width,
-            header_source,
             edits: CellEdits::empty(),
             editor: None,
             filling: None,
             writing: None,
+            outside: OutsideWatch::unchanged(),
             closing: CloseState::Open,
             history: EditHistory::empty(),
             baseline: whole_orders(),
@@ -579,6 +585,46 @@ impl Document {
         if self.notice == Some(Notice::Export(ExportNotice::SameFile)) {
             self.notice = None;
         }
+    }
+
+    /// 窓が前面に来たときに比べた、原本の様子を覚える（`None` は開いたときのまま・ADR 0039 の決定 1）。変わっていれば
+    /// 状態の行で知らせ続け、読み直すまで表を動かさない。
+    pub fn set_outside(&mut self, change: Option<OutsideChange>) {
+        self.outside.set(change);
+    }
+
+    /// 原本が外から変わっていれば、その様子。
+    #[must_use]
+    pub const fn outside(&self) -> Option<OutsideChange> {
+        self.outside.change()
+    }
+
+    /// 読み直しを求められた。読み直してよければ `true`。書き換えがあれば、捨てることになるので一度尋ね（`false`）、
+    /// 続けてもう一度求められたら `true`（ADR 0039 の決定 3 の「書き換えを捨てて読み直す」）。
+    pub fn reload_requested(&mut self) -> bool {
+        let allowed = self.outside.reload_requested(self.has_unsaved());
+        if !allowed {
+            self.notice = Some(Notice::Outside(OutsideNotice::DiscardToReload));
+        }
+        allowed
+    }
+
+    /// 原本が外から変わった知らせ（書き換えが残っているかを添える）。
+    fn stale_notice(&self, change: OutsideChange) -> Notice {
+        Notice::Outside(OutsideNotice::Stale {
+            change,
+            edited: self.has_unsaved(),
+        })
+    }
+
+    /// 元の列の番号で言った、今のカーソルのセル（読み直した後に同じ所へ戻るのに使う）。
+    #[must_use]
+    pub fn cursor_target(&self) -> GoToTarget {
+        let cursor = self.selection.cursor();
+        GoToTarget::at_cell(
+            self.line_of(cursor.body()),
+            self.source_column(cursor.column()),
+        )
     }
 
     /// 裏の仕事の途中なので受けない、という知らせ（保存か書き出しか）。
@@ -1030,6 +1076,17 @@ impl Document {
     /// コピーなら選択の行を読ませる（大きすぎれば知らせるだけ）。前の知らせは消す。
     pub fn apply(&mut self, intent: Intent, window: WindowView) -> DocumentEffect {
         self.window = Some(window);
+        // 読み直し（合成ルートが受ける）のほかの操作が来たら、捨てて読み直す問いはやめる。
+        self.outside.disarm();
+        // 原本が外から変わっていれば、読み直すまで表を動かさない（古い索引で読んだ壊れた行を見せない・ADR 0039 の決定 2）。
+        // 閉じるかを尋ねる画面の答えと Esc（編集をやめる）は受ける。
+        if let Some(change) = self.outside.change()
+            && self.closing == CloseState::Open
+            && intent != Intent::Cancel
+        {
+            self.notice = Some(self.stale_notice(change));
+            return DocumentEffect::Stay;
+        }
         let effect = self.apply_intent(intent, window);
         // カーソルが別のセルへ動いたら、詳細ペインの本文は先頭から（GitHub Issue #454）。
         if self
@@ -6623,6 +6680,10 @@ impl Document {
         if let Some(notice) = self.notice {
             return notice_status(notice);
         }
+        // 外からの変更は、読み直すまで言い続ける（次の操作で消えない）。
+        if let Some(change) = self.outside.change() {
+            return notice_status(self.stale_notice(change));
+        }
         if self.closing == CloseState::AfterSave {
             return String::from("保存してから閉じます…");
         }
@@ -11204,6 +11265,59 @@ mod tests {
             "保存しました（1 セル · UTF-8 · カンマ区切り · LF のまま）",
         );
         text_at(&frame, "e.csv — NeNe Ledger");
+    }
+
+    /// 原本が外から変わったら、読み直すまで言い続け、表を動かさない。閉じるかの答えと Esc は受ける（ADR 0039 の決定 2）。
+    #[test]
+    fn a_table_changed_outside_stays_put_until_it_is_reloaded() {
+        let mut document = editable();
+        document.set_outside(Some(OutsideChange::Changed));
+        let stale = "ファイルが外で変わりました · F5 で読み直す";
+        text_at(&document.frame(normal(), palette()), stale);
+        let moved = document.apply(moving(CursorStep::Down), normal());
+        assert_eq!(moved, DocumentEffect::Stay);
+        assert_eq!(document.selection().cursor(), CellPosition::new(0, 0));
+        typed(&mut document, "x");
+        assert_eq!(document.editor(), None);
+        assert_eq!(document.apply(Intent::Save, normal()), DocumentEffect::Stay);
+        text_at(&document.frame(normal(), palette()), stale);
+        // 読み直してよいかは、書き換えが無ければすぐ。
+        assert!(document.reload_requested());
+        // 印が元に戻れば（合成ルートが比べ直す）、また動かせる。
+        document.set_outside(None);
+        document.apply(moving(CursorStep::Down), normal());
+        assert_eq!(document.selection().cursor(), CellPosition::new(1, 0));
+        document.set_outside(Some(OutsideChange::Missing));
+        document.apply(moving(CursorStep::Down), normal());
+        text_at(
+            &document.frame(normal(), palette()),
+            "ファイルが見つかりません（消されたか動かされました）· 戻したら F5 で読み直す",
+        );
+    }
+
+    /// 書き換えがあれば、読み直しは一度尋ね、続けてもう一度求められたら捨てて読み直す。ほかの操作が挟まれば尋ね直す
+    /// （ADR 0039 の決定 3 の「書き換えを捨てて読み直す」）。
+    #[test]
+    fn reloading_over_edits_needs_a_second_request() {
+        let mut document = editable();
+        typed(&mut document, "x");
+        document.apply(moving(CursorStep::Down), normal());
+        assert_eq!(document.cursor_target(), GoToTarget::at_cell(1, 0));
+        document.set_outside(Some(OutsideChange::Changed));
+        text_at(
+            &document.frame(normal(), palette()),
+            "ファイルが外で変わりました · 直した値は残っています · 捨てて読み直すなら F5",
+        );
+        assert!(!document.reload_requested());
+        text_at(
+            &document.frame(normal(), palette()),
+            "直した値を捨てて読み直すなら、もう一度 F5（ほかのキーでやめる）",
+        );
+        // ほかのキーでやめる。
+        document.apply(moving(CursorStep::Down), normal());
+        assert!(!document.reload_requested());
+        assert!(document.reload_requested());
+        assert!(document.has_unsaved());
     }
 
     /// 書き出しの間は直せず、終わっても題名・未保存の印・書き換えはそのまま（ADR 0036 の決定 3）。

@@ -303,6 +303,13 @@ impl<'session> WindowState<'session> {
         self.follow_finish();
     }
 
+    /// 窓が前面に来た（`WM_ACTIVATE`）。原本が外から変わっていないかを確かめさせる（ADR 0039 の決定 1）。
+    pub(crate) fn activated(&mut self) {
+        let view = self.view();
+        self.session.activated(view);
+        self.invalidate();
+    }
+
     /// 時計の刻み（`WM_TIMER`）。数えてから取り込ませる。
     pub(crate) fn tick(&mut self) {
         self.ticks.fetch_add(1, Ordering::AcqRel);
