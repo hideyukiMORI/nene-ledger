@@ -18,4 +18,10 @@ pub trait SourceBytes {
     fn unchanged(&mut self) -> bool {
         true
     }
+
+    /// 原本の大きさ（バイト）。保存先にまだファイルが無い保存（名前を付けて保存）で、書く量の見積もりに使う
+    /// （SAVE-02・GitHub Issue #515）。分からなければ `None`（空きを確かめずに書く）。
+    fn size(&self) -> Option<u64> {
+        None
+    }
 }

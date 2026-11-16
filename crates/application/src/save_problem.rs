@@ -11,6 +11,13 @@ pub enum SaveProblem {
     Unrepresentable(char),
     /// ハードリンクのあるファイル（施主の判断 2）。
     HardLinked,
+    /// 保存先の空きが足りない（書き始めていない・SAVE-02・GitHub Issue #515）。
+    NoSpace {
+        /// 書く量の見積もり（バイト）。
+        needed: u64,
+        /// 使える空き（バイト）。
+        free: u64,
+    },
     /// 置き換えが途中で止まった。新しい内容の一時ファイルを残した。
     Interrupted,
     /// 書き換えた行を読めない・長すぎる・その方言で書けない値。

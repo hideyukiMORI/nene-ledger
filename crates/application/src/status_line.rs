@@ -495,6 +495,21 @@ fn columns_status(notice: ColumnsNotice) -> String {
     }
 }
 
+/// バイト数 `bytes` を、人が比べやすい単位で（1,024 の倍数・小数 1 桁。空きの知らせで要る量と並べる）。
+fn size_status(bytes: u64) -> String {
+    const UNITS: [(&str, u64); 3] = [("GB", 1 << 30), ("MB", 1 << 20), ("KB", 1 << 10)];
+    UNITS
+        .into_iter()
+        .find(|&(_, unit)| bytes >= unit)
+        .map_or_else(
+            || format!("{bytes} バイト"),
+            |(name, unit)| {
+                let tenths = bytes.saturating_mul(10) / unit;
+                format!("{}.{} {name}", group_digits(tenths / 10), tenths % 10)
+            },
+        )
+}
+
 /// 保存できなかった理由の文言。書き換えは残っていることを添える。
 fn save_problem_status(problem: SaveProblem) -> String {
     let reason = match problem {
@@ -510,6 +525,11 @@ fn save_problem_status(problem: SaveProblem) -> String {
         SaveProblem::HardLinked => {
             String::from("ハードリンクのあるファイルなので保存しませんでした")
         }
+        SaveProblem::NoSpace { needed, free } => format!(
+            "保存先の空きが足りないので保存しませんでした（要る {}・空き {}）",
+            size_status(needed),
+            size_status(free)
+        ),
         SaveProblem::Interrupted => String::from(
             "置き換えが途中で止まりました。新しい内容は同じフォルダの .nene-ledger-*.tmp に残しました",
         ),
@@ -529,6 +549,7 @@ fn save_problem_status(problem: SaveProblem) -> String {
         SaveProblem::ChangedOutside
         | SaveProblem::Unrepresentable(_)
         | SaveProblem::HardLinked
+        | SaveProblem::NoSpace { .. }
         | SaveProblem::Interrupted
         | SaveProblem::Unplannable
         | SaveProblem::Cancelled
@@ -792,6 +813,15 @@ mod tests {
             notice_status(Notice::SaveFailed(SaveProblem::Locked)),
             "ほかのアプリがファイルを開いているので保存できませんでした（直した値は残っています · 閉じてから Ctrl+S · 別名は Ctrl+Shift+S）"
         );
+        assert_eq!(
+            notice_status(Notice::SaveFailed(SaveProblem::NoSpace {
+                needed: 1_288_490_189,
+                free: 314_572_800
+            })),
+            "保存先の空きが足りないので保存しませんでした（要る 1.2 GB・空き 300.0 MB）（直した値は残っています）"
+        );
+        assert_eq!(size_status(900), "900 バイト");
+        assert_eq!(size_status(2_048), "2.0 KB");
         assert_eq!(
             notice_status(Notice::SaveFailed(SaveProblem::Other)),
             "保存できませんでした（直した値は残っています）"

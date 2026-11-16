@@ -64,4 +64,8 @@ impl SourceBytes for ScanBytes {
             .as_ref()
             .is_none_or(|(path, opened)| stamp_of(path).ok() == Some(*opened))
     }
+
+    fn size(&self) -> Option<u64> {
+        Some(self.source.len())
+    }
 }
