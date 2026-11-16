@@ -19,4 +19,7 @@ pub enum FindNotice {
     NoRagged,
     /// 見出しが無いか列を足し消ししているので、列の数を比べられない（GitHub Issue #338）。
     NoShape,
+    /// 閉じていない引用符は見つかっていない（そこへ飛ぶ操作・索引を作っている途中も、まだ分からないのでこれ・GitHub
+    /// Issue #519）。
+    NoUnclosedQuote,
 }

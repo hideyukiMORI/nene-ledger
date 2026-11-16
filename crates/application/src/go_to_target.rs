@@ -36,6 +36,15 @@ impl GoToTarget {
         Some(Self { record, column })
     }
 
+    /// レコード `record`（0 始まり）へ、今の列のまま飛ぶ先。
+    #[must_use]
+    pub const fn at_record(record: u64) -> Self {
+        Self {
+            record,
+            column: None,
+        }
+    }
+
     /// レコードの番号（0 始まり）。
     #[must_use]
     pub fn record(self) -> u64 {

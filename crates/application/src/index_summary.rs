@@ -8,6 +8,9 @@ use nene_ledger_core::line_ending_counts::LineEndingCounts;
 pub struct IndexSummary {
     records: u64,
     unclosed_quote: Option<u64>,
+    /// 閉じなかった引用符のある行（索引のまとめではレコードの番号、状態の行に見せるまとめでは行の並びの位置・0 始まり・
+    /// GitHub Issue #519）。分からなければ `None`。
+    unclosed_record: Option<u64>,
     line_endings: Option<LineEndingCounts>,
 }
 
@@ -18,8 +21,24 @@ impl IndexSummary {
         Self {
             records,
             unclosed_quote,
+            unclosed_record: None,
             line_endings: None,
         }
+    }
+
+    /// 閉じなかった引用符のある行 `record`（0 始まり）を添える（壊れた所を行で言い、そこへ飛ぶ・ADR 0018 の決定 2）。
+    #[must_use]
+    pub fn with_unclosed_record(self, record: Option<u64>) -> Self {
+        Self {
+            unclosed_record: record,
+            ..self
+        }
+    }
+
+    /// 閉じなかった引用符のある行（0 始まり・分からなければ `None`）。
+    #[must_use]
+    pub fn unclosed_record(self) -> Option<u64> {
+        self.unclosed_record
     }
 
     /// ファイル全体で数えたレコードの改行の内訳を添える（OPEN-08）。

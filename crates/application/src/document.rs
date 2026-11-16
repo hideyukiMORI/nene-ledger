@@ -2622,6 +2622,7 @@ impl Document {
                 FindNotice::BrokenPattern => String::from("正規表現の式が読めません"),
                 FindNotice::NoRagged => String::from("列の数が違う行はありません"),
                 FindNotice::NoShape => String::from("見出しが無いので比べられません"),
+                FindNotice::NoUnclosedQuote => String::from("閉じていない引用符はありません"),
             }),
             Some(_) | None => None,
         }
@@ -6285,13 +6286,33 @@ impl Document {
         }
     }
 
+    /// 閉じなかった引用符のある行の、今の行の並びの位置（索引を作り終えていて、行を消していなければ）。
+    fn unclosed_line(&self) -> Option<u64> {
+        let JobState::Finished(summary) = self.index else {
+            return None;
+        };
+        self.rows
+            .position_of(RowId::Source(summary.unclosed_record()?))
+    }
+
+    /// パレット「閉じていない引用符の行へ飛ぶ」（ADR 0018 の決定 2・GitHub Issue #519）。無ければ知らせる。窓は合成ルートが
+    /// 渡す（開いた直後は、表がまだ窓を知らない。最初の版は表が覚えた窓を使い、開いてすぐには飛べなかった）。
+    pub fn go_to_unclosed_quote(&mut self, window: WindowView) -> DocumentEffect {
+        let Some(line) = self.unclosed_line() else {
+            self.notice = Some(Notice::Find(FindNotice::NoUnclosedQuote));
+            return DocumentEffect::Stay;
+        };
+        self.apply(Intent::GoTo(GoToTarget::at_record(line)), window)
+    }
+
     /// 状態の行に見せる索引の状態。作り終えていれば、行の数は足し消しの後の行の並びの数（ADR 0027 の決定 1）。
     fn shown_index(&self) -> JobState {
         match self.index {
-            JobState::Finished(summary) => JobState::Finished(IndexSummary::new(
-                self.rows.len(summary.records()),
-                summary.unclosed_quote(),
-            )),
+            JobState::Finished(summary) => JobState::Finished(
+                IndexSummary::new(self.rows.len(summary.records()), summary.unclosed_quote())
+                    // 行は、今の行の並びの位置で言う（行番号と同じ数え方。消した行なら言わない）。
+                    .with_unclosed_record(self.unclosed_line()),
+            ),
             other @ (JobState::Waiting
             | JobState::Running(_)
             | JobState::CancelRequested(_)
@@ -7940,6 +7961,33 @@ mod tests {
         );
         assert_eq!(fitted_status(status, 20), "データ 300 行 · …");
         assert_eq!(fitted_status(status, 5), status);
+    }
+
+    /// パレット「閉じていない引用符の行へ飛ぶ」は、索引が覚えた行へカーソルを動かす。行を足していれば、足した後の
+    /// 位置で数える。無ければ（索引を作っている途中も）知らせる（ADR 0018 の決定 2・GitHub Issue #519）。
+    #[test]
+    fn the_palette_jumps_to_the_row_of_the_unclosed_quote() {
+        let rows = table(&[&["a", "b"], &["1", "x"], &["2", "y"], &["3", "\"z"]]);
+        let mut document = opened_with(&rows);
+        // 開いた直後（表にまだ 1 度も操作していない）でも動く。
+        assert_eq!(
+            document.go_to_unclosed_quote(normal()),
+            DocumentEffect::Stay
+        );
+        assert_eq!(
+            document.notice,
+            Some(Notice::Find(FindNotice::NoUnclosedQuote))
+        );
+        let summary = IndexSummary::new(4, Some(20)).with_unclosed_record(Some(3));
+        document.report(JobReport::Finished(summary));
+        document.go_to_unclosed_quote(normal());
+        // 見出しの 1 行を除いた、本体の 3 番目（0 始まりで 2）の行。列はそのまま。
+        assert_eq!(document.selection().cursor(), CellPosition::new(2, 0));
+        assert!(
+            document
+                .status()
+                .contains("4 行目の引用符が閉じていません（20 バイト目）")
+        );
     }
 
     /// 1 つの範囲で 2 つ以上のセルを選んで検索・置換の欄を開くと、照らす行と列をその範囲に限り、名札に行と列を出す。

@@ -39,6 +39,9 @@ fn find_status(notice: FindNotice) -> String {
         }
         FindNotice::NoRagged => "列の数が見出しと違う行はありません",
         FindNotice::NoShape => "見出しの行が無いか列を足し消ししたので、列の数を比べられません",
+        FindNotice::NoUnclosedQuote => {
+            "閉じていない引用符は見つかっていません（索引を作り終えると分かります）"
+        }
     })
 }
 
@@ -162,18 +165,37 @@ pub fn reading_index_status(
         }
         JobState::Finished(summary) => match summary.unclosed_quote() {
             Some(quote) => format!(
-                "{} · {} {}",
+                "{} · {}",
                 records_status(summary.records(), header),
-                group_digits(quote),
-                match unclosed {
-                    UnclosedQuote::ToEnd => "バイト目の引用符が閉じていません（最後の行）",
-                    UnclosedQuote::Literal => "バイト目の閉じない引用符を文字として読んでいます",
-                }
+                unclosed_status(quote, summary.unclosed_record(), unclosed)
             ),
             None => records_status(summary.records(), header),
         },
         JobState::Failed => String::from("索引を作れませんでした"),
         JobState::Cancelled => String::from("索引を中止しました"),
+    }
+}
+
+/// 閉じなかった引用符（バイトの位置 `quote`・行 `record` は 0 始まりで分からなければ `None`）の知らせ。行が分かれば行で
+/// 言う（そこへ飛べる・ADR 0018 の決定 2・GitHub Issue #519）。
+fn unclosed_status(quote: u64, record: Option<u64>, unclosed: UnclosedQuote) -> String {
+    let byte = group_digits(quote);
+    match (
+        record.map(|record| group_digits(record.saturating_add(1))),
+        unclosed,
+    ) {
+        (Some(row), UnclosedQuote::ToEnd) => {
+            format!("{row} 行目の引用符が閉じていません（{byte} バイト目）")
+        }
+        (Some(row), UnclosedQuote::Literal) => {
+            format!("{row} 行目の閉じない引用符を文字として読んでいます")
+        }
+        (None, UnclosedQuote::ToEnd) => {
+            format!("{byte} バイト目の引用符が閉じていません（最後の行）")
+        }
+        (None, UnclosedQuote::Literal) => {
+            format!("{byte} バイト目の閉じない引用符を文字として読んでいます")
+        }
     }
 }
 
@@ -972,6 +994,21 @@ mod tests {
         assert!(
             line.contains("カンマ区切り · 閉じない引用符は文字 · "),
             "{line}"
+        );
+    }
+
+    /// 行が分かっていれば、行で言う（バイトの位置は正本の読み方のときだけ添える）。
+    #[test]
+    fn an_unclosed_quote_is_named_by_its_row_when_the_index_knows_it() {
+        let unclosed =
+            JobState::Finished(IndexSummary::new(4, Some(27)).with_unclosed_record(Some(2)));
+        assert_eq!(
+            reading_index_status(unclosed, None, UnclosedQuote::ToEnd),
+            "4 行 · 3 行目の引用符が閉じていません（27 バイト目）"
+        );
+        assert_eq!(
+            reading_index_status(unclosed, None, UnclosedQuote::Literal),
+            "4 行 · 3 行目の閉じない引用符を文字として読んでいます"
         );
     }
 
