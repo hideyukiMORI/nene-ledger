@@ -4048,9 +4048,32 @@ impl Document {
             .map_or(0, |(_, first)| first)
     }
 
-    /// UI が中身の字体から測った字の送り幅にする（GitHub Issue #464）。
+    /// UI が中身の字体から測った字の送り幅にする（GitHub Issue #464）。列の自動の幅は、半角 1・全角 2 の見積もりで決めて
+    /// あるので、測った幅では入り切らない列（`m`・`w` の多い英字の見出しなど）を、見出しと今の窓の行に合わせて広げる
+    /// （狭めない・利用者が変えた幅は別に持つのでそのまま・GitHub Issue #528）。
     pub fn set_advances(&mut self, advances: &CharAdvances) {
+        let half = advances.of('0').max(1);
+        let needed: Vec<u32> = (0..self.widths.columns().len())
+            .map(|column| {
+                self.header
+                    .iter()
+                    .chain(self.view.rows())
+                    .filter_map(|row| row.cells().get(column))
+                    .map(|value| measured_columns(advances, value, half))
+                    .max()
+                    .unwrap_or(0)
+            })
+            .collect();
+        for (column, columns) in needed.into_iter().enumerate() {
+            self.widths.widen_to(column, columns);
+        }
         self.advances = Some(Box::new(advances.clone()));
+    }
+
+    /// UI が測った字の送り幅（測る前は `None`）。読み方を選び直して作り直した表へ、合成ルートが引き継ぐ。
+    #[must_use]
+    pub fn advances(&self) -> Option<&CharAdvances> {
+        self.advances.as_deref()
     }
 
     /// 中身の字の送り幅（測る前は、字の寸法 `metrics` の半角の幅から等幅とみなした値）。
@@ -6658,6 +6681,14 @@ fn on_frame(
     (in_columns && (above || below)) || (in_rows && (before || after))
 }
 
+/// 値 `value` を 1 行にして描くのに要る幅を、半角の幅 `half`（`SUBPIXELS` 分の 1 画素）の何字ぶんかで（切り上げ）。
+fn measured_columns(advances: &CharAdvances, value: &str, half: u32) -> u32 {
+    let width = single_line(value).chars().fold(0_u32, |sum, character| {
+        sum.saturating_add(advances.of(character))
+    });
+    width.div_ceil(half)
+}
+
 /// 行 `row` の元の列 `column` のセルを直し始める材料（原本の行・行の同一性・原本の値）。窓の行がその列を持って
 /// いなければ（読み直す前）`None`（「セルが無い」と取り違えない・ADR 0033 の決定 1）。
 fn editable_cell(row: &ViewRow, column: usize) -> Option<(u64, RowId, Option<String>)> {
@@ -8019,6 +8050,24 @@ mod tests {
         document.apply(Intent::Undo, normal());
         assert_eq!(document.column_name(1), None);
         assert_eq!(document.selection().cursor(), cursor);
+    }
+
+    /// UI が測った字の送り幅が届いたら、見積もりでは入り切らない列（幅の広い英字）を広げる。狭めはしない（GitHub
+    /// Issue #528）。
+    #[test]
+    fn measured_advances_widen_columns_that_the_estimate_made_too_narrow() {
+        let rows = table(&[&["memo", "id"], &["mmmmmm", "1"]]);
+        let mut document = opened_with(&rows);
+        assert_eq!(document.widths().columns(), [6, MIN_COLUMN_COLUMNS]);
+        // `m` が半角の 2 倍の幅の字体。
+        let mut advances = CharAdvances::uniform(8);
+        advances.set('m', 16 * SUBPIXELS);
+        document.set_advances(&advances);
+        assert_eq!(document.widths().columns(), [12, MIN_COLUMN_COLUMNS]);
+        // 等幅に戻っても（文字の大きさを変えた後など）、狭めない。
+        document.set_advances(&CharAdvances::uniform(8));
+        assert_eq!(document.widths().columns(), [12, MIN_COLUMN_COLUMNS]);
+        assert!(document.advances().is_some());
     }
 
     /// パレット「閉じていない引用符の行へ飛ぶ」は、索引が覚えた行へカーソルを動かす。行を足していれば、足した後の

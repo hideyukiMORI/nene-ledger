@@ -35,6 +35,14 @@ impl ColumnWidths {
         widths
     }
 
+    /// 列 `column` の幅を、少なくとも `needed` 字（上限は `MAX_COLUMN_COLUMNS`）に広げる。狭めない。UI が字の送り幅を
+    /// 測った後に、見積もり（半角 1・全角 2）では入り切らなかった列を広げる（GitHub Issue #528）。
+    pub fn widen_to(&mut self, column: usize, needed: u32) {
+        if let Some(width) = self.columns.get_mut(column) {
+            *width = (*width).max(needed.min(MAX_COLUMN_COLUMNS));
+        }
+    }
+
     /// `rows` に、今より多い列があれば、その列の幅だけを `rows` から決めて足す。今ある列の幅は変えない。
     pub fn widen(&mut self, rows: &[&[String]]) {
         self.widen_with(
