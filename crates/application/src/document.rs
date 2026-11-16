@@ -2843,7 +2843,7 @@ impl Document {
         let after = here.or_else(|| self.nearest_source(line, true));
         let before = here.or_else(|| self.nearest_source(line, false));
         let at_cursor = here.map(|record| (record, column));
-        match (run.forward(), run.wrapped()) {
+        self.narrowed(match (run.forward(), run.wrapped()) {
             (true, false) => after.map_or(FindPass::new(0, 0, FindBound::After(None)), |first| {
                 FindPass::new(first, rest(first), FindBound::After(at_cursor))
             }),
@@ -2860,7 +2860,40 @@ impl Document {
             (false, true) => after.map_or(FindPass::new(0, 0, FindBound::Before(None)), |first| {
                 FindPass::new(first, rest(first), FindBound::Before(None))
             }),
-        }
+        })
+    }
+
+    /// 検索と置換を範囲に限っているときの、読む原本のレコードの範囲（最初と数）。限っていなければ `None`。読む量を
+    /// 狭めるだけで、照らすかどうかは `FindScope` が決める（GitHub Issue #534）。範囲が足した行だけなら数は 0。
+    #[must_use]
+    pub fn find_span(&self) -> Option<(u64, u64)> {
+        let (top, bottom) = self.find_area.rows()?;
+        let (from, to) = (self.line_of(top), self.line_of(bottom));
+        let runs = self.runs_from(from, to.saturating_sub(from).saturating_add(1));
+        let spans = runs.iter().filter_map(|run| match run {
+            OrderRun::Source { first, count } => Some((
+                *first,
+                count.map_or(u64::MAX, |length| first.saturating_add(length)),
+            )),
+            OrderRun::Added(_) => None,
+        });
+        let (start, end) = spans.fold((u64::MAX, 0_u64), |(start, end), (record, after)| {
+            (start.min(record), end.max(after))
+        });
+        Some((start.min(end), end.saturating_sub(start.min(end))))
+    }
+
+    /// 裏の検索の 1 回分 `pass` を、範囲に限っていれば、その範囲のレコードだけに狭める。
+    fn narrowed(&self, pass: FindPass) -> FindPass {
+        let Some((first, count)) = self.find_span() else {
+            return pass;
+        };
+        let start = pass.first().max(first);
+        let end = pass
+            .first()
+            .saturating_add(pass.count())
+            .min(first.saturating_add(count));
+        FindPass::new(start, end.saturating_sub(start), pass.bound())
     }
 
     /// 行の並びの位置 `line` 以降（`after`）か以前で、いちばん近い原本の行のレコード。
@@ -8022,6 +8055,24 @@ mod tests {
         );
         assert_eq!(fitted_status(status, 20), "データ 300 行 · …");
         assert_eq!(fitted_status(status, 5), status);
+    }
+
+    /// 範囲に限っているとき、裏の仕事が読むのは範囲のレコードだけ（照らすかは `FindScope` が決める・GitHub Issue #534）。
+    #[test]
+    fn a_scoped_find_reads_only_the_records_of_its_range() {
+        let rows = table(&[&["sku", "name"], &["1", "a"], &["2", "b"], &["3", "c"]]);
+        let mut document = opened_with(&rows);
+        document.report(JobReport::Finished(IndexSummary::new(4, None)));
+        assert_eq!(document.find_span(), None);
+        document.apply(moving(CursorStep::Down), normal());
+        document.apply(extending(CursorStep::Down), normal());
+        assert!(document.scope_find_to_selection().is_some());
+        assert_eq!(document.find_span(), Some((2, 2)));
+        // 範囲より前だけの 1 回分は、読むものが無い。頭からの 1 回分は範囲だけ。
+        let early = document.narrowed(FindPass::new(0, 2, FindBound::After(None)));
+        assert_eq!(early.count(), 0);
+        let whole = document.narrowed(FindPass::new(0, 4, FindBound::After(None)));
+        assert_eq!((whole.first(), whole.count()), (2, 2));
     }
 
     /// 範囲が見出しの行をまたいでも（前書きからデータまでを選ぶ）、範囲の最後の行まで照らす（GitHub Issue #526）。

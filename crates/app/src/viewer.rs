@@ -642,7 +642,14 @@ impl Viewer {
             self.document.changes().order().clone(),
             limit,
         );
-        match self.reader.spawn_split(0, usize::MAX, fold) {
+        // 範囲に限っていれば、その範囲のレコードだけを読む（GitHub Issue #534）。
+        let (first, count) = self
+            .document
+            .find_span()
+            .map_or((0, usize::MAX), |(first, count)| {
+                (first, usize::try_from(count).unwrap_or(usize::MAX))
+            });
+        match self.reader.spawn_split(first, count, fold) {
             Ok(job) => self.replacing = Some(job),
             Err(_failure) => self.document.replace_stopped(true),
         }
