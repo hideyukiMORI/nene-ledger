@@ -49,6 +49,7 @@ use crate::edit_step::EditStep;
 use crate::edit_surface::EditSurface;
 use crate::edit_target::EditTarget;
 use crate::editing_cell::EditingCell;
+use crate::find_area::FindArea;
 use crate::find_bound::FindBound;
 use crate::find_notice::FindNotice;
 use crate::find_pass::FindPass;
@@ -161,8 +162,8 @@ pub struct Document {
     /// 列の数が見出しと違う行のレコードの番号（昇順・裏で数えたもの）。数えた数より少なければ覚えきれなかった
     /// （GitHub Issue #415）。
     ragged_positions: Vec<u64>,
-    /// 検索と置換で照らす表示の列（列を選んで欄を開いたとき・GitHub Issue #411）。`None` なら全部の列。
-    find_within: Option<Range<usize>>,
+    /// 検索と置換で照らす所（列全体か矩形の範囲を選んで欄を開いたとき・GitHub Issue #411・#513）。
+    find_area: FindArea,
     others: Vec<Selection>,
     order: Vec<usize>,
     counted: Option<Vec<Selection>>,
@@ -327,7 +328,7 @@ impl Document {
             totals: SelectionTotals::Hidden,
             ragged: RaggedCount::Unasked,
             ragged_positions: Vec::new(),
-            find_within: None,
+            find_area: FindArea::whole(),
             others: Vec::new(),
             order: Vec::new(),
             counted: None,
@@ -2295,31 +2296,64 @@ impl Document {
         let columns = (0..self.widths.columns().len())
             .map(|display| self.column_id(self.source_column(display)))
             .collect();
-        FindScope::new(query, columns, self.edits.clone()).within(self.find_within.clone())
+        // 行は、行の並びの区間（行の同一性）で限る。行を足し消し・並べ替えた表でも、選んだ行だけを照らす。
+        let rows = self.find_area.rows().map(|(first, last)| {
+            let count = last.saturating_sub(first).saturating_add(1);
+            self.runs_from(self.line_of(first), count)
+        });
+        FindScope::new(query, columns, self.edits.clone())
+            .within(self.find_area.columns())
+            .rows(rows)
     }
 
-    /// 検索か置換の欄を開くとき：列全体を選んでいれば、照らす列をその列に限り、欄に出す名札（「範囲：販売価格」）を返す。
-    /// 列全体を選んでいなければ全部の列に戻して `None`（EC のペルソナの相談「説明文を巻き込まない」・GitHub Issue #411）。
+    /// 検索か置換の欄を開くとき：列全体を選んでいれば、照らす列をその列に限り、欄に出す名札（「範囲：販売価格」）を返す
+    /// （EC のペルソナの相談「説明文を巻き込まない」・GitHub Issue #411）。1 つの範囲で 2 つ以上のセルを選んでいれば、
+    /// 照らす行と列をその範囲に限る（「範囲：3〜12 行目 × name〜住所」・Excel と同じ・FIND-01・GitHub Issue #513）。
+    /// 1 つのセルだけか、離れた範囲なら、全部に戻して `None`。
     pub fn scope_find_to_selection(&mut self) -> Option<String> {
         let (top, bottom) = (self.selection.top_left(), self.selection.bottom_right());
-        let whole = top.body() == 0 && bottom.body() == TO_END && self.others.is_empty();
-        self.find_within = whole.then(|| top.column()..bottom.column().saturating_add(1));
-        let within = self.find_within.clone()?;
+        let single = self.others.is_empty();
+        let whole = single && top.body() == 0 && bottom.body() == TO_END;
+        let block = single && !whole && top != bottom;
+        self.find_area = FindArea::new(
+            (whole || block).then(|| top.column()..bottom.column().saturating_add(1)),
+            block.then(|| (top.body(), bottom.body().min(self.last_body()))),
+        );
+        let within = self.find_area.columns()?;
+        let columns = self.find_columns_label(&within);
+        Some(match self.find_area.rows() {
+            None => format!("範囲：{columns}"),
+            Some((first, last)) => {
+                let (from, to) = (
+                    group_digits(self.line_of(first).saturating_add(1)),
+                    group_digits(self.line_of(last).saturating_add(1)),
+                );
+                if first == last {
+                    format!("範囲：{from} 行目 × {columns}")
+                } else {
+                    format!("範囲：{from}〜{to} 行目 × {columns}")
+                }
+            }
+        })
+    }
+
+    /// 検索と置換の名札の、列の所（1 列なら名前、続いた列なら最初と最後の名前と数）。
+    fn find_columns_label(&self, within: &Range<usize>) -> String {
         let name = |display: usize| {
             let source = self.source_column(display);
             self.column_name(source)
                 .unwrap_or_else(|| format!("{} 列目", source.saturating_add(1)))
         };
         let first = name(within.start);
-        Some(if within.len() == 1 {
-            format!("範囲：{first}")
+        if within.len() == 1 {
+            first
         } else {
             format!(
-                "範囲：{first}〜{}（{} 列）",
+                "{first}〜{}（{} 列）",
                 name(within.end.saturating_sub(1)),
                 within.len()
             )
-        })
+        }
     }
 
     /// 置換の段の Enter：カーソルのセルが `query` に当たれば、当たった所を `replacement` に置き換えて（1 手）、次を探す。
@@ -6465,7 +6499,8 @@ impl Document {
             .with_advances(self.advances.as_deref())
             .with_renaming(self.renaming())
             .with_found(found)
-            .with_found_within(self.find_within.clone())
+            .with_found_within(self.find_area.columns())
+            .with_found_rows(self.find_area.rows())
             .with_expected(self.expected_columns())
             .with_row_bands(!self.columns_selected())
             .paint(self.header(), self.column_numbers().as_ref(), &self.view)
@@ -7904,6 +7939,61 @@ mod tests {
         );
         assert_eq!(fitted_status(status, 20), "データ 300 行 · …");
         assert_eq!(fitted_status(status, 5), status);
+    }
+
+    /// 1 つの範囲で 2 つ以上のセルを選んで検索・置換の欄を開くと、照らす行と列をその範囲に限り、名札に行と列を出す。
+    /// 範囲の外の当たりは探さず、置き換えもしない。1 つのセルだけなら全部に戻る（FIND-01・GitHub Issue #513）。
+    #[test]
+    fn find_and_replace_are_scoped_to_a_selected_block() {
+        let rows = table(&[
+            &["sku", "name", "note"],
+            &["1", "free", "free"],
+            &["2", "free", "x"],
+            &["3", "free", "free"],
+        ]);
+        let mut document = opened_with(&rows);
+        document.report(JobReport::Finished(IndexSummary::new(4, None)));
+        // 2〜3 行目（本体の 2・3 番目）の name〜note を選ぶ。
+        document.apply(moving(CursorStep::Down), normal());
+        document.apply(moving(CursorStep::Right), normal());
+        document.apply(extending(CursorStep::Down), normal());
+        document.apply(extending(CursorStep::Right), normal());
+        assert_eq!(
+            document.scope_find_to_selection().as_deref(),
+            Some("範囲：3〜4 行目 × name〜note（2 列）")
+        );
+        let scope = document.find_scope(FindQuery::new("free", FindOptions::standard()));
+        let table_rows = &rows;
+        let cells = |record: usize| {
+            move |index: usize| {
+                table_rows
+                    .get(record)
+                    .and_then(|row| row.get(index))
+                    .map(String::from)
+            }
+        };
+        // 範囲の外の行（1 行目のデータ）は当たらず、範囲の中は当たる。列も範囲の中だけ。
+        assert_eq!(scope.first_in_row(RowId::Source(1), 0..3, cells(1)), None);
+        assert_eq!(
+            scope.first_in_row(RowId::Source(2), 0..3, cells(2)),
+            Some(1)
+        );
+        assert_eq!(scope.last_in_row(RowId::Source(3), 0..3, cells(3)), Some(2));
+        assert!(
+            scope
+                .replaced_cell((RowId::Source(1), 1), &cells(1), "paid")
+                .is_none()
+        );
+        assert!(
+            scope
+                .replaced_cell((RowId::Source(2), 1), &cells(2), "paid")
+                .is_some()
+        );
+        // 1 つのセルだけを選んで開き直せば、全部に戻る。
+        document.apply(moving(CursorStep::Up), normal());
+        assert_eq!(document.scope_find_to_selection(), None);
+        let all = document.find_scope(FindQuery::new("free", FindOptions::standard()));
+        assert_eq!(all.first_in_row(RowId::Source(1), 0..3, cells(1)), Some(1));
     }
 
     /// 列全体を選んで検索・置換の欄を開くと、照らす列をその列に限り、名札を返す。選びを替えて開き直せば全部に戻る
