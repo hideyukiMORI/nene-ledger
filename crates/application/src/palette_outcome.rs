@@ -1,5 +1,6 @@
 //! パレットに意図を渡した結果、合成ルートがすること。
 
+use crate::column_task::ColumnTask;
 use crate::export_format::ExportFormat;
 use crate::intent::Intent;
 use crate::reading_aspect::ReadingAspect;
@@ -42,6 +43,10 @@ pub enum PaletteOutcome {
     OpenExport,
     /// 閉じて、この形式で書き出す先を選ばせる（ADR 0036 の決定 2）。
     Export(ExportFormat),
+    /// 列の分割か結合の段を開く（合成ルートが、できるかを確かめて `CommandPalette::enter_columns` を呼ぶ・ADR 0037）。
+    OpenColumns(ColumnTask),
+    /// 打った文字列で、列を分ける・つなぐ（合成ルートが `CommandPalette::query` を読む）。
+    Columns(ColumnTask),
     /// 開いたまま、打った文字を今の条件で探す（合成ルートが `CommandPalette::query` と `find_options` を読む）。
     /// `forward` なら次（Enter・F3）、そうでなければ前（Shift+Enter・Shift+F3）。
     Find {

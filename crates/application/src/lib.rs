@@ -28,6 +28,7 @@ pub mod close_state;
 pub mod column_change;
 pub mod column_place;
 pub mod column_shift;
+pub mod column_task;
 pub mod columns_notice;
 pub mod command_id;
 pub mod command_palette;

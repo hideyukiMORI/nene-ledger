@@ -1,5 +1,6 @@
 //! パレットの段。
 
+use crate::column_task::ColumnTask;
 use crate::export_format::ExportFormat;
 use crate::reading_aspect::ReadingAspect;
 use crate::reading_choice::ReadingChoice;
@@ -40,6 +41,12 @@ pub enum PaletteMode {
         /// 選んでいる形式。
         format: ExportFormat,
     },
+    /// 列を分ける区切り・つなぐ区切りを打つ段（ADR 0037 の決定 1・4）。候補の所に、見えている行の分け方の見本を出す
+    /// （見本そのものは `CommandPalette` が持つ）。
+    Columns {
+        /// 仕事（分割なら分け方の種類・結合）。
+        task: ColumnTask,
+    },
     /// 探す文字を打つ段（Ctrl+F・ADR 0030 の決定 1）。条件は `CommandPalette::find_options`。
     Find,
     /// 探す文字と置き換える文字を打つ段（Ctrl+H・ADR 0030 の決定 6）。`with` は置き換える欄を打っている間（Tab で替える）。
@@ -68,6 +75,7 @@ impl PaletteMode {
             | Self::Keys
             | Self::About
             | Self::Export { .. }
+            | Self::Columns { .. }
             | Self::SaveAs { .. } => false,
         }
     }
@@ -75,6 +83,6 @@ impl PaletteMode {
     /// 欄の下に案内の行を持つ段か（その場で試す段と、値を替える書き出しの形式の段）。
     #[must_use]
     pub fn has_hint(self) -> bool {
-        self.tries_the_selection() || matches!(self, Self::Export { .. })
+        self.tries_the_selection() || matches!(self, Self::Export { .. } | Self::Columns { .. })
     }
 }

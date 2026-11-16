@@ -514,8 +514,30 @@ fn columns_status(notice: ColumnsNotice) -> String {
         ColumnsNotice::Duplicated(columns) => {
             format!("{columns} 列を複製しました（Ctrl+Z で戻す）")
         }
-        ColumnsNotice::AwaitIndex => {
-            String::from("列の複製は、行の数が分かってからできます（索引を作っています）")
+        ColumnsNotice::AwaitIndex => String::from(
+            "列の複製・分割・結合は、行の数が分かってからできます（索引を作っています）",
+        ),
+        ColumnsNotice::Split(columns) => {
+            format!(
+                "列を分けて、右に {columns} 列を足しました（元の列は残っています · Ctrl+Z で戻す）"
+            )
+        }
+        ColumnsNotice::Joined(columns) => {
+            format!(
+                "{columns} 列をつないで、右に 1 列を足しました（元の列は残っています · Ctrl+Z で戻す）"
+            )
+        }
+        ColumnsNotice::SplitNeedsOne => {
+            String::from("分けるのは 1 列だけです（列を 1 つ選んでください）")
+        }
+        ColumnsNotice::JoinNeedsTwo => String::from(
+            "つなぐ列を、続けて 2 列以上選んでください（列の見出しを押してから Shift を押しながら隣を押す）",
+        ),
+        ColumnsNotice::UnreadableSplit => String::from(
+            "分け方を読めません（区切りの字を打つ · 正規表現は切れる式 · 固定幅は 3,5 のように）",
+        ),
+        ColumnsNotice::NothingSplits => {
+            String::from("その分け方では、どの行の値も分かれません（列は足していません）")
         }
     }
 }

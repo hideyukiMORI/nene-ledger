@@ -127,7 +127,7 @@
 | EDIT-05 | 下へ埋める（fill down）・空欄を上の値で埋める・連番 | 2 | 未着手 | FR-005 | 一部 | 要望・Miller / OpenRefine |
 | EDIT-06 | 例から推し量る入力（Flash Fill） | 3 | 未着手 | FR-005 | 少 | 競合・EmEditor |
 | EDIT-07 | 列の追加（式・連番・固定値・ID） | 2 | 未着手 | FR-005 | 一部 | 競合・Delimit / Modern |
-| EDIT-08 | 列の結合と分割（区切り・正規表現・固定幅） | 1 | 未着手 | FR-011 | 多 | 競合 |
+| EDIT-08 | 列の結合と分割（区切り・正規表現・固定幅） | 1 | 実装済み | FR-011 | 多 | 競合・パレットの「列を分割する…」「列を結合する…」（ADR 0037・GitHub Issue #554）。分割は文字どおりの区切り・正規表現・固定幅（Tab で替える）で、見えている行の分け方を段の中で先に見せる。元の列は残し、すぐ右に列を足して書く（1 手・Ctrl+Z 1 回で戻る）。10 万行まで・足す列は 64 列まで。分割 → 同じ区切りで結合すると元に戻ることは core のテスト（乱数 3,000 回）、画面は Xvfb と Windows の exe の自動操作（gate-proofs 第 107 節）。施主の実機の確認はまだ |
 | EDIT-09 | 複数の値を含むセルを行に分ける・行をまとめる（explode / implode） | 2 | 未着手 | FR-005 | 少 | 要望・qsv / OpenRefine |
 | EDIT-10 | セルの中の改行を安全に入力・編集 | 1 | 確認済み | FR-005 | 一部 | 要望・翻訳・Alt+Enter で欄の中に改行（GitHub Issue #69・gate-proofs 第 57 節）。保存でその行の終わり方に揃える規則は core（#56）。画面からの保存は GitHub Issue #71（core のテスト `line_breaks_follow_the_row`・欄の規則は `a_newline_character_is_a_line_break_inside_the_cell`）。Alt+Enter は施主の Windows の実機でも確かめた（gate-proofs 第 60 節） |
 | EDIT-11 | IME の確定前の文字列をセルの中に出す | 1 | 未着手 | FR-020 | 一部 | 討議・方式は ADR 0026（Windows は IMM32、X11 は当面の貼り付け）。欄の規則（確定前の文字列の差し込みと下線の範囲）は core の `text_edit`（GitHub Issue #65・core のテスト）。Windows の IMM32 の経路（組み立ての窓を消す・確定前の文字列をセルに描く・確定を欄に挿す・候補の窓をセルの左下に置く・表の上で打ち始めて編集に入る）は GitHub Issue #81（application のテスト）。施主の Windows の実機で 6 項目を確かめた（gate-proofs 第 61 節）。X11 の XIM はまだなので状態は変えない |
