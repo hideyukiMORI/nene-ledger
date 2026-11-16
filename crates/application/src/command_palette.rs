@@ -9,6 +9,7 @@ use nene_ledger_core::draw_command::DrawCommand;
 use nene_ledger_core::palette::Palette;
 
 use crate::about_line::AboutLine;
+use crate::column_task::ColumnTask;
 use crate::command_id::CommandId;
 use crate::cursor_step::CursorStep;
 use crate::detail_key::DetailKey;
@@ -55,6 +56,8 @@ pub struct CommandPalette {
     recent: Vec<CommandId>,
     /// 検索と置換で照らす列の名札（「範囲：販売価格」・列を選んで開いたとき・GitHub Issue #411）。
     scope: Option<String>,
+    /// 列の分割の段で、候補の所に出す見本の行（見えている行の分け方・合成ルートが打つたびに渡す・ADR 0037 の決定 2）。
+    preview: Vec<String>,
     /// 見せている最初の候補の番目（前に描いたときのもの）。選びが見せている所の中にある間は動かさない。配置
     /// （`PaletteLayout`）が描くたびに直して覚え直す（GitHub Issue #434）。
     top: Cell<usize>,
@@ -90,6 +93,7 @@ impl CommandPalette {
             whole_selected: false,
             recent: Vec::new(),
             scope: None,
+            preview: Vec::new(),
             top: Cell::new(0),
         }
     }
@@ -109,6 +113,7 @@ impl CommandPalette {
             whole_selected: !text.is_empty(),
             recent: Vec::new(),
             scope: None,
+            preview: Vec::new(),
             top: Cell::new(0),
         }
     }
@@ -129,6 +134,7 @@ impl CommandPalette {
             whole_selected: !text.is_empty(),
             recent: Vec::new(),
             scope: None,
+            preview: Vec::new(),
             top: Cell::new(0),
         }
     }
@@ -235,6 +241,7 @@ impl CommandPalette {
             | PaletteMode::Reading { .. }
             | PaletteMode::Candidates { .. }
             | PaletteMode::Export { .. }
+            | PaletteMode::Columns { .. }
             | PaletteMode::SaveAs { .. } => &self.query,
         }
     }
@@ -262,6 +269,7 @@ impl CommandPalette {
             | PaletteMode::Reading { .. }
             | PaletteMode::Candidates { .. }
             | PaletteMode::Export { .. }
+            | PaletteMode::Columns { .. }
             | PaletteMode::SaveAs { .. } => None,
         }
     }
@@ -294,6 +302,7 @@ impl CommandPalette {
             whole_selected: false,
             recent: Vec::new(),
             scope: None,
+            preview: Vec::new(),
             top: Cell::new(0),
         }
     }
@@ -323,6 +332,7 @@ impl CommandPalette {
             whole_selected: false,
             recent: Vec::new(),
             scope: None,
+            preview: Vec::new(),
             top: Cell::new(0),
         }
     }
@@ -350,6 +360,9 @@ impl CommandPalette {
             | PaletteMode::Find
             | PaletteMode::Replace { .. }
             | PaletteMode::SaveAs { .. } => Vec::new(),
+            PaletteMode::Columns { .. } => {
+                (0..self.preview.len()).map(PaletteItem::Preview).collect()
+            }
             PaletteMode::Export { .. } => ExportLine::ALL.map(PaletteItem::Export).to_vec(),
             PaletteMode::Keys => key_list(&self.query),
             PaletteMode::About => AboutLine::ALL.map(PaletteItem::About).to_vec(),
@@ -445,6 +458,7 @@ impl CommandPalette {
     fn confirmed(&mut self, current_theme: usize) -> PaletteOutcome {
         match self.mode {
             PaletteMode::SaveAs { .. } if self.query.trim().is_empty() => PaletteOutcome::Stay,
+            PaletteMode::Columns { task } => PaletteOutcome::Columns(task),
             PaletteMode::SaveAs { overwrite, export } => {
                 PaletteOutcome::SaveAs { overwrite, export }
             }
@@ -490,7 +504,20 @@ impl CommandPalette {
                 })
             }),
             PaletteMode::Export { format } => self.export_intent(intent, format),
+            // Tab で分け方の種類を替える（見本は合成ルートが作り直す）。
+            PaletteMode::Columns { task }
+                if matches!(
+                    intent,
+                    Intent::Advance(CursorStep::Right | CursorStep::Left)
+                ) =>
+            {
+                self.mode = PaletteMode::Columns {
+                    task: task.turned(),
+                };
+                Some(PaletteOutcome::Stay)
+            }
             PaletteMode::Commands
+            | PaletteMode::Columns { .. }
             | PaletteMode::Keys
             | PaletteMode::About
             | PaletteMode::Themes { .. }
@@ -544,6 +571,25 @@ impl CommandPalette {
             }
             ExportLine::Write => PaletteOutcome::Export(format),
         }
+    }
+
+    /// 列の分割か結合の段へ入る（ADR 0037）。欄は空から始める。
+    pub fn enter_columns(&mut self, task: ColumnTask) {
+        self.mode = PaletteMode::Columns { task };
+        self.query.clear();
+        self.preview.clear();
+        self.selected = 0;
+    }
+
+    /// 列の分割の段の見本の行を替える（合成ルートが、打つたびに見えている行から作る・ADR 0037 の決定 2）。
+    pub fn set_preview(&mut self, lines: Vec<String>) {
+        self.preview = lines;
+    }
+
+    /// 列の分割の段の見本の行。
+    #[must_use]
+    pub fn preview(&self) -> &[String] {
+        &self.preview
     }
 
     /// 書き出しの形式を選ぶ段へ入る。`format` は初めの形式（今のファイルの形式・ADR 0036 の決定 1）。
@@ -804,6 +850,7 @@ impl CommandPalette {
                 | &PaletteItem::Key(_)
                 | &PaletteItem::About(_)
                 | &PaletteItem::Export(_)
+                | &PaletteItem::Preview(_)
                 | &PaletteItem::Heading(_),
             )
             | None => PaletteOutcome::Stay,
@@ -857,6 +904,7 @@ impl CommandPalette {
             | PaletteMode::Keys
             | PaletteMode::About
             | PaletteMode::Export { .. }
+            | PaletteMode::Columns { .. }
             | PaletteMode::SaveAs { .. } => PaletteOutcome::Close,
             PaletteMode::Themes { original } => PaletteOutcome::Revert(original),
             PaletteMode::Reading { .. } | PaletteMode::Candidates { .. } => {
@@ -881,6 +929,7 @@ impl CommandPalette {
             | PaletteMode::Reading { .. }
             | PaletteMode::Candidates { .. }
             | PaletteMode::Export { .. }
+            | PaletteMode::Columns { .. }
             | PaletteMode::SaveAs { .. } => true,
         };
         if same {
@@ -910,9 +959,12 @@ impl CommandPalette {
             // パレットに無いキーの行は読むだけ。
             // 見出しは選べない（指で押しても何もしない・GitHub Issue #420）。
             None
-            | Some(&PaletteItem::Key(_) | &PaletteItem::About(_) | &PaletteItem::Heading(_)) => {
-                PaletteOutcome::Stay
-            }
+            | Some(
+                &PaletteItem::Key(_)
+                | &PaletteItem::About(_)
+                | &PaletteItem::Preview(_)
+                | &PaletteItem::Heading(_),
+            ) => PaletteOutcome::Stay,
             Some(&PaletteItem::Theme(position)) => PaletteOutcome::Commit(position),
             Some(&PaletteItem::Reading(choice)) => PaletteOutcome::CommitReading(choice),
             Some(&PaletteItem::Candidate(candidate)) => {
@@ -940,6 +992,9 @@ impl CommandPalette {
         }
         if command == CommandId::ExportAs {
             return PaletteOutcome::OpenExport;
+        }
+        if let Some(task) = command.column_task() {
+            return PaletteOutcome::OpenColumns(task);
         }
         self.query.clear();
         if command == CommandId::ShowKeys {
@@ -1638,6 +1693,58 @@ mod tests {
             PaletteOutcome::Export(tab)
         );
         assert_eq!(palette.handle(Intent::Cancel, 0), PaletteOutcome::Close);
+    }
+
+    /// 列の分割の段は、Tab で分け方の種類を替え、見本の行は読むだけ（選べない）。Enter で、打った文字列の仕事を合成ルート
+    /// へ渡す（ADR 0037 の決定 1・2）。
+    #[test]
+    fn the_split_stage_turns_its_kind_with_tab_and_hands_over_the_task() {
+        use nene_ledger_core::split_kind::SplitKind;
+        let mut palette = CommandPalette::open();
+        palette.insert_text("split column");
+        let literal = ColumnTask::Split(SplitKind::Literal);
+        assert_eq!(
+            palette.handle(Intent::Confirm, 0),
+            PaletteOutcome::OpenColumns(literal)
+        );
+        palette.enter_columns(literal);
+        assert!(palette.items().is_empty());
+        palette.insert_text("-");
+        palette.set_preview(alloc::vec![String::from("a-b → a ｜ b")]);
+        assert_eq!(palette.items(), [PaletteItem::Preview(0)]);
+        palette.handle(Intent::Advance(CursorStep::Right), 0);
+        let pattern = ColumnTask::Split(SplitKind::Pattern);
+        assert_eq!(palette.mode(), PaletteMode::Columns { task: pattern });
+        assert_eq!(palette.query(), "-");
+        assert_eq!(
+            palette.handle(Intent::Confirm, 0),
+            PaletteOutcome::Columns(pattern)
+        );
+        // 見本の行を押しても何もしない。
+        assert_eq!(palette.click(0, 0), PaletteOutcome::Stay);
+    }
+
+    /// 列の結合の段は、Tab で替わるものが無く、空の欄でも Enter で仕事を渡す（ADR 0037 の決定 4）。
+    #[test]
+    fn the_join_stage_hands_over_even_an_empty_separator() {
+        let mut palette = CommandPalette::open();
+        palette.insert_text("join columns");
+        assert_eq!(
+            palette.handle(Intent::Confirm, 0),
+            PaletteOutcome::OpenColumns(ColumnTask::Join)
+        );
+        palette.enter_columns(ColumnTask::Join);
+        palette.handle(Intent::Advance(CursorStep::Right), 0);
+        assert_eq!(
+            palette.mode(),
+            PaletteMode::Columns {
+                task: ColumnTask::Join
+            }
+        );
+        assert_eq!(
+            palette.handle(Intent::Confirm, 0),
+            PaletteOutcome::Columns(ColumnTask::Join)
+        );
     }
 
     /// 操作の一覧の「形式を変えて書き出す…」は、書き出しの段を開かせる（形式は合成ルートが渡す）。

@@ -5,6 +5,8 @@ use core::ops::Range;
 use nene_ledger_application::cell_row::CellRow;
 use nene_ledger_application::clipboard_text::ClipboardText;
 use nene_ledger_application::close_state::CloseState;
+use nene_ledger_application::column_task::ColumnTask;
+use nene_ledger_application::columns_notice::ColumnsNotice;
 use nene_ledger_application::command_id::CommandId;
 use nene_ledger_application::command_palette::CommandPalette;
 use nene_ledger_application::cut_record::CutRecord;
@@ -44,6 +46,7 @@ use nene_ledger_application::totals_request::TotalsRequest;
 use nene_ledger_application::window_view::WindowView;
 use nene_ledger_application::zoom_level::ZoomLevel;
 use nene_ledger_core::char_advances::CharAdvances;
+use nene_ledger_core::column_split::Splitter;
 use nene_ledger_core::find_query::FindQuery;
 use nene_ledger_core::header_rows::HeaderRows;
 use nene_ledger_core::text_format::TextFormat;
@@ -84,6 +87,9 @@ use crate::saving::{
 use crate::totals_fold::TotalsFold;
 use crate::warn;
 use crate::workers::Workers;
+
+/// 列の分割の段で先に見せる、見本の行の数（ADR 0037 の決定 2）。
+const PREVIEW_ROWS: usize = 6;
 
 /// 窓が描く相手（`Session` の実装）。状態は application、索引の仕事と読み取りは scan が持ち、ここは結ぶだけ（ARC-006）。
 #[derive(Debug)]
@@ -535,6 +541,7 @@ impl Viewer {
         });
         self.palette_took_last = true;
         let _clipboard = self.after_palette(outcome, view);
+        self.sync_preview();
         // 欄の文字が変わったので、表の印の問いもそろえる（`apply_intent` を通らないため）。
         self.sync_found();
     }
@@ -932,7 +939,9 @@ impl Viewer {
         if recount {
             return self.replace_entered(true);
         }
-        self.after_palette(outcome, view)
+        let copied = self.after_palette(outcome, view);
+        self.sync_preview();
+        copied
     }
 
     /// パレットの結果に応じて、閉じる・実行する・配色を試す・決める・戻す。
@@ -945,61 +954,73 @@ impl Viewer {
             return None;
         }
         match outcome {
-            PaletteOutcome::Stay => None,
-            PaletteOutcome::Close => {
-                self.close_palette();
-                None
-            }
-            PaletteOutcome::SaveAs { .. }
-            | PaletteOutcome::OpenExport
-            | PaletteOutcome::Export(_) => {
-                self.target_outcome(outcome, view);
-                None
-            }
             PaletteOutcome::Find { forward } => self.find_entered(forward),
             PaletteOutcome::Replace { all } => self.replace_entered(all),
             PaletteOutcome::Run(intent) => {
                 self.palette = None;
                 self.intent(intent, view)
             }
+            PaletteOutcome::Stay
+            | PaletteOutcome::Close
+            | PaletteOutcome::SaveAs { .. }
+            | PaletteOutcome::OpenExport
+            | PaletteOutcome::Export(_)
+            | PaletteOutcome::OpenColumns(_)
+            | PaletteOutcome::Columns(_)
+            | PaletteOutcome::Preview(_)
+            | PaletteOutcome::Commit(_)
+            | PaletteOutcome::Revert(_)
+            | PaletteOutcome::OpenReading(_)
+            | PaletteOutcome::PreviewReading(_)
+            | PaletteOutcome::CommitReading(_)
+            | PaletteOutcome::RevertReading
+            | PaletteOutcome::OpenCandidates => {
+                self.settle(outcome, view);
+                None
+            }
+        }
+    }
+
+    /// パレットの結果のうち、クリップボードに置くものが出ないもの（段を開く・試す・決める・戻す・閉じる）。
+    fn settle(&mut self, outcome: PaletteOutcome, view: WindowView) {
+        match outcome {
+            PaletteOutcome::Close => self.close_palette(),
+            PaletteOutcome::SaveAs { .. }
+            | PaletteOutcome::OpenExport
+            | PaletteOutcome::Export(_) => self.target_outcome(outcome, view),
+            PaletteOutcome::OpenColumns(task) => self.open_columns(task),
+            PaletteOutcome::Columns(task) => self.columns_entered(task),
             PaletteOutcome::Preview(position) => {
                 self.preferences.preview_theme(ThemeState::at(position));
-                None
             }
             PaletteOutcome::Commit(position) => {
                 self.palette = None;
                 self.commit_theme(position);
-                None
             }
             PaletteOutcome::Revert(position) => {
                 self.palette = None;
                 self.preferences.preview_theme(ThemeState::at(position));
-                None
             }
-            PaletteOutcome::OpenReading(aspect) => {
-                self.open_reading(aspect);
-                None
-            }
+            PaletteOutcome::OpenReading(aspect) => self.open_reading(aspect),
             PaletteOutcome::PreviewReading(choice) => {
                 self.try_reading(choice);
-                None
             }
             PaletteOutcome::CommitReading(choice) => {
                 self.palette = None;
                 self.commit_reading(choice);
-                None
             }
             PaletteOutcome::RevertReading => {
                 self.palette = None;
                 if let Some(original) = self.trial.take() {
                     self.document = original;
                 }
-                None
             }
-            PaletteOutcome::OpenCandidates => {
-                self.open_candidates();
-                None
-            }
+            PaletteOutcome::OpenCandidates => self.open_candidates(),
+            // 開いたまま。探す・置き換える・実行するは `after_palette` が受ける（ここへは来ない）。
+            PaletteOutcome::Stay
+            | PaletteOutcome::Find { .. }
+            | PaletteOutcome::Replace { .. }
+            | PaletteOutcome::Run(_) => {}
         }
     }
 
@@ -1030,6 +1051,88 @@ impl Viewer {
         self.palette = None;
         let effect = self.document.find_ragged(forward);
         self.effect(effect)
+    }
+
+    /// 列の分割か結合の段へ入る（ADR 0037）。できない（索引の前・行が多い・列の選び方が違う）なら、パレットを閉じて
+    /// 理由を知らせる。
+    fn open_columns(&mut self, task: ColumnTask) {
+        if self.columns_request(task).is_none() {
+            self.palette = None;
+            return;
+        }
+        if let Some(open) = self.palette.as_mut() {
+            open.state_mut().enter_columns(task);
+        }
+    }
+
+    /// 列の分割か結合の前に、表が読ませる行（断るときは表が理由を知らせる）。
+    fn columns_request(&mut self, task: ColumnTask) -> Option<(u64, u64)> {
+        match task {
+            ColumnTask::Split(_) => self.document.split_column_request(),
+            ColumnTask::Join => self.document.join_columns_request(),
+        }
+    }
+
+    /// 列の分割の段が開いていれば、欄に打った分け方で、見えている行の見本を作り直す（ADR 0037 の決定 2）。読めない
+    /// 分け方なら見本は空。
+    fn sync_preview(&mut self) {
+        let Some(open) = self.palette.as_mut() else {
+            return;
+        };
+        let PaletteMode::Columns {
+            task: ColumnTask::Split(kind),
+        } = open.state().mode()
+        else {
+            return;
+        };
+        let lines = Splitter::parse(kind, open.state().query())
+            .map(|splitter| self.document.split_preview(&splitter, PREVIEW_ROWS))
+            .unwrap_or_default();
+        open.state_mut().set_preview(lines);
+    }
+
+    /// 段の欄に打った文字列で、列を分ける・つなぐ（ADR 0037）。表の全部の行を読み、すぐ右に列を足して値を書く。読めない
+    /// 分け方なら、段を開いたまま知らせる。
+    fn columns_entered(&mut self, task: ColumnTask) {
+        let Some(typed) = self
+            .palette
+            .as_ref()
+            .map(|open| open.state().query().to_owned())
+        else {
+            return;
+        };
+        let splitter = match task {
+            ColumnTask::Split(kind) => {
+                let Some(splitter) = Splitter::parse(kind, &typed) else {
+                    self.document
+                        .notify(Notice::Columns(ColumnsNotice::UnreadableSplit));
+                    return;
+                };
+                Some(splitter)
+            }
+            ColumnTask::Join => None,
+        };
+        self.palette = None;
+        let Some((first_line, count)) = self.columns_request(task) else {
+            return;
+        };
+        let lines = usize::try_from(count)
+            .ok()
+            .and_then(|count| self.read_lines(first_line, count, None).ok());
+        let Some((rows, cuts)) = lines else {
+            self.document.notify(Notice::Rows(RowsNotice::Unread));
+            return;
+        };
+        let effect = match &splitter {
+            Some(splitter) => self
+                .document
+                .split_column(first_line, (&rows, &cuts), splitter),
+            None => self
+                .document
+                .join_columns(first_line, (&rows, &cuts), &typed),
+        };
+        let _clipboard = self.effect(effect);
+        self.refresh_totals();
     }
 
     /// パレットを閉じて、選択がかかる行を読み、すぐ下に同じ値で足す（GitHub Issue #486）。`columns` なら表の全部の行を

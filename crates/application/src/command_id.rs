@@ -2,6 +2,7 @@
 
 use crate::column_place::ColumnPlace;
 use crate::column_shift::ColumnShift;
+use crate::column_task::ColumnTask;
 use crate::cursor_step::CursorStep;
 use crate::detail_key::DetailKey;
 use crate::detail_pane::DetailPane;
@@ -13,6 +14,7 @@ use crate::root_command::RootCommand;
 use crate::row_place::RowPlace;
 use crate::selection_mode::SelectionMode;
 use crate::zoom_step::ZoomStep;
+use nene_ledger_core::split_kind::SplitKind;
 
 /// パレットから実行できる操作。閉じた集合で、言語に依らない識別子（表示名は言語ごとの表から引く・ADR 0011）。
 /// 並びは分類（移動・表示・コピー）の固定の順で、何も打たないときの候補の順（Issue #41）。
@@ -112,6 +114,10 @@ pub enum CommandId {
     DuplicateColumns,
     /// カーソルの列の見出しを、その場で直し始める（EDIT-04・GitHub Issue #496）。
     RenameColumn,
+    /// カーソルの列を、区切り・正規表現・固定幅で分けて右に足す（ADR 0037）。
+    SplitColumn,
+    /// 選んだ続いた列をつないで、右に 1 列を足す（ADR 0037）。
+    JoinColumns,
     /// 選んだ範囲にかかる行を消す。
     RemoveRows,
     /// カーソルの列（選んだ列）の左に空の列を足す（ADR 0027）。
@@ -126,6 +132,14 @@ pub enum CommandId {
     ShowKeys,
     /// このアプリについて（版・著作権・ライセンス・2 段目・ADR 0032）。
     ShowAbout,
+}
+
+/// 詳細ペインの開閉の操作の名前（今の開閉 `detail` で変わる）。
+const fn detail_toggle_name(detail: DetailPane) -> &'static str {
+    match detail {
+        DetailPane::Open => "詳細ペインを閉じる",
+        DetailPane::Closed => "詳細ペインを開く",
+    }
 }
 
 /// カーソルを `step` で動かす意図（選択は畳む）。
@@ -153,7 +167,7 @@ const EXPORT_KEYWORDS: &[&str] = &[
 
 impl CommandId {
     /// すべての操作（何も打たないときの順）。
-    pub const ALL: [Self; 54] = [
+    pub const ALL: [Self; 56] = [
         Self::Top,
         Self::Bottom,
         Self::GoTo,
@@ -200,6 +214,8 @@ impl CommandId {
         Self::DuplicateRows,
         Self::DuplicateColumns,
         Self::RenameColumn,
+        Self::SplitColumn,
+        Self::JoinColumns,
         Self::RemoveRows,
         Self::InsertColumnsLeft,
         Self::InsertColumnsRight,
@@ -245,6 +261,8 @@ impl CommandId {
             | Self::DuplicateRows
             | Self::DuplicateColumns
             | Self::RenameColumn
+            | Self::SplitColumn
+            | Self::JoinColumns
             | Self::RemoveRows
             | Self::InsertColumnsLeft
             | Self::InsertColumnsRight
@@ -288,10 +306,7 @@ impl CommandId {
             Self::SelectAll => "すべてのセルを選ぶ",
             Self::SelectRows => "行全体を選ぶ",
             Self::SelectColumns => "列全体を選ぶ",
-            Self::ToggleDetail => match detail {
-                DetailPane::Open => "詳細ペインを閉じる",
-                DetailPane::Closed => "詳細ペインを開く",
-            },
+            Self::ToggleDetail => detail_toggle_name(detail),
             Self::ToggleReadOnly => "読み取り専用を切り替える",
             Self::ZoomIn => "文字を大きくする",
             Self::ZoomOut => "文字を小さくする",
@@ -332,6 +347,8 @@ impl CommandId {
             Self::DuplicateRows => "行を複製する（すぐ下に同じ値の行を足す）",
             Self::DuplicateColumns => "列を複製する（すぐ右に同じ値の列を足す）",
             Self::RenameColumn => "列の名前を変える（見出しをその場で直す）",
+            Self::SplitColumn => "列を分割する…",
+            Self::JoinColumns => "列を結合する…",
             Self::RemoveRows => "行を消す",
             Self::InsertColumnsLeft => "左に列を足す",
             Self::InsertColumnsRight => "右に列を足す",
@@ -393,6 +410,8 @@ impl CommandId {
             Self::DuplicateRows => "ぎょうをふくせいする",
             Self::DuplicateColumns => "れつをふくせいする",
             Self::RenameColumn => "れつのなまえをかえる",
+            Self::SplitColumn => "れつをぶんかつする",
+            Self::JoinColumns => "れつをけつごうする",
             Self::RemoveRows => "ぎょうをけす",
             Self::InsertColumnsLeft => "ひだりにれつをたす",
             Self::InsertColumnsRight => "みぎにれつをたす",
@@ -453,6 +472,8 @@ impl CommandId {
             Self::DuplicateRows => &["duplicate row", "clone row", "repeat row"],
             Self::DuplicateColumns => &["duplicate column", "clone column", "repeat column"],
             Self::RenameColumn => &["rename column", "rename header", "column title"],
+            Self::SplitColumn => &["split column", "text to columns", "divide"],
+            Self::JoinColumns => &["join columns", "merge columns", "concatenate"],
             Self::RemoveRows => &["delete row", "remove row"],
             Self::InsertColumnsLeft => &["insert column left", "add column", "new column"],
             Self::InsertColumnsRight => &["insert column right", "add column", "new column"],
@@ -515,6 +536,8 @@ impl CommandId {
             Self::DuplicateRows => &["行の複製", "同じ行", "写す"],
             Self::DuplicateColumns => &["列の複製", "同じ列", "写す"],
             Self::RenameColumn => &["列名の変更", "見出しの名前", "項目名", "リネーム"],
+            Self::SplitColumn => &["区切り位置", "分ける", "姓名を分ける"],
+            Self::JoinColumns => &["つなぐ", "連結", "まとめる"],
             Self::RemoveRows => &["行の削除", "削除"],
             Self::InsertColumnsLeft | Self::InsertColumnsRight => &["列の挿入", "追加"],
             Self::RemoveColumns => &["列の削除", "削除"],
@@ -561,6 +584,8 @@ impl CommandId {
             | Self::DuplicateRows
             | Self::DuplicateColumns
             | Self::RenameColumn
+            | Self::SplitColumn
+            | Self::JoinColumns
             | Self::InsertColumnsRight
             | Self::TrimExtraCells
             | Self::GoToUnclosedQuote => None,
@@ -582,6 +607,18 @@ impl CommandId {
             Self::NewTable => Some("Ctrl+N"),
             Self::Undo => Some("Ctrl+Z"),
             Self::Redo => Some("Ctrl+Y / Ctrl+Shift+Z"),
+        }
+    }
+
+    /// 列の分割と結合の段の仕事（その 2 つの操作だけ・ADR 0037）。分割は文字どおりの区切りから始める。
+    #[must_use]
+    pub fn column_task(self) -> Option<ColumnTask> {
+        if self == Self::SplitColumn {
+            Some(ColumnTask::Split(SplitKind::Literal))
+        } else if self == Self::JoinColumns {
+            Some(ColumnTask::Join)
+        } else {
+            None
         }
     }
 
@@ -636,6 +673,8 @@ impl CommandId {
             | Self::DuplicateRows
             | Self::DuplicateColumns
             | Self::RenameColumn
+            | Self::SplitColumn
+            | Self::JoinColumns
             | Self::RemoveRows
             | Self::InsertColumnsLeft
             | Self::InsertColumnsRight
@@ -671,6 +710,8 @@ impl CommandId {
             | Self::ChooseHeader
             | Self::ShowKeys
             | Self::ExportAs
+            | Self::SplitColumn
+            | Self::JoinColumns
             | Self::ShowAbout => None,
             Self::MoveColumnsLeft => Some(Intent::MoveColumns(ColumnShift::Left)),
             Self::MoveColumnsRight => Some(Intent::MoveColumns(ColumnShift::Right)),
@@ -725,6 +766,7 @@ mod tests {
                 || command == CommandId::ShowKeys
                 || command == CommandId::ShowAbout
                 || command == CommandId::ExportAs
+                || command.column_task().is_some()
                 || command.reading_aspect().is_some();
             assert_eq!(command.intent().is_none(), opens_a_list);
             assert!(!opens_a_list || command.keys().is_none());

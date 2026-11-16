@@ -26,6 +26,8 @@ pub enum PaletteItem {
     About(AboutLine),
     /// 書き出しの段の行（形式の面か、書き出す行・ADR 0036）。
     Export(ExportLine),
+    /// 列の分割の見本の行（読むだけ・`CommandPalette::preview` の何番目か・ADR 0037 の決定 2）。
+    Preview(usize),
     /// 何も打っていない操作の一覧の見出し（選べない・GitHub Issue #420）。
     Heading(PaletteHeading),
 }

@@ -345,6 +345,7 @@ impl<'state> PalettePainter<'state> {
             | PaletteMode::Replace { .. }
             | PaletteMode::About
             | PaletteMode::Export { .. }
+            | PaletteMode::Columns { .. }
             | PaletteMode::SaveAs { .. } => None,
             PaletteMode::Commands => Some(CommandId::ALL.len()),
             PaletteMode::Keys => Some(key_list("").len()),
@@ -379,13 +380,15 @@ impl<'state> PalettePainter<'state> {
             Some(&PaletteItem::Export(ExportLine::Write)) => {
                 String::from("Enter で書き出す先を選ぶ · 今のファイルは変えません")
             }
+            // 列の分割と結合の段は、見本の行が無くても案内を出す。ほかの段では空。
             Some(
                 &PaletteItem::Command(_)
                 | &PaletteItem::Key(_)
                 | &PaletteItem::About(_)
+                | &PaletteItem::Preview(_)
                 | &PaletteItem::Heading(_),
             )
-            | None => String::new(),
+            | None => self.columns_hint(),
         };
         // 候補の行と同じ左の余白（GitHub Issue #312・前は 12 px 左にずれていた）。
         let left = hint.origin().x().saturating_add(self.px(TEXT_INSET));
@@ -406,12 +409,17 @@ impl<'state> PalettePainter<'state> {
             self.save_as_line(overwrite, export);
             return;
         }
+        if let PaletteMode::Columns { task } = self.palette.mode() {
+            self.note_line(task.empty_note());
+            return;
+        }
         let kind = match self.palette.mode() {
             PaletteMode::GoTo
             | PaletteMode::Find
             | PaletteMode::Replace { .. }
             | PaletteMode::Commands
             | PaletteMode::Export { .. }
+            | PaletteMode::Columns { .. }
             | PaletteMode::SaveAs { .. } => "操作",
             PaletteMode::Keys => "キー",
             PaletteMode::About => "行",
@@ -614,6 +622,56 @@ impl<'state> PalettePainter<'state> {
             .join(" · ")
     }
 
+    /// 選んでいる行 `row` を選択の色で塗り、左に強調の色の帯を付ける（色だけに頼らない）。
+    fn mark_selected(&mut self, row: PixelRect) {
+        self.fill(row, self.colors.selection());
+        self.fill(
+            PixelRect::new(
+                row.origin(),
+                PixelSize::new(self.px(BAR), row.size().height()),
+            ),
+            self.colors.cursor(),
+        );
+    }
+
+    /// 列の分割の見本の `index` 番目の行。
+    fn preview_text(&self, index: usize) -> String {
+        self.palette
+            .preview()
+            .get(index)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// 候補の所の 1 行目に、補助の色で 1 行を書く。
+    fn note_line(&mut self, text: &str) {
+        let row = self.layout.row(0);
+        let left = row.origin().x().saturating_add(self.px(TEXT_INSET));
+        self.text_at(
+            from_left(row, left),
+            String::from(text),
+            self.colors.gutter_text(),
+        );
+    }
+
+    /// 列の分割と結合の段の案内の行（ほかの段では空）。
+    fn columns_hint(&self) -> String {
+        match self.palette.mode() {
+            PaletteMode::Columns { task } => String::from(task.hint()),
+            PaletteMode::Commands
+            | PaletteMode::GoTo
+            | PaletteMode::Find
+            | PaletteMode::Replace { .. }
+            | PaletteMode::Keys
+            | PaletteMode::About
+            | PaletteMode::Themes { .. }
+            | PaletteMode::Reading { .. }
+            | PaletteMode::Candidates { .. }
+            | PaletteMode::Export { .. }
+            | PaletteMode::SaveAs { .. } => String::new(),
+        }
+    }
+
     /// 書き出しの段の右の字：選んでいる形式の面なら替え方、書き出す行なら決めるキー。選んでいない面には出さない
     /// （全部の行に並べると、値と競って読みにくい）。
     fn export_aside(line: ExportLine, selected: bool) -> String {
@@ -674,6 +732,7 @@ impl<'state> PalettePainter<'state> {
             | PaletteMode::Reading { .. }
             | PaletteMode::Candidates { .. }
             | PaletteMode::Export { .. }
+            | PaletteMode::Columns { .. }
             | PaletteMode::SaveAs { .. } => String::from(appearance),
         }
     }
@@ -695,18 +754,11 @@ impl<'state> PalettePainter<'state> {
             self.heading_row(row, heading);
             return;
         }
-        // このアプリについては読むだけなので、選んだ色を付けない（GitHub Issue #312）。
+        // このアプリについてと、列の分割の見本は読むだけなので、選んだ色を付けない（GitHub Issue #312）。
         if self.layout.first().saturating_add(slot) == self.palette.selected()
-            && self.palette.mode() != PaletteMode::About
+            && !matches!(item, PaletteItem::About(_) | PaletteItem::Preview(_))
         {
-            self.fill(row, self.colors.selection());
-            self.fill(
-                PixelRect::new(
-                    row.origin(),
-                    PixelSize::new(self.px(BAR), row.size().height()),
-                ),
-                self.colors.cursor(),
-            );
+            self.mark_selected(row);
         }
         let mut left = row.origin().x().saturating_add(self.px(TEXT_INSET));
         let (name, aside) = match item {
@@ -721,6 +773,7 @@ impl<'state> PalettePainter<'state> {
             }
             PaletteItem::Key(guide) => (String::from(guide.name()), String::from(guide.keys())),
             PaletteItem::About(line) => (line.text(), String::new()),
+            PaletteItem::Preview(index) => (self.preview_text(index), String::new()),
             PaletteItem::Export(line) => self.export_row((row, left), slot, line),
             // 上で描いて戻っている。
             PaletteItem::Heading(heading) => (String::from(heading.name()), String::new()),
@@ -764,6 +817,7 @@ impl<'state> PalettePainter<'state> {
             | PaletteMode::Keys
             | PaletteMode::About
             | PaletteMode::Export { .. }
+            | PaletteMode::Columns { .. }
             | PaletteMode::SaveAs { .. }
             | PaletteMode::Themes { .. } => false,
         }
@@ -958,6 +1012,7 @@ fn placeholder(mode: PaletteMode) -> &'static str {
             export: Some(_), ..
         } => "書き出す先のファイルの道筋（例: /srv/data/表-書き出し.csv）",
         PaletteMode::Export { .. } => "書き出す形式を選ぶ（↑ ↓ で行 · ← → で値）",
+        PaletteMode::Columns { task } => task.placeholder(),
         PaletteMode::Keys => "キーか操作の名前で絞る（例: ctrl, shift, kopi-）",
         PaletteMode::About => "このアプリについて（Esc で閉じる）",
         PaletteMode::Themes { .. } => "配色の名前を英字で（例: solarized）",
@@ -1042,7 +1097,7 @@ mod tests {
         let commands = palette.paint(view(), colors(), DetailPane::Open);
         let shown = texts(&commands);
         assert!(shown.contains(&"したいことを打って探す（例: 保存・置換・文字化け）"));
-        assert!(shown.contains(&"54 / 54"));
+        assert!(shown.contains(&"56 / 56"));
         // 空の一覧は見出しから：よく使う（開く・保存・探す・置換・元に戻す）と、その下の分類（GitHub Issue #420）。
         assert!(shown.contains(&"よく使う") && shown.contains(&"ファイル"));
         assert!(shown.contains(&"ファイルを開く…") && shown.contains(&"Ctrl+O"));
@@ -1128,7 +1183,7 @@ mod tests {
         let commands = palette.paint(view(), colors(), DetailPane::Closed);
         let shown = texts(&commands);
         assert!(shown.contains(&"“xyz” に合う操作は無い"));
-        assert!(shown.contains(&"0 / 54") && shown.contains(&"xyz"));
+        assert!(shown.contains(&"0 / 56") && shown.contains(&"xyz"));
         assert!(fills(&commands, colors().selection()).is_empty());
     }
 
@@ -1516,6 +1571,33 @@ mod tests {
         );
         let short = CommandPalette::open_save_as(String::from("/tmp/a.csv"));
         assert!(texts(&short.paint(view(), colors(), DetailPane::Closed)).contains(&"/tmp/a.csv"));
+    }
+
+    /// 列の分割の段は、分け方の種類を案内の行で言い、見本の行を選んだ色を付けずに並べる。見本が無ければ 1 行の案内
+    /// （ADR 0037 の決定 2）。
+    #[test]
+    fn the_split_stage_shows_its_kind_and_the_preview_rows() {
+        use crate::column_task::ColumnTask;
+        use nene_ledger_core::split_kind::SplitKind;
+        let mut palette = CommandPalette::open();
+        palette.enter_columns(ColumnTask::Split(SplitKind::Widths));
+        let empty = palette.paint(view(), colors(), DetailPane::Closed);
+        let shown = texts(&empty);
+        assert!(shown.contains(&"字の数をカンマで並べる（例: 3,5,2）"));
+        assert!(shown.contains(&"Enter で右に列を足す（元の列は残る）· Tab で分け方：固定幅"));
+        assert!(shown.contains(&"打つと、見えている行の分け方をここに見せます"));
+        palette.insert_text("2");
+        palette.set_preview(vec![String::from("2026 → 20 ｜ 26")]);
+        let commands = palette.paint(view(), colors(), DetailPane::Closed);
+        assert!(texts(&commands).contains(&"2026 → 20 ｜ 26"));
+        let row = PaletteLayout::new(view(), &palette).row(0);
+        assert!(!fills(&commands, colors().selection()).contains(&row));
+        let mut join = CommandPalette::open();
+        join.enter_columns(ColumnTask::Join);
+        assert!(
+            texts(&join.paint(view(), colors(), DetailPane::Closed))
+                .contains(&"区切りを打たなければ、そのままつなぎます")
+        );
     }
 
     /// 書き出しの段は、面の名前と今の値を 2 列で見せ、案内の行で「今のファイルは変えない」と言う。書き出す先の欄は、

@@ -123,6 +123,7 @@ use nene_ledger_core::cell_value::CellValue;
 use nene_ledger_core::char_advances::CharAdvances;
 use nene_ledger_core::column_id::ColumnId;
 use nene_ledger_core::column_order::ColumnOrder;
+use nene_ledger_core::column_split::{Splitter, joined};
 use nene_ledger_core::column_widths::{ColumnWidths, MAX_RESIZED_COLUMNS, MIN_COLUMN_COLUMNS};
 use nene_ledger_core::display_width::display_columns;
 use nene_ledger_core::draw_command::DrawCommand;
@@ -3661,6 +3662,215 @@ impl Document {
             .record_batch(vec![EditStep::Columns(change)], cells, &mut self.edits);
         self.notice = Some(Notice::Columns(ColumnsNotice::Duplicated(count)));
         self.after_columns_changed(at, window)
+    }
+
+    /// 列の分割（パレット・ADR 0037 の決定 1）の前に、合成ルートに読ませる行。断り方は列の複製と同じで、加えて、分ける
+    /// のは 1 列だけ。断るときは知らせて `None`。
+    pub fn split_column_request(&mut self) -> Option<(u64, u64)> {
+        let request = self.duplicate_columns_request()?;
+        if !matches!(self.chosen_columns(), Some((_, _, 1))) {
+            self.notice = Some(Notice::Columns(ColumnsNotice::SplitNeedsOne));
+            return None;
+        }
+        Some(request)
+    }
+
+    /// 列の結合（パレット・ADR 0037 の決定 4）の前に、合成ルートに読ませる行。断り方は列の複製と同じで、加えて、つなぐ
+    /// のは続いた 2 列以上。断るときは知らせて `None`。
+    pub fn join_columns_request(&mut self) -> Option<(u64, u64)> {
+        let request = self.duplicate_columns_request()?;
+        if !matches!(self.chosen_columns(), Some((_, _, count)) if count >= 2) {
+            self.notice = Some(Notice::Columns(ColumnsNotice::JoinNeedsTwo));
+            return None;
+        }
+        Some(request)
+    }
+
+    /// 分け方 `splitter` で、見えている行の分ける列の値がどう分かれるかの見本（多くて `limit` 行・「値 → a ｜ b」）。
+    /// 段の中で先に見せる（ADR 0037 の決定 2）。分ける列が決まらなければ空。
+    #[must_use]
+    pub fn split_preview(&self, splitter: &Splitter, limit: usize) -> Vec<String> {
+        let Some((column, _, 1)) = self.chosen_columns() else {
+            return Vec::new();
+        };
+        self.view
+            .rows()
+            .iter()
+            .filter_map(|row| {
+                let value = match self.edits.get(row.row(), self.column_id(column)) {
+                    Some(CellValue::Text(text)) => text.clone(),
+                    Some(CellValue::Absent) => return None,
+                    None => String::from(row.cells().get(column)?),
+                };
+                let parts = splitter.split(&value);
+                Some(format!("{value} → {}", parts.join(" ｜ ")))
+            })
+            .take(limit)
+            .collect()
+    }
+
+    /// `split_column_request` が読ませた全部の行（位置 `first_line` から `rows`・切り詰めたレコード `cuts`）の、分ける列の
+    /// 値を `splitter` で分け、すぐ右に、最も多く分かれた数だけ列を足して書く（ADR 0037 の決定 1〜3）。元の列には触らない。
+    /// 見出しの行は分けず、足した列に `元の名前 1`・`元の名前 2`… と書く。足した列と書き込みは 1 手の束。どの値も
+    /// 分かれなければ、知らせて何も足さない。
+    pub fn split_column(
+        &mut self,
+        first_line: u64,
+        (rows, cuts): (&[CellRow], &[CutRecord]),
+        splitter: &Splitter,
+    ) -> DocumentEffect {
+        let Some((window, column, values)) = self.column_values(first_line, (rows, cuts)) else {
+            return DocumentEffect::Stay;
+        };
+        let header = self.header_line();
+        let parts: Vec<Vec<String>> = values
+            .iter()
+            .zip(first_line..)
+            .map(|(cells, line)| {
+                let value = cells.get(column).map_or("", String::as_str);
+                match header {
+                    Some(header) if header.contains(line) => Vec::from([String::from(value)]),
+                    // 見出しより前の行（前書き）は表の値でないので、分けない。
+                    Some(header) if line < header.first() => Vec::new(),
+                    Some(_) | None => splitter.split(value),
+                }
+            })
+            .collect();
+        let widest = parts
+            .iter()
+            .zip(first_line..)
+            .filter(|&(_, line)| !header.is_some_and(|header| header.contains(line)))
+            .map(|(parts, _)| parts.len())
+            .max()
+            .unwrap_or(0);
+        if widest < 2 {
+            self.notice = Some(Notice::Columns(ColumnsNotice::NothingSplits));
+            return DocumentEffect::Stay;
+        }
+        let named = |pieces: &[String], line: u64, index: usize| -> Option<String> {
+            if header.is_some_and(|header| header.contains(line)) {
+                let name = pieces.first().filter(|name| !name.is_empty())?;
+                return Some(format!("{name} {}", index.saturating_add(1)));
+            }
+            pieces.get(index).cloned()
+        };
+        let written: Vec<Vec<Option<String>>> = parts
+            .iter()
+            .zip(first_line..)
+            .map(|(pieces, line)| {
+                (0..widest)
+                    .map(|index| named(pieces, line, index))
+                    .collect()
+            })
+            .collect();
+        let at = column.saturating_add(1);
+        self.write_new_columns((at, widest), first_line, &written);
+        self.notice = Some(Notice::Columns(ColumnsNotice::Split(widest)));
+        self.after_columns_changed(at, window)
+    }
+
+    /// `join_columns_request` が読ませた全部の行の、選んだ続いた列の値を、区切り `separator` でつないで、すぐ右の新しい
+    /// 1 列に書く（ADR 0037 の決定 4）。「セルが無い」所は飛ばし、空のセルは空の値としてつなぐ。見出しの行は、名前を
+    /// ` ＋ ` でつなぐ。元の列には触らない。足した列と書き込みは 1 手の束。
+    pub fn join_columns(
+        &mut self,
+        first_line: u64,
+        (rows, cuts): (&[CellRow], &[CutRecord]),
+        separator: &str,
+    ) -> DocumentEffect {
+        let (Some((first, last, count)), Some((window, _, _))) = (
+            self.chosen_columns(),
+            self.column_values(first_line, (rows, cuts)),
+        ) else {
+            return DocumentEffect::Stay;
+        };
+        let header = self.header_line();
+        let written: Vec<Vec<Option<String>>> = rows
+            .iter()
+            .zip(first_line..)
+            .map(|(cells, line)| {
+                let present = self.present_cells(line, cells, first..=last);
+                let texts = present.iter().map(Option::as_deref);
+                let value = match header {
+                    Some(header) if header.contains(line) => joined(
+                        texts.filter(|name| name.is_some_and(|name| !name.is_empty())),
+                        " ＋ ",
+                    ),
+                    Some(header) if line < header.first() => return Vec::from([None]),
+                    Some(_) | None => joined(texts, separator),
+                };
+                Vec::from([Some(value)])
+            })
+            .collect();
+        let at = last.saturating_add(1);
+        self.write_new_columns((at, 1), first_line, &written);
+        self.notice = Some(Notice::Columns(ColumnsNotice::Joined(count)));
+        self.after_columns_changed(at, window)
+    }
+
+    /// 読ませた全部の行が使えるか（窓・足し消しできる列・索引・切り詰めた行が無い・行の数が合う）を確かめ、窓と、
+    /// 選んだ最初の列と、書き換えを重ねた行の値を返す。使えなければ `None`（切り詰めた行があれば知らせる）。
+    fn column_values(
+        &mut self,
+        first_line: u64,
+        (rows, cuts): (&[CellRow], &[CutRecord]),
+    ) -> Option<(WindowView, usize, Vec<Vec<String>>)> {
+        let (window, (first, _, _), records) =
+            (self.window?, self.chosen_columns()?, self.records()?);
+        if !cuts.is_empty() {
+            self.notice = Some(Notice::EditCut);
+            return None;
+        }
+        if u64::try_from(rows.len()).ok() != Some(self.rows.len(records)) {
+            return None;
+        }
+        Some((window, first, self.overlaid(first_line, rows)))
+    }
+
+    /// 行の並びの位置 `line` の行（原本の順のセル `cells`）の、表の列 `columns` のセルの値。書き換えを重ね、「セルが無い」
+    /// 所は `None`。
+    fn present_cells(
+        &self,
+        line: u64,
+        cells: &CellRow,
+        columns: core::ops::RangeInclusive<usize>,
+    ) -> Vec<Option<String>> {
+        let row = self.rows.row_at(line).unwrap_or(RowId::Source(line));
+        let arranged = self.arranged_row(cells);
+        columns
+            .map(|column| match self.edits.get(row, self.column_id(column)) {
+                Some(CellValue::Text(text)) => Some(text.clone()),
+                Some(CellValue::Absent) => None,
+                None => arranged.get(column).map(String::from),
+            })
+            .collect()
+    }
+
+    /// 表の `at` 列目の前に `count` 列を足し、位置 `first_line` からの行ごとの値 `written`（足した列の順・`None` は
+    /// 書かない）を書く。足した列と書き込みを 1 手の束として積む（Ctrl+Z 1 回で戻る・ADR 0037）。
+    fn write_new_columns(
+        &mut self,
+        (at, count): (usize, usize),
+        first_line: u64,
+        written: &[Vec<Option<String>>],
+    ) {
+        let change = self.add_columns(at, count);
+        let shown: &Self = self;
+        let cells: Vec<(CellChange, String)> = written
+            .iter()
+            .zip(first_line..)
+            .flat_map(|(values, line)| {
+                let row = shown.rows.row_at(line).unwrap_or(RowId::Source(line));
+                values
+                    .iter()
+                    .enumerate()
+                    .filter_map(move |(offset, value)| {
+                        shown.pasted_cell((row, at.saturating_add(offset)), &[], value.as_deref()?)
+                    })
+            })
+            .collect();
+        self.history
+            .record_batch(vec![EditStep::Columns(change)], cells, &mut self.edits);
     }
 
     /// `duplicate_request` が読ませた行（位置 `first_line` から読んだ `rows`・切り詰めたレコード `cuts`）を、選択の
@@ -7260,6 +7470,7 @@ mod tests {
     use nene_ledger_core::char_advances::SUBPIXELS;
     use nene_ledger_core::chrome_button::ChromeButton;
     use nene_ledger_core::color::Color;
+    use nene_ledger_core::split_kind::SplitKind;
     use nene_ledger_core::text_caret::TextCaret;
     use nene_ledger_core::window_placement::WindowPlacement;
 
@@ -10762,7 +10973,7 @@ mod tests {
         assert_eq!(document.duplicate_columns_request(), None);
         text_at(
             &document.frame(normal(), palette()),
-            "列の複製は、行の数が分かってからできます（索引を作っています）",
+            "列の複製・分割・結合は、行の数が分かってからできます（索引を作っています）",
         );
         document.report(JobReport::Finished(IndexSummary::new(3, None)));
         document.apply(Intent::Edit(EditTarget::Cell), normal());
@@ -10789,6 +11000,144 @@ mod tests {
         document.apply(Intent::Undo, normal());
         assert_eq!(document.widths.columns().len(), 2);
         assert_eq!(text_of(&document, RowId::Source(1), copy), None);
+    }
+
+    /// 名前の列を分ける見本の表（見出し 1 行 ＋ 3 行。3 行目は列が足りない）。索引は作り終えてある。
+    fn people() -> (Document, Vec<CellRow>) {
+        let rows = table(&[
+            &["id", "氏名", "市"],
+            &["1", "山田 太郎", "東京"],
+            &["2", "鈴木 花子 ジュニア", ""],
+            &["3", "佐藤"],
+        ]);
+        let mut document = closed(Document::open(
+            String::from("t"),
+            summary(),
+            Some(HeaderRows::single(0)),
+            rows.clone(),
+        ));
+        document.report(JobReport::Finished(IndexSummary::new(4, None)));
+        (document, rows)
+    }
+
+    /// 足した列 `column` の、行ごとの書いた値（書いていなければ `None`）。
+    fn written_in(document: &Document, column: usize, lines: u64) -> Vec<Option<&str>> {
+        let id = document.column_id(column);
+        (0..lines)
+            .map(|line| text_of(document, RowId::Source(line), id))
+            .collect()
+    }
+
+    /// 列の分割は、元の列を残して、すぐ右に最も多く分かれた数の列を足して書く。見出しは分けずに番号を付ける。段の見本は
+    /// 書く値と同じ分け方。Ctrl+Z 1 回で列ごと戻る（ADR 0037 の決定 1〜3・5）。
+    #[test]
+    fn splitting_a_column_adds_the_parts_to_the_right_and_keeps_the_original() {
+        let (mut document, rows) = people();
+        document.apply(moving(CursorStep::Right), normal());
+        let splitter = Splitter::parse(SplitKind::Literal, " ").unwrap();
+        assert_eq!(
+            document.split_preview(&splitter, 2),
+            [
+                "山田 太郎 → 山田 ｜ 太郎",
+                "鈴木 花子 ジュニア → 鈴木 ｜ 花子 ｜ ジュニア"
+            ]
+        );
+        let (first_line, count) = document.split_column_request().unwrap();
+        assert_eq!((first_line, count), (0, 4));
+        document.split_column(first_line, (&rows, &[]), &splitter);
+        assert_eq!(document.widths.columns().len(), 6);
+        assert_eq!(
+            written_in(&document, 2, 4),
+            [Some("氏名 1"), Some("山田"), Some("鈴木"), Some("佐藤")]
+        );
+        assert_eq!(
+            written_in(&document, 3, 4),
+            [Some("氏名 2"), Some("太郎"), Some("花子"), None]
+        );
+        assert_eq!(
+            written_in(&document, 4, 4),
+            [Some("氏名 3"), None, Some("ジュニア"), None]
+        );
+        // 元の列には何も書いていない。
+        assert_eq!(written_in(&document, 1, 4), [None; 4]);
+        text_at(
+            &document.frame(normal(), palette()),
+            "列を分けて、右に 3 列を足しました（元の列は残っています · Ctrl+Z で戻す）",
+        );
+        document.apply(Intent::Undo, normal());
+        assert_eq!(document.widths.columns().len(), 3);
+        assert!(document.edits().is_empty());
+    }
+
+    /// どの値も分かれない分け方では列を足さない。2 列以上を選んでいれば分けない。
+    #[test]
+    fn a_split_that_parts_nothing_or_spans_columns_adds_nothing() {
+        let (mut document, rows) = people();
+        // 表は、最初の操作で窓を覚える。
+        document.apply(moving(CursorStep::Down), normal());
+        let dash = Splitter::parse(SplitKind::Literal, "-").unwrap();
+        let (first_line, _) = document.split_column_request().unwrap();
+        document.split_column(first_line, (&rows, &[]), &dash);
+        assert_eq!(document.widths.columns().len(), 3);
+        text_at(
+            &document.frame(normal(), palette()),
+            "その分け方では、どの行の値も分かれません（列は足していません）",
+        );
+        document.apply(Intent::SelectColumns, normal());
+        document.apply(
+            Intent::Move {
+                step: CursorStep::Right,
+                mode: SelectionMode::Extend,
+            },
+            normal(),
+        );
+        assert_eq!(document.split_column_request(), None);
+        text_at(
+            &document.frame(normal(), palette()),
+            "分けるのは 1 列だけです（列を 1 つ選んでください）",
+        );
+    }
+
+    /// 列の結合は、選んだ続いた列の値を区切りでつないで、すぐ右の 1 列に書く。「セルが無い」所は飛ばし、空のセルは空の値
+    /// としてつなぐ。見出しは名前を ＋ でつなぐ。元の列は残り、Ctrl+Z 1 回で戻る（ADR 0037 の決定 4・5）。
+    #[test]
+    fn joining_columns_writes_one_column_to_the_right() {
+        let (mut document, rows) = people();
+        assert_eq!(document.join_columns_request(), None);
+        text_at(
+            &document.frame(normal(), palette()),
+            "つなぐ列を、続けて 2 列以上選んでください（列の見出しを押してから Shift を押しながら隣を押す）",
+        );
+        document.apply(moving(CursorStep::Right), normal());
+        document.apply(Intent::SelectColumns, normal());
+        document.apply(
+            Intent::Move {
+                step: CursorStep::Right,
+                mode: SelectionMode::Extend,
+            },
+            normal(),
+        );
+        let (first_line, _) = document.join_columns_request().unwrap();
+        document.join_columns(first_line, (&rows, &[]), "-");
+        assert_eq!(document.widths.columns().len(), 4);
+        assert_eq!(
+            written_in(&document, 3, 4),
+            [
+                Some("氏名 ＋ 市"),
+                Some("山田 太郎-東京"),
+                Some("鈴木 花子 ジュニア-"),
+                Some("佐藤")
+            ]
+        );
+        assert_eq!(written_in(&document, 1, 4), [None; 4]);
+        assert_eq!(written_in(&document, 2, 4), [None; 4]);
+        text_at(
+            &document.frame(normal(), palette()),
+            "2 列をつないで、右に 1 列を足しました（元の列は残っています · Ctrl+Z で戻す）",
+        );
+        document.apply(Intent::Undo, normal());
+        assert_eq!(document.widths.columns().len(), 3);
+        assert!(document.edits().is_empty());
     }
 
     /// 読み取り専用なら行を複製しない（読ませもしない・GitHub Issue #486）。

@@ -188,6 +188,7 @@ impl PaletteLayout {
             | PaletteMode::Reading { .. }
             | PaletteMode::Candidates { .. }
             | PaletteMode::Export { .. }
+            | PaletteMode::Columns { .. }
             | PaletteMode::SaveAs { .. } => return None,
         };
         if self.visible < first_row + 2 {
@@ -387,6 +388,7 @@ fn least_rows(mode: PaletteMode) -> u32 {
         | PaletteMode::Reading { .. }
         | PaletteMode::Candidates { .. }
         | PaletteMode::Export { .. }
+        | PaletteMode::Columns { .. }
         | PaletteMode::SaveAs { .. } => 1,
     }
 }

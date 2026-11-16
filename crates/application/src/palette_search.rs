@@ -340,6 +340,7 @@ mod tests {
                 | PaletteItem::Key(_)
                 | PaletteItem::About(_)
                 | PaletteItem::Export(_)
+                | PaletteItem::Preview(_)
                 | PaletteItem::Heading(_)
                 | PaletteItem::Candidate(_) => None,
             })
@@ -550,6 +551,7 @@ mod tests {
                     | PaletteItem::Key(_)
                     | PaletteItem::About(_)
                     | PaletteItem::Export(_)
+                    | PaletteItem::Preview(_)
                     | PaletteItem::Heading(_)
                     | PaletteItem::Candidate(_) => None,
                 })

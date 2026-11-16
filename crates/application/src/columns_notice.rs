@@ -21,4 +21,16 @@ pub enum ColumnsNotice {
     Duplicated(usize),
     /// 列の複製は表の全部の行を読むので、索引を作り終えて行の数が分かってから。
     AwaitIndex,
+    /// 列を分けて、すぐ右に列を足した（足した列の数・元の列は残る・ADR 0037）。
+    Split(usize),
+    /// 列をつないで、すぐ右に 1 列を足した（つないだ列の数・元の列は残る・ADR 0037）。
+    Joined(usize),
+    /// 分けるのは 1 列だけ（列全体を 2 列以上選んでいる）。
+    SplitNeedsOne,
+    /// つなぐには、続いた 2 列以上を列全体で選ぶ。
+    JoinNeedsTwo,
+    /// その分け方では、どの行の値も分かれない（列を足していない）。
+    NothingSplits,
+    /// 打った分け方を読めない（空・切れない正規表現・数字でない幅）。段は開いたまま。
+    UnreadableSplit,
 }
