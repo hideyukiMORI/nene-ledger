@@ -42,10 +42,11 @@ M2 に残る保存まわりの 5 項目は、1 つの入口にまとまる。
 
 ## 強制
 
-- **planned**（受理の後の Issue で）:
-  - 書き出したファイルを同じ方言で読み戻すと、セルの値が元の表と同じ（乱数の表 × 方言・QLT-008 の往復）
-  - 書き出しの後、元のファイルのバイト列と窓の差分が変わっていない（store と application のテスト）
-  - 表せない字があれば 1 バイトも書かない（先のファイルを作らない）
+- **active**（テスト・GitHub Issue #543・#547・#549）:
+  - 書き出したファイルを同じ方言で読み戻すと、セルの値が元の表と同じ（乱数の表 × 方言 × 引用符の付け方 × 改行・core `row_export` の `exported_rows_read_back_as_the_same_cells`・application `export_planning` の `exported_tables_read_back_as_the_same_cells`）
+  - 書き出しの後、元のファイルのバイト列と窓の差分が変わっていない（app `exporting` の `a_shift_jis_table_is_exported_as_quoted_utf8_tsv_and_the_source_is_untouched`・application `document` の `exporting_blocks_edits_and_leaves_the_edits_and_the_title_alone`）
+  - 表せない字があれば 1 バイトも書かない（先のファイルを作らない・app `exporting` の `unrepresentable_cells_and_the_same_file_stop_the_export_before_writing`）
+- **planned**: 往復で変わる字（決定 6・JP-02）を書く前に数えて尋ねること
 - **不能（レビュー事項）**: 「黙って置き換えていないか」（FR-023）
 
 ## 結果

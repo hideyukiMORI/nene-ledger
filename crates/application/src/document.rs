@@ -49,6 +49,8 @@ use crate::edit_step::EditStep;
 use crate::edit_surface::EditSurface;
 use crate::edit_target::EditTarget;
 use crate::editing_cell::EditingCell;
+use crate::export_format::ExportFormat;
+use crate::export_notice::ExportNotice;
 use crate::find_area::FindArea;
 use crate::find_bound::FindBound;
 use crate::find_notice::FindNotice;
@@ -111,6 +113,7 @@ use crate::tsv::{parse_tsv, tsv};
 use crate::unrepresentable_notice::UnrepresentableNotice;
 use crate::view_row::ViewRow;
 use crate::window_view::WindowView;
+use crate::write_kind::WriteKind;
 use nene_ledger_core::cell_change::CellChange;
 use nene_ledger_core::cell_edits::CellEdits;
 use nene_ledger_core::cell_value::CellValue;
@@ -199,8 +202,8 @@ pub struct Document {
     editor: Option<CellEditor>,
     /// Ctrl+Enter で書いている間の欄（書けなければ戻す・EDIT-02・GitHub Issue #203）。
     filling: Option<CellEditor>,
-    /// 裏で保存している間（直すことと保存を受けない）。
-    saving: bool,
+    /// 裏で保存か書き出しをしている間は、その種類（直すことと保存を受けない）。していなければ `None`。
+    writing: Option<WriteKind>,
     /// 閉じる手順（ADR 0026 の決定 7）。
     closing: CloseState,
     /// 元に戻す・やり直すの履歴（UNDO-01）。保存の後も残す。
@@ -349,7 +352,7 @@ impl Document {
             edits: CellEdits::empty(),
             editor: None,
             filling: None,
-            saving: false,
+            writing: None,
             closing: CloseState::Open,
             history: EditHistory::empty(),
             baseline: whole_orders(),
@@ -419,7 +422,7 @@ impl Document {
     /// 裏で保存しているか。
     #[must_use]
     pub const fn is_saving(&self) -> bool {
-        self.saving
+        self.writing.is_some()
     }
 
     /// 閉じる手順の状態。`Finished` なら UI が窓を閉じる。
@@ -435,7 +438,7 @@ impl Document {
             return true;
         }
         self.commit_edit();
-        if !self.has_unsaved() && !self.saving {
+        if !self.has_unsaved() && self.writing.is_none() {
             self.closing = CloseState::Finished;
             return true;
         }
@@ -522,7 +525,7 @@ impl Document {
             }
             CloseChoice::Save => {
                 self.closing = CloseState::AfterSave;
-                if self.saving {
+                if self.writing.is_some() {
                     // 今の保存が終われば閉じる。
                     DocumentEffect::Stay
                 } else if self.untitled {
@@ -536,13 +539,59 @@ impl Document {
 
     /// 裏の保存を始めた（`DocumentEffect::Save` を受けて合成ルートが呼ぶ）。
     pub fn begin_saving(&mut self) {
-        self.saving = true;
+        self.writing = Some(WriteKind::Save);
         self.save_progress = None;
+    }
+
+    /// 裏の書き出しを始めた（ADR 0036）。終わるまで直すことと保存を受けない（保存と同じ）。
+    pub fn begin_exporting(&mut self) {
+        self.writing = Some(WriteKind::Export);
+        self.save_progress = None;
+    }
+
+    /// 形式 `format` で書き出した。題名・未保存の印・履歴・書き換えは変えない（ADR 0036 の決定 3）。
+    pub fn exported(&mut self, format: ExportFormat) {
+        self.writing = None;
+        self.notice = Some(Notice::Export(ExportNotice::Written(format)));
+    }
+
+    /// 書き出せなかった。理由 `notice` を知らせる。表せない字のあるセルがあったなら、最初のセル `first`（表の行の位置・
+    /// 列の位置）へ移る（ADR 0036 の決定 5）。
+    pub fn export_failed(
+        &mut self,
+        notice: ExportNotice,
+        first: Option<(u64, usize)>,
+        window: WindowView,
+    ) -> DocumentEffect {
+        self.writing = None;
+        let effect = match first {
+            Some((row, column)) => {
+                self.apply(Intent::GoTo(GoToTarget::at_cell(row, column)), window)
+            }
+            None => DocumentEffect::Stay,
+        };
+        self.notice = Some(Notice::Export(notice));
+        effect
+    }
+
+    /// 書き出す先を打ち直したので、「今のファイルと同じ」の知らせを消す（次に尋ねる上書きの問いと食い違わない）。
+    pub fn export_retargeted(&mut self) {
+        if self.notice == Some(Notice::Export(ExportNotice::SameFile)) {
+            self.notice = None;
+        }
+    }
+
+    /// 裏の仕事の途中なので受けない、という知らせ（保存か書き出しか）。
+    const fn busy_notice(&self) -> Notice {
+        match self.writing {
+            Some(WriteKind::Export) => Notice::Export(ExportNotice::Busy),
+            Some(WriteKind::Save) | None => Notice::StillSaving,
+        }
     }
 
     /// 裏の保存が `written` バイトを書いた（見込みは `total` バイト・SAVE-02）。状態の行に割合を出す。
     pub fn save_progress(&mut self, written: u64, total: u64) {
-        if self.saving {
+        if self.writing.is_some() {
             self.save_progress = Some((written, total));
         }
     }
@@ -550,7 +599,7 @@ impl Document {
     /// 保存して、置き換えた後のファイルを同じ読み方で開き直した。書き換えを空にし、索引は作り直しを待つ。
     /// カーソルと表示の位置は保ち、今の位置から読み直させる。
     pub fn saved(&mut self) -> DocumentEffect {
-        self.saving = false;
+        self.writing = None;
         let written = self.edits.rows().iter().fold(0_u64, |sum, (_, columns)| {
             sum.saturating_add(u64::try_from(columns.len()).unwrap_or(u64::MAX))
         });
@@ -654,7 +703,7 @@ impl Document {
     /// 名前を付けて保存して書けたが、保存先を開けなかった。窓は前の原本と差分のまま（題名・書き換え・新しい表かは
     /// 変えない）。保存して閉じると選んでいれば、書けたので閉じる。
     pub fn reopen_failed_after_save_as(&mut self) {
-        self.saving = false;
+        self.writing = None;
         if self.closing == CloseState::AfterSave {
             self.closing = CloseState::Finished;
         }
@@ -663,7 +712,7 @@ impl Document {
 
     /// 名前を付けて保存の保存先を選ばずにやめた。保存して閉じると選んでいたなら、閉じずに戻る。
     pub fn save_as_cancelled(&mut self) {
-        if self.closing == CloseState::AfterSave && !self.saving {
+        if self.closing == CloseState::AfterSave && self.writing.is_none() {
             self.closing = CloseState::Open;
         }
     }
@@ -676,7 +725,7 @@ impl Document {
 
     /// 保存できなかった。書き換えは残す。
     pub fn save_failed(&mut self, problem: SaveProblem) {
-        self.saving = false;
+        self.writing = None;
         // 保存して閉じると選んでいても、保存できなければ閉じない（書き換えを失わない）。
         if self.closing == CloseState::AfterSave {
             self.closing = CloseState::Open;
@@ -1113,11 +1162,11 @@ impl Document {
             return self.find_again(forward);
         }
         // 保存の途中の Esc は、保存をやめる（SAVE-02・ADR 0025 の施主の判断 4）。
-        if self.saving && intent == Intent::Cancel && self.editor.is_none() {
+        if self.writing.is_some() && intent == Intent::Cancel && self.editor.is_none() {
             return DocumentEffect::StopSaving;
         }
-        if self.saving && changes_the_table(intent) {
-            self.notice = Some(Notice::StillSaving);
+        if self.writing.is_some() && changes_the_table(intent) {
+            self.notice = Some(self.busy_notice());
             return DocumentEffect::Stay;
         }
         if changes_when_writable(intent) && self.refuses_change() {
@@ -1514,7 +1563,11 @@ impl Document {
             window,
         );
         let on_cursor = self.cell_at(at, window) == Some(self.selection.cursor());
-        if on_cursor && self.editor.is_none() && !self.saving && self.closing == CloseState::Open {
+        if on_cursor
+            && self.editor.is_none()
+            && self.writing.is_none()
+            && self.closing == CloseState::Open
+        {
             let _released = self.release(window);
             self.begin_edit(EditMode::Editing);
         }
@@ -1673,7 +1726,7 @@ impl Document {
     /// 見出しの `index` 番目の行の、表示の列 `display` の名前を直し始める（欄は元の名前・全部を選んである）。見出しが
     /// 無い表・読み取り専用・保存の途中・尋ねる画面では始めない。始めたら `true`。
     fn begin_rename(&mut self, index: usize, display: usize) -> bool {
-        if self.saving || self.closing != CloseState::Open || self.refuses_change() {
+        if self.writing.is_some() || self.closing != CloseState::Open || self.refuses_change() {
             return false;
         }
         self.cut = None;
@@ -1756,7 +1809,7 @@ impl Document {
     /// IME の確定前の文字列を欄に出す（`None` で消す・ADR 0026 の決定 4）。編集していなければ、
     /// 空でない文字列が始まったときに入力の状態で編集に入る。尋ねる画面と保存中は受けない（確定のほうで知らせる）。
     pub fn compose(&mut self, preedit: Option<Preedit>) {
-        if self.closing != CloseState::Open || self.saving {
+        if self.closing != CloseState::Open || self.writing.is_some() {
             return;
         }
         let starting = preedit
@@ -1778,8 +1831,8 @@ impl Document {
         if self.closing != CloseState::Open || text.is_empty() {
             return PasteRequest::Done;
         }
-        if self.saving {
-            self.notice = Some(Notice::StillSaving);
+        if self.writing.is_some() {
+            self.notice = Some(self.busy_notice());
             return PasteRequest::Done;
         }
         if self.editor.is_none() && self.refuses_change() {
@@ -1974,7 +2027,7 @@ impl Document {
         let Some(mut plan) = self.pasting.take() else {
             return DocumentEffect::Stay;
         };
-        if self.saving || self.editor.is_some() || self.closing != CloseState::Open {
+        if self.writing.is_some() || self.editor.is_some() || self.closing != CloseState::Open {
             return DocumentEffect::Stay;
         }
         let read = first_record
@@ -2385,8 +2438,8 @@ impl Document {
             self.notice = Some(Notice::Find(FindNotice::BrokenPattern));
             return DocumentEffect::Stay;
         }
-        if self.saving {
-            self.notice = Some(Notice::StillSaving);
+        if self.writing.is_some() {
+            self.notice = Some(self.busy_notice());
             return DocumentEffect::Stay;
         }
         if self.refuses_change() {
@@ -2440,8 +2493,8 @@ impl Document {
             self.notice = Some(Notice::Find(FindNotice::BrokenPattern));
             return DocumentEffect::Stay;
         }
-        if self.saving {
-            self.notice = Some(Notice::StillSaving);
+        if self.writing.is_some() {
+            self.notice = Some(self.busy_notice());
             return DocumentEffect::Stay;
         }
         if self.refuses_change() {
@@ -2735,8 +2788,8 @@ impl Document {
         if self.refuses_change() {
             return DocumentEffect::Stay;
         }
-        if self.saving {
-            self.notice = Some(Notice::StillSaving);
+        if self.writing.is_some() {
+            self.notice = Some(self.busy_notice());
             return DocumentEffect::Stay;
         }
         if run.revision() != self.history.revision() {
@@ -3097,8 +3150,8 @@ impl Document {
         if self.closing != CloseState::Open || text.is_empty() {
             return;
         }
-        if self.saving {
-            self.notice = Some(Notice::StillSaving);
+        if self.writing.is_some() {
+            self.notice = Some(self.busy_notice());
             return;
         }
         self.notice = None;
@@ -3501,8 +3554,8 @@ impl Document {
         if self.closing != CloseState::Open {
             return false;
         }
-        if self.saving {
-            self.notice = Some(Notice::StillSaving);
+        if self.writing.is_some() {
+            self.notice = Some(self.busy_notice());
             return false;
         }
         if self.refuses_change() {
@@ -3886,7 +3939,8 @@ impl Document {
     /// 窓の中の `at` が、選んだ範囲（1 つだけ）の枠の上か（枠の内と外 `FRAME_GRIP` 画素）。直している間・読み取り専用・
     /// 保存の途中・尋ねる画面では掴めない。
     fn frame_grip(&self, at: PixelPoint, window: WindowView) -> bool {
-        let busy = self.editor.is_some() || self.saving || self.closing != CloseState::Open;
+        let busy =
+            self.editor.is_some() || self.writing.is_some() || self.closing != CloseState::Open;
         if busy || self.is_read_only() || !self.others.is_empty() {
             return false;
         }
@@ -4893,8 +4947,8 @@ impl Document {
             self.notice = Some(Notice::Columns(ColumnsNotice::Reordered));
             return DocumentEffect::Stay;
         }
-        if self.saving {
-            self.notice = Some(Notice::StillSaving);
+        if self.writing.is_some() {
+            self.notice = Some(self.busy_notice());
             return DocumentEffect::Stay;
         }
         if self.refuses_change() {
@@ -4943,8 +4997,8 @@ impl Document {
         if (start..=end.saturating_add(1)).contains(&before) || end == TO_END {
             return DocumentEffect::Stay;
         }
-        if self.saving {
-            self.notice = Some(Notice::StillSaving);
+        if self.writing.is_some() {
+            self.notice = Some(self.busy_notice());
             return DocumentEffect::Stay;
         }
         if self.refuses_change() {
@@ -6572,8 +6626,8 @@ impl Document {
         if self.closing == CloseState::AfterSave {
             return String::from("保存してから閉じます…");
         }
-        if self.saving {
-            return saving_status(self.save_progress);
+        if let Some(kind) = self.writing {
+            return saving_status(self.save_progress, kind);
         }
         if let Some(run) = &self.finding {
             return finding_status(run.progress());
@@ -6920,13 +6974,18 @@ fn replacing_status(run: &ReplaceRun) -> String {
 }
 
 /// 保存の途中の状態の行。進み具合が分かれば割合（書き終える前は 99% で止める）と、やめ方を添える。
-fn saving_status(progress: Option<(u64, u64)>) -> String {
+fn saving_status(progress: Option<(u64, u64)>, kind: WriteKind) -> String {
+    let doing = match kind {
+        WriteKind::Export => "書き出しています",
+        WriteKind::Save => "保存しています",
+    };
     match progress {
-        Some((written, total)) if total > 0 => {
+        // 書き出しは、書く前に表せない字を調べる間は 1 バイトも書かない（割合を出さない）。
+        Some((written, total)) if total > 0 && (written > 0 || kind == WriteKind::Save) => {
             let percent = written.saturating_mul(100) / total;
-            format!("保存しています… {}%（Esc でやめる）", percent.min(99))
+            format!("{doing}… {}%（Esc でやめる）", percent.min(99))
         }
-        Some(_) | None => String::from("保存しています…（Esc でやめる）"),
+        Some(_) | None => format!("{doing}…（Esc でやめる）"),
     }
 }
 
@@ -11145,6 +11204,77 @@ mod tests {
             "保存しました（1 セル · UTF-8 · カンマ区切り · LF のまま）",
         );
         text_at(&frame, "e.csv — NeNe Ledger");
+    }
+
+    /// 書き出しの間は直せず、終わっても題名・未保存の印・書き換えはそのまま（ADR 0036 の決定 3）。
+    #[test]
+    fn exporting_blocks_edits_and_leaves_the_edits_and_the_title_alone() {
+        let mut document = editable();
+        typed(&mut document, "x");
+        document.apply(moving(CursorStep::Down), normal());
+        let edits = document.edits().clone();
+        assert!(!edits.is_empty());
+        document.begin_exporting();
+        assert!(document.is_saving());
+        text_at(
+            &document.frame(normal(), palette()),
+            "書き出しています…（Esc でやめる）",
+        );
+        // 調べている間（まだ書いていない）は割合を出さず、書き始めたら出す。
+        document.save_progress(0, 1_000);
+        text_at(
+            &document.frame(normal(), palette()),
+            "書き出しています…（Esc でやめる）",
+        );
+        document.save_progress(450, 1_000);
+        text_at(
+            &document.frame(normal(), palette()),
+            "書き出しています… 45%（Esc でやめる）",
+        );
+        typed(&mut document, "y");
+        text_at(
+            &document.frame(normal(), palette()),
+            "書き出しています。終わるまで直せません",
+        );
+        let format = ExportFormat::starting(summary().format(), None);
+        document.exported(format);
+        assert!(!document.is_saving());
+        assert_eq!(document.edits(), &edits);
+        assert!(document.has_unsaved());
+        let frame = document.frame(normal(), palette());
+        text_at(
+            &frame,
+            "書き出しました（UTF-8 · カンマ · CRLF · 引用符 要るときだけ） · 今のファイルはそのままです",
+        );
+        text_at(&frame, "● e.csv — NeNe Ledger");
+    }
+
+    /// 表せない字のあるセルがあって書き出せなければ、最初のセルへ移って数を言う（ADR 0036 の決定 5）。
+    #[test]
+    fn a_refused_export_moves_to_the_first_unrepresentable_cell() {
+        let mut document = editable();
+        document.begin_exporting();
+        let notice = ExportNotice::Unrepresentable {
+            encoding: nene_ledger_core::text_encoding::TextEncoding::ShiftJis,
+            cells: 2,
+        };
+        let moved = document.export_failed(notice, Some((2, 0)), normal());
+        assert_eq!(moved, DocumentEffect::Stay);
+        assert!(!document.is_saving());
+        assert_eq!(document.selection().cursor(), CellPosition::new(2, 0));
+        text_at(
+            &document.frame(normal(), palette()),
+            "Shift_JIS（CP932） で表せない字のセルが 2 個あるので、書き出しませんでした（最初のセルへ移りました）",
+        );
+        // 今のファイルと同じ先の知らせは、先を打ち直すと消える。ほかの知らせは消さない。
+        document.notify(Notice::Export(ExportNotice::SameFile));
+        document.export_retargeted();
+        document.notify(Notice::Export(ExportNotice::Failed(SaveProblem::Cancelled)));
+        document.export_retargeted();
+        text_at(
+            &document.frame(normal(), palette()),
+            "書き出しをやめました。書き出す先は作っていません",
+        );
     }
 
     /// 表せない字のある書き換えたセルを、いちばん上の位置とセルの数で言う（GitHub Issue #393）。

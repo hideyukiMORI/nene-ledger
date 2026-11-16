@@ -11,6 +11,8 @@ use nene_ledger_application::cut_record::CutRecord;
 use nene_ledger_application::detail_key::DetailKey;
 use nene_ledger_application::document::{Document, MAX_PASTE_CELLS};
 use nene_ledger_application::document_effect::DocumentEffect;
+use nene_ledger_application::export_format::ExportFormat;
+use nene_ledger_application::export_notice::ExportNotice;
 use nene_ledger_application::format_summary::FormatSummary;
 use nene_ledger_application::guide_note::GuideNote;
 use nene_ledger_application::index_summary::IndexSummary;
@@ -41,7 +43,7 @@ use nene_ledger_application::window_view::WindowView;
 use nene_ledger_application::zoom_level::ZoomLevel;
 use nene_ledger_core::char_advances::CharAdvances;
 use nene_ledger_core::find_query::FindQuery;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use nene_ledger_core::frame::Frame;
 use nene_ledger_core::order_run::OrderRun;
@@ -56,6 +58,7 @@ use nene_ledger_scan::scan_failure::ScanFailure;
 use nene_ledger_scan::split_job::SplitJob;
 use nene_ledger_store::save_job::SaveJob;
 
+use crate::exporting::start_exporting;
 use crate::find_fold::FindFold;
 use crate::open_palette::OpenPalette;
 use crate::preferences::Preferences;
@@ -65,9 +68,15 @@ use crate::replace_fold::ReplaceFold;
 use crate::rows::WINDOW_RECORDS;
 #[cfg(not(windows))]
 use crate::saving::suggested_entry;
+#[cfg(not(windows))]
+use crate::saving::suggested_export_entry;
+#[cfg(windows)]
+use crate::saving::suggested_export_target;
 #[cfg(windows)]
 use crate::saving::suggested_target;
-use crate::saving::{SavingFailure, describe, problem_of, start_saving, start_saving_as};
+use crate::saving::{
+    SavingFailure, describe, export_notice_of, problem_of, start_saving, start_saving_as,
+};
 use crate::totals_fold::TotalsFold;
 use crate::warn;
 use crate::workers::Workers;
@@ -101,6 +110,8 @@ pub(crate) struct Viewer {
     saving: Option<SaveJob>,
     /// 裏で回っている保存が名前を付けて保存なら、その保存先（終われば窓がそこを指す・ADR 0028 の決定 5）。
     saving_as: Option<PathBuf>,
+    /// 裏で回っている保存が書き出しなら、その形式（終わっても窓は元のファイルのまま・ADR 0036 の決定 3）。
+    exporting: Option<ExportFormat>,
     /// 直前の意図をパレットが受けたか（パレットの項目を押して閉じた直後の 2 度目の押しを、表のダブルクリックにしない）。
     palette_took_last: bool,
     /// OS の文字の倍率（百分率・起動時に読む・設定の段に掛ける・A11Y-03・GitHub Issue #263）。
@@ -134,6 +145,7 @@ impl Viewer {
             trial: None,
             saving: None,
             saving_as: None,
+            exporting: None,
             palette_took_last: false,
             text_scale: 100,
         }
@@ -206,6 +218,74 @@ impl Viewer {
         }
     }
 
+    /// 保存先と書き出しの段の結果：打った道筋で保存か書き出しをする・書き出す先を選ばせる・書き出しの段へ入る。
+    fn target_outcome(&mut self, outcome: PaletteOutcome, view: WindowView) {
+        if let PaletteOutcome::SaveAs { overwrite, export } = outcome {
+            self.save_as_entered((overwrite, export), view);
+        } else if let PaletteOutcome::Export(format) = outcome {
+            self.choose_export_target(format, view);
+        } else {
+            self.open_export();
+        }
+    }
+
+    /// 書き出しの形式を選ぶ段へ入る（初めは今のファイルの形式・ADR 0036 の決定 1）。
+    fn open_export(&mut self) {
+        let summary = self.document.format_summary();
+        let format = ExportFormat::starting(summary.format(), summary.line_endings().dominant());
+        if let Some(open) = self.palette.as_mut() {
+            open.state_mut().enter_export(format);
+        }
+    }
+
+    /// 形式 `format` で書き出す先を選ばせる（ADR 0036 の決定 2）。Windows は OS の画面、X11 はパレットの欄。初めの名前は
+    /// `元の名前-書き出し.csv`（タブ区切りなら `.tsv`）。
+    #[cfg(windows)]
+    fn choose_export_target(&mut self, format: ExportFormat, view: WindowView) {
+        self.palette = None;
+        let (folder, name) = suggested_export_target(self.reader.path(), format.extension());
+        if let Some(path) = nene_ledger_ui_win32::desktop::choose_export_file(folder, &name) {
+            self.start_exporting(&path, format, view);
+        }
+    }
+
+    /// 形式 `format` で書き出す先を、パレットの欄で打たせる（X11・初めは今のファイルのフォルダと書き出しの名前）。
+    #[cfg(not(windows))]
+    fn choose_export_target(&mut self, format: ExportFormat, _view: WindowView) {
+        let colors = self.preferences.theme().palette();
+        let initial = suggested_export_entry(self.reader.path(), format.extension());
+        self.palette = Some(OpenPalette::new(
+            CommandPalette::open_export_to(initial, format),
+            colors,
+        ));
+    }
+
+    /// `path` へ、形式 `format` で書き出しを裏で始める。始められなければ理由を知らせる。
+    fn start_exporting(&mut self, path: &Path, format: ExportFormat, view: WindowView) {
+        let started = start_exporting(
+            self.document.changes(),
+            &self.reader,
+            path,
+            (format.encoding(), format.shape()),
+        );
+        match started {
+            Ok(job) => {
+                self.saving = Some(job);
+                self.exporting = Some(format);
+                self.document.begin_exporting();
+            }
+            Err(failure) => self.export_failed(&failure, format, view),
+        }
+    }
+
+    /// 書き出せなかった理由を知らせる。表せない字のあるセルがあったなら、最初のセルへ移る（ADR 0036 の決定 5）。
+    fn export_failed(&mut self, failure: &SavingFailure, format: ExportFormat, view: WindowView) {
+        warn(&describe(failure));
+        let (notice, first) = export_notice_of(failure, format.encoding());
+        let moved = self.document.export_failed(notice, first, view);
+        let _clipboard = self.effect(moved);
+    }
+
     /// 読み方の面 `aspect` を選ぶ段へ入る（今の読み方を選んだ状態・Issue #52）。
     fn open_reading(&mut self, aspect: ReadingAspect) {
         let base = self.trial.as_ref().unwrap_or(&self.document);
@@ -218,10 +298,13 @@ impl Viewer {
 
     /// パレットを閉じる。名前を付けて保存の欄なら、保存をやめたことにする（保存して閉じるを選んでいれば閉じない）。
     fn close_palette(&mut self) {
-        let saving_as = self
-            .palette
-            .as_ref()
-            .is_some_and(|open| matches!(open.state().mode(), PaletteMode::SaveAs { .. }));
+        // 書き出す先の欄を閉じても、保存をやめたことにはしない（書き出しは閉じる流れに関わらない）。
+        let saving_as = self.palette.as_ref().is_some_and(|open| {
+            matches!(
+                open.state().mode(),
+                PaletteMode::SaveAs { export: None, .. }
+            )
+        });
         self.palette = None;
         if saving_as {
             self.document.save_as_cancelled();
@@ -230,16 +313,29 @@ impl Viewer {
 
     /// パレットの欄で打った道筋に名前を付けて保存する。既にあるファイルで、まだ上書きを確かめていなければ尋ねる
     /// （ADR 0028 の決定 5・強制の 3 つ目）。フォルダや読めない道筋なら、欄を開いたまま知らせる。
-    fn save_as_entered(&mut self, overwrite: bool) {
+    fn save_as_entered(
+        &mut self,
+        (overwrite, export): (bool, Option<ExportFormat>),
+        view: WindowView,
+    ) {
         let Some(open) = self.palette.as_mut() else {
             return;
         };
         let path = PathBuf::from(open.state().query().trim());
+        // 書き出す先が今のファイルなら、上書きを尋ねる前に断る（欄は開いたまま・ADR 0036 の決定 2）。
+        if export.is_some() && nene_ledger_store::locating::same_file(self.reader.path(), &path) {
+            self.document.notify(Notice::Export(ExportNotice::SameFile));
+            return;
+        }
+        self.document.export_retargeted();
         match nene_ledger_store::stamping::target_state(&path) {
             Ok(SaveTarget::Existing(_)) if !overwrite => open.state_mut().ask_overwrite(),
             Ok(SaveTarget::Existing(_) | SaveTarget::Absent) => {
                 self.palette = None;
-                self.start_saving_as(path);
+                match export {
+                    Some(format) => self.start_exporting(&path, format, view),
+                    None => self.start_saving_as(path),
+                }
             }
             Err(_kind) => self.document.notify(Notice::SaveFailed(SaveProblem::Other)),
         }
@@ -261,11 +357,19 @@ impl Viewer {
     }
 
     /// 裏の保存が終わっていれば、結果を画面に取り込む。成功したら置き換えた後のファイルを開き直す。
-    fn finish_saving(&mut self) {
+    fn finish_saving(&mut self, view: WindowView) {
         let Some(outcome) = self.saving.as_mut().and_then(SaveJob::take_result) else {
             return;
         };
         self.saving = None;
+        // 書き出しなら、窓は元のファイルのまま（開き直さない・題名も書き換えも変えない・ADR 0036 の決定 3）。
+        if let Some(format) = self.exporting.take() {
+            match outcome {
+                Ok(()) => self.document.exported(format),
+                Err(failure) => self.export_failed(&SavingFailure::Save(failure), format, view),
+            }
+            return;
+        }
         let saved_as = self.saving_as.take();
         if let Err(failure) = outcome {
             let failure = SavingFailure::Save(failure);
@@ -839,8 +943,10 @@ impl Viewer {
                 self.close_palette();
                 None
             }
-            PaletteOutcome::SaveAs { overwrite } => {
-                self.save_as_entered(overwrite);
+            PaletteOutcome::SaveAs { .. }
+            | PaletteOutcome::OpenExport
+            | PaletteOutcome::Export(_) => {
+                self.target_outcome(outcome, view);
                 None
             }
             PaletteOutcome::Find { forward } => self.find_entered(forward),
@@ -1228,7 +1334,7 @@ impl Session for Viewer {
             self.document
                 .save_progress(job.written(), self.reader.source_length());
         }
-        self.finish_saving();
+        self.finish_saving(view);
         let report = self.report();
         // 読み方を試している間の索引の知らせは、元の読み方の画面のもの。
         // 索引を作り終えたら今の表示の行を読み直す（試している読み方の画面は、元の読み方の索引では読めないので読み直さない）。

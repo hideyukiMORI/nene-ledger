@@ -12,6 +12,7 @@ use nene_ledger_core::unclosed_quote::UnclosedQuote;
 
 use crate::columns_notice::ColumnsNotice;
 use crate::document::MAX_COPY_ROWS;
+use crate::export_notice::ExportNotice;
 use crate::find_notice::FindNotice;
 use crate::format_summary::FormatSummary;
 use crate::job_state::JobState;
@@ -319,9 +320,7 @@ pub fn notice_status(notice: Notice) -> String {
         Notice::Copied { rows, columns, cut } => copied_status(rows, columns, cut),
         Notice::TooLargeToCopy => String::from("選択が大きすぎるのでコピーしませんでした"),
         Notice::LooksBinary => String::from("文字のファイルではないようです（NUL のバイトがある）"),
-        Notice::RangesNotAligned => {
-            String::from("離れた範囲は、行か列が揃っていないとコピーできません")
-        }
+        Notice::RangesNotAligned => String::from(RANGES_NOT_ALIGNED),
         Notice::CopyAwaitsIndex => String::from(
             "ファイルの終わりまでの行を数え終えてからコピーしてください（索引を作っています）",
         ),
@@ -373,6 +372,7 @@ pub fn notice_status(notice: Notice) -> String {
         ),
         Notice::DialectUnsure { top, rival } => dialect_unsure_status(top, rival),
         Notice::Unrepresentable(found) => unrepresentable_status(found),
+        Notice::Export(export) => export_status(export),
         Notice::Trim(trimmed) => trim_status(trimmed),
     }
 }
@@ -530,6 +530,57 @@ fn size_status(bytes: u64) -> String {
                 format!("{}.{} {name}", group_digits(tenths / 10), tenths % 10)
             },
         )
+}
+
+/// 離れた範囲をコピーできなかった文言。
+const RANGES_NOT_ALIGNED: &str = "離れた範囲は、行か列が揃っていないとコピーできません";
+
+/// 書き出しの知らせの文言（ADR 0036）。今のファイルと書き換えは変えていないことを、失敗のときに添える。
+fn export_status(notice: ExportNotice) -> String {
+    match notice {
+        ExportNotice::Written(format) => {
+            format!(
+                "書き出しました（{}） · 今のファイルはそのままです",
+                format.describe()
+            )
+        }
+        ExportNotice::Busy => String::from("書き出しています。終わるまで直せません"),
+        ExportNotice::Unrepresentable { encoding, cells } => format!(
+            "{} で表せない字のセルが {} 個あるので、書き出しませんでした（最初のセルへ移りました）",
+            encoding_name(encoding),
+            group_digits(cells)
+        ),
+        ExportNotice::SameFile => String::from(
+            "書き出す先が今のファイルと同じです。別の名前を選んでください（書き出していません）",
+        ),
+        ExportNotice::Failed(problem) => export_problem_status(problem),
+    }
+}
+
+/// 書き出せなかった理由の文言。
+fn export_problem_status(problem: SaveProblem) -> String {
+    match problem {
+        SaveProblem::Cancelled => String::from("書き出しをやめました。書き出す先は作っていません"),
+        SaveProblem::NoSpace { needed, free } => format!(
+            "書き出す先の空きが足りないので、書き出しませんでした（要る {}・空き {}）",
+            size_status(needed),
+            size_status(free)
+        ),
+        SaveProblem::Locked => String::from(
+            "書き出す先をほかのアプリが開いているので、書き出せませんでした（閉じてからもう一度）",
+        ),
+        SaveProblem::ChangedOutside => {
+            String::from("書き出しの間にファイルが外で変わったので、書き出しをやめました")
+        }
+        SaveProblem::Unplannable => {
+            String::from("読めない行か長すぎる行があるので、書き出せませんでした")
+        }
+        SaveProblem::Unrepresentable(_)
+        | SaveProblem::HardLinked
+        | SaveProblem::Interrupted
+        | SaveProblem::Untitled
+        | SaveProblem::Other => String::from("書き出せませんでした"),
+    }
 }
 
 /// 保存できなかった理由の文言。書き換えは残っていることを添える。

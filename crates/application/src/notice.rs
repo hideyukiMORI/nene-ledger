@@ -3,6 +3,7 @@
 use nene_ledger_core::dialect::Dialect;
 
 use crate::columns_notice::ColumnsNotice;
+use crate::export_notice::ExportNotice;
 use crate::find_notice::FindNotice;
 use crate::format_summary::FormatSummary;
 use crate::paste_notice::PasteNotice;
@@ -84,6 +85,8 @@ pub enum Notice {
     Find(FindNotice),
     /// 置換（ADR 0030 の決定 6）。
     Replace(ReplaceNotice),
+    /// 方言を変えた書き出し（ADR 0036）。
+    Export(ExportNotice),
     /// 新しい表の窓を開けなかった（自分の exe を起こせない・ADR 0028 の決定 1）。
     NewWindowFailed,
     /// ファイルを選ぶ画面が無い（X11）。開くファイルは引数で渡すか、窓に落とす（GitHub Issue #344）。

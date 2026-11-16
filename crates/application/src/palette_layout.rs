@@ -187,6 +187,7 @@ impl PaletteLayout {
             | PaletteMode::Themes { .. }
             | PaletteMode::Reading { .. }
             | PaletteMode::Candidates { .. }
+            | PaletteMode::Export { .. }
             | PaletteMode::SaveAs { .. } => return None,
         };
         if self.visible < first_row + 2 {
@@ -363,7 +364,7 @@ fn below_field(
         )
     });
     let hint = mode
-        .tries_the_selection()
+        .has_hint()
         .then(|| rect(left, bottom(field), width, row_height));
     (second, hint)
 }
@@ -385,6 +386,7 @@ fn least_rows(mode: PaletteMode) -> u32 {
         | PaletteMode::Themes { .. }
         | PaletteMode::Reading { .. }
         | PaletteMode::Candidates { .. }
+        | PaletteMode::Export { .. }
         | PaletteMode::SaveAs { .. } => 1,
     }
 }
