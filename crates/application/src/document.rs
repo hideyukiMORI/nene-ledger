@@ -2311,12 +2311,12 @@ impl Document {
             .collect();
         // 行は、今の行の並びの区間（行の同一性）に直して限る。行の数は、行の並びの位置で数える（範囲が見出しの行を
         // またぐと、本体の番目の差では後ろが足りなくなる・GitHub Issue #526）。
-        let rows = self.find_area.rows().map(|(first, last)| {
+        let rows = self.find_rows().map(|(first, last)| {
             let (from, to) = (self.line_of(first), self.line_of(last));
             self.runs_from(from, to.saturating_sub(from).saturating_add(1))
         });
         FindScope::new(query, columns, self.edits.clone())
-            .within(self.find_area.columns())
+            .within(self.find_columns())
             .rows(rows)
     }
 
@@ -2332,6 +2332,11 @@ impl Document {
         self.find_area = FindArea::new(
             (whole || block).then(|| top.column()..bottom.column().saturating_add(1)),
             block.then(|| (top.body(), bottom.body().min(self.last_body()))),
+            (
+                self.rows.runs().to_vec(),
+                self.columns.runs().to_vec(),
+                self.order.clone(),
+            ),
         );
         let within = self.find_area.columns()?;
         let columns = self.find_columns_label(&within);
@@ -2863,11 +2868,33 @@ impl Document {
         })
     }
 
+    /// 検索と置換で照らす表示の列（限っていなければ `None`）。欄を開いた後に行や列の並びが変わっていたら、覚えた番目は
+    /// 別の所を指すので、限らない（GitHub Issue #536）。
+    fn find_columns(&self) -> Option<Range<usize>> {
+        self.find_area_holds()
+            .then(|| self.find_area.columns())
+            .flatten()
+    }
+
+    /// 検索と置換で照らす本体の行（最初と最後・限っていなければ `None`）。[`Self::find_columns`] と同じく、並びが変わって
+    /// いたら限らない。
+    fn find_rows(&self) -> Option<(u64, u64)> {
+        self.find_area_holds()
+            .then(|| self.find_area.rows())
+            .flatten()
+    }
+
+    /// 表の並びが、検索か置換の欄を開いたときのままか。
+    fn find_area_holds(&self) -> bool {
+        self.find_area
+            .holds(self.rows.runs(), self.columns.runs(), &self.order)
+    }
+
     /// 検索と置換を範囲に限っているときの、読む原本のレコードの範囲（最初と数）。限っていなければ `None`。読む量を
     /// 狭めるだけで、照らすかどうかは `FindScope` が決める（GitHub Issue #534）。範囲が足した行だけなら数は 0。
     #[must_use]
     pub fn find_span(&self) -> Option<(u64, u64)> {
-        let (top, bottom) = self.find_area.rows()?;
+        let (top, bottom) = self.find_rows()?;
         let (from, to) = (self.line_of(top), self.line_of(bottom));
         let runs = self.runs_from(from, to.saturating_sub(from).saturating_add(1));
         let spans = runs.iter().filter_map(|run| match run {
@@ -6588,8 +6615,8 @@ impl Document {
             .with_advances(self.advances.as_deref())
             .with_renaming(self.renaming())
             .with_found(found)
-            .with_found_within(self.find_area.columns())
-            .with_found_rows(self.find_area.rows())
+            .with_found_within(self.find_columns())
+            .with_found_rows(self.find_rows())
             .with_expected(self.expected_columns())
             .with_row_bands(!self.columns_selected())
             .paint(self.header(), self.column_numbers().as_ref(), &self.view)
@@ -8073,6 +8100,25 @@ mod tests {
         assert_eq!(early.count(), 0);
         let whole = document.narrowed(FindPass::new(0, 4, FindBound::After(None)));
         assert_eq!((whole.first(), whole.count()), (2, 2));
+    }
+
+    /// 欄を開いた後に行の並びを変えたら（行を足した）、覚えた範囲は別の行を指すので、限定を外して全部を探す。セルの値を
+    /// 書き換えただけなら外れない（GitHub Issue #536）。
+    #[test]
+    fn a_find_range_is_dropped_when_the_rows_are_rearranged() {
+        let rows = table(&[&["sku", "name"], &["1", "a"], &["2", "b"], &["3", "c"]]);
+        let mut document = opened_with(&rows);
+        document.report(JobReport::Finished(IndexSummary::new(4, None)));
+        document.apply(moving(CursorStep::Down), normal());
+        document.apply(extending(CursorStep::Down), normal());
+        assert!(document.scope_find_to_selection().is_some());
+        typed(&mut document, "x");
+        document.apply(Intent::Confirm, normal());
+        assert_eq!(document.find_span(), Some((2, 2)));
+        document.apply(Intent::InsertRows(RowPlace::Above), normal());
+        assert_eq!(document.find_span(), None);
+        assert_eq!(document.find_rows(), None);
+        assert_eq!(document.find_columns(), None);
     }
 
     /// 範囲が見出しの行をまたいでも（前書きからデータまでを選ぶ）、範囲の最後の行まで照らす（GitHub Issue #526）。
