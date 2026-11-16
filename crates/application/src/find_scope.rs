@@ -11,6 +11,7 @@ use nene_ledger_core::column_id::ColumnId;
 use nene_ledger_core::dialect::Dialect;
 use nene_ledger_core::find_options::FindOptions;
 use nene_ledger_core::find_query::FindQuery;
+use nene_ledger_core::order_run::OrderRun;
 use nene_ledger_core::row_id::RowId;
 
 /// 探す問いと、表示の順の列（同一性）と、書き換えの写し。裏の検索のスレッドにも渡す（原本の行は scan が読む）。
@@ -25,6 +26,9 @@ pub struct FindScope {
     shape: Option<usize>,
     /// 照らす表示の列をこの範囲に限る（列を選んで検索・置換を開いたとき・GitHub Issue #411）。`None` なら全部の列。
     within: Option<Range<usize>>,
+    /// 照らす行をこの区間（行の並びの区間・行の同一性）に限る（矩形の範囲を選んで検索・置換を開いたとき・GitHub
+    /// Issue #513）。`None` なら全部の行。
+    rows: Option<Vec<OrderRun>>,
 }
 
 impl FindScope {
@@ -37,7 +41,30 @@ impl FindScope {
             edits,
             shape: None,
             within: None,
+            rows: None,
         }
+    }
+
+    /// 照らす行を、行の並びの区間 `rows` に限る（`None` なら全部・GitHub Issue #513）。
+    #[must_use]
+    pub fn rows(self, rows: Option<Vec<OrderRun>>) -> Self {
+        Self { rows, ..self }
+    }
+
+    /// 行 `row` を照らすか。
+    fn covers_row(&self, row: RowId) -> bool {
+        let Some(runs) = &self.rows else {
+            return true;
+        };
+        runs.iter().any(|run| match (run, row) {
+            (OrderRun::Source { first, count }, RowId::Source(record)) => {
+                record >= *first && count.is_none_or(|count| record.saturating_sub(*first) < count)
+            }
+            (OrderRun::Added(added), RowId::Added(id)) => added.contains(&id),
+            (OrderRun::Source { .. }, RowId::Added(_)) | (OrderRun::Added(_), RowId::Source(_)) => {
+                false
+            }
+        })
     }
 
     /// 照らす表示の列を `within` に限る（`None` なら全部・GitHub Issue #411）。
@@ -63,6 +90,7 @@ impl FindScope {
             edits: CellEdits::empty(),
             shape: Some(expected),
             within: None,
+            rows: None,
         }
     }
 
@@ -128,7 +156,7 @@ impl FindScope {
         source: &S,
         replacement: &str,
     ) -> Option<(CellChange, String)> {
-        if !self.covers(display) {
+        if !self.covers(display) || !self.covers_row(row) {
             return None;
         }
         let &column = self.columns.get(display)?;
@@ -156,7 +184,7 @@ impl FindScope {
     /// 行 `row` の表示の `display` 列目のセルが当たるか。
     fn hits<S: Fn(usize) -> Option<String>>(&self, row: RowId, display: usize, source: &S) -> bool {
         // 列の数の問いは、行のレコード全体で照らす（`FindFold`）。セルごとには当たらない。
-        if self.shape.is_some() || !self.covers(display) {
+        if self.shape.is_some() || !self.covers(display) || !self.covers_row(row) {
             return false;
         }
         let Some(&column) = self.columns.get(display) else {
@@ -283,5 +311,40 @@ mod tests {
                 .replaced_cell((RowId::Source(0), 1), &source, "無料")
                 .is_some()
         );
+    }
+
+    /// 行の区間に限ると、区間の外の行は当たらない。原本の行は番号の範囲で、足した行は通し番号で照らす（GitHub Issue
+    /// #513）。
+    #[test]
+    fn a_row_span_covers_source_ranges_and_added_rows() {
+        let query = FindQuery::new("a", FindOptions::standard());
+        let columns = vec![ColumnId::Source(0)];
+        let mut edits = CellEdits::empty();
+        edits.set(
+            RowId::Added(7),
+            ColumnId::Source(0),
+            CellValue::Text(String::from("a")),
+        );
+        edits.set(
+            RowId::Added(8),
+            ColumnId::Source(0),
+            CellValue::Text(String::from("a")),
+        );
+        let runs = vec![
+            OrderRun::Source {
+                first: 2,
+                count: Some(2),
+            },
+            OrderRun::Added(vec![7]),
+        ];
+        let scope = FindScope::new(query, columns, edits).rows(Some(runs));
+        let value = |_: usize| Some(String::from("a"));
+        let hit = |row: RowId| scope.first_in_row(row, 0..1, value).is_some();
+        assert!(!hit(RowId::Source(1)));
+        assert!(hit(RowId::Source(2)));
+        assert!(hit(RowId::Source(3)));
+        assert!(!hit(RowId::Source(4)));
+        assert!(hit(RowId::Added(7)));
+        assert!(!hit(RowId::Added(8)));
     }
 }

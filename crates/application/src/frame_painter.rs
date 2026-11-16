@@ -52,6 +52,8 @@ pub(crate) struct FramePainter<'view> {
     found: Option<&'view FindQuery>,
     /// 当たりの印を付ける表示の列（検索と置換を列に限ったとき・GitHub Issue #411）。`None` なら全部の列。
     found_within: Option<Range<usize>>,
+    /// 当たりの印を付ける本体の行（最初と最後・検索と置換を範囲に限ったとき・GitHub Issue #513）。`None` なら全部の行。
+    found_rows: Option<(u64, u64)>,
     /// 本体の行が持つはずのセルの数（見出しの行のセルの数・GitHub Issue #317）。
     expected: Option<usize>,
     /// 選んだ行の帯を描くか。列全体を選んだときは、どの行も選んだ行なので帯を描かない（表が一面に染まり、どの列を
@@ -112,6 +114,7 @@ impl<'view> FramePainter<'view> {
             drop: None,
             found: None,
             found_within: None,
+            found_rows: None,
             expected: None,
             editing_wide: None,
             row_bands: true,
@@ -193,6 +196,11 @@ impl<'view> FramePainter<'view> {
             found_within,
             ..self
         }
+    }
+
+    /// 当たりの印を付ける本体の行を `found_rows`（最初と最後）に限る（`None` なら全部・GitHub Issue #513）。
+    pub(crate) fn with_found_rows(self, found_rows: Option<(u64, u64)>) -> Self {
+        Self { found_rows, ..self }
     }
 
     pub(crate) fn with_ranges(self, ranges: Ranges<'view>) -> Self {
@@ -337,13 +345,9 @@ impl<'view> FramePainter<'view> {
             }
             let mark = self.mark(style, column);
             let source = self.order.get(column).copied().unwrap_or(column);
-            // 照らさない列には当たりの印を付けない（問いを外して描き、戻す）。
+            // 照らさない列と行には当たりの印を付けない（問いを外して描き、戻す）。
             let found = self.found;
-            if self
-                .found_within
-                .as_ref()
-                .is_some_and(|within| !within.contains(&column))
-            {
+            if !self.marks_found(style, column) {
                 self.found = None;
             }
             let field = self.field_at(index, column, mark);
@@ -365,6 +369,19 @@ impl<'view> FramePainter<'view> {
             let outlined = self.editing_wide.take().unwrap_or(rect);
             self.outline(outlined);
         }
+    }
+
+    /// 行（`style`）の表示の列 `column` のセルに、当たりの印を付けるか（検索と置換を列か範囲に限っていれば、その中だけ）。
+    fn marks_found(&self, style: RowStyle, column: usize) -> bool {
+        let in_columns = self
+            .found_within
+            .as_ref()
+            .is_none_or(|within| within.contains(&column));
+        let in_rows = match (style, self.found_rows) {
+            (RowStyle::Body(body), Some((first, last))) => (first..=last).contains(&body),
+            (RowStyle::Body(_) | RowStyle::Header | RowStyle::Numbers, _) => true,
+        };
+        in_columns && in_rows
     }
 
     /// 上から `index` 番目の行の表示の列 `column` のセル（印 `mark`）が編集の欄なら、その描き方。欄は、見出しの名前を

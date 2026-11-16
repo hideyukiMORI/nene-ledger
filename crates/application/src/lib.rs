@@ -51,6 +51,7 @@ pub mod edit_surface;
 pub mod edit_target;
 mod editing_cell;
 pub mod file_stamp;
+mod find_area;
 pub mod find_bound;
 pub mod find_notice;
 pub mod find_pass;
