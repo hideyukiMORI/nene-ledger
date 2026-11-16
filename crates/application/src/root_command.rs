@@ -12,6 +12,8 @@ pub enum RootCommand {
         /// 次へ探すか。
         forward: bool,
     },
+    /// 閉じなかった引用符のある行へ飛ぶ（パレット・ADR 0018 の決定 2・GitHub Issue #519）。
+    GoToUnclosedQuote,
     /// 選択がかかる行を読んで、すぐ下に同じ値の行を足す（パレット・GitHub Issue #486）。
     DuplicateRows,
     /// 表の全部の行を読んで、選んだ列のすぐ右に同じ値の列を足す（パレット・GitHub Issue #488）。

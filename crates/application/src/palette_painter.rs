@@ -975,7 +975,7 @@ mod tests {
         let commands = palette.paint(view(), colors(), DetailPane::Open);
         let shown = texts(&commands);
         assert!(shown.contains(&"したいことを打って探す（例: 保存・置換・文字化け）"));
-        assert!(shown.contains(&"51 / 51"));
+        assert!(shown.contains(&"52 / 52"));
         // 空の一覧は見出しから：よく使う（開く・保存・探す・置換・元に戻す）と、その下の分類（GitHub Issue #420）。
         assert!(shown.contains(&"よく使う") && shown.contains(&"ファイル"));
         assert!(shown.contains(&"ファイルを開く…") && shown.contains(&"Ctrl+O"));
@@ -1061,7 +1061,7 @@ mod tests {
         let commands = palette.paint(view(), colors(), DetailPane::Closed);
         let shown = texts(&commands);
         assert!(shown.contains(&"“xyz” に合う操作は無い"));
-        assert!(shown.contains(&"0 / 51") && shown.contains(&"xyz"));
+        assert!(shown.contains(&"0 / 52") && shown.contains(&"xyz"));
         assert!(fills(&commands, colors().selection()).is_empty());
     }
 

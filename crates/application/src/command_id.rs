@@ -80,6 +80,8 @@ pub enum CommandId {
     Replace,
     /// 列の数が見出しと違う次の行へ（GitHub Issue #338）。
     NextRaggedRow,
+    /// 閉じなかった引用符のある行へ飛ぶ（ADR 0018 の決定 2・GitHub Issue #519）。
+    GoToUnclosedQuote,
     /// 列の数が見出しと違う前の行へ（GitHub Issue #340）。
     PreviousRaggedRow,
     /// ファイルを選んで新しい窓で開く（Ctrl+O・GitHub Issue #344）。
@@ -124,7 +126,7 @@ pub enum CommandId {
 
 impl CommandId {
     /// すべての操作（何も打たないときの順）。
-    pub const ALL: [Self; 51] = [
+    pub const ALL: [Self; 52] = [
         Self::Top,
         Self::Bottom,
         Self::GoTo,
@@ -156,6 +158,7 @@ impl CommandId {
         Self::Replace,
         Self::NextRaggedRow,
         Self::PreviousRaggedRow,
+        Self::GoToUnclosedQuote,
         Self::OpenFile,
         Self::Save,
         Self::SaveAs,
@@ -197,7 +200,8 @@ impl CommandId {
             | Self::FindPrevious
             | Self::Replace
             | Self::NextRaggedRow
-            | Self::PreviousRaggedRow => PaletteHeading::Find,
+            | Self::PreviousRaggedRow
+            | Self::GoToUnclosedQuote => PaletteHeading::Find,
             Self::Undo | Self::Redo | Self::Copy | Self::Cut | Self::ToggleReadOnly => {
                 PaletteHeading::Edit
             }
@@ -278,6 +282,7 @@ impl CommandId {
             Self::FindPrevious => "前を探す",
             Self::NextRaggedRow => "列の数が見出しと違う次の行へ",
             Self::PreviousRaggedRow => "列の数が見出しと違う前の行へ",
+            Self::GoToUnclosedQuote => "閉じていない引用符の行へ飛ぶ",
             Self::Replace => "置き換える（探して）",
             Self::OpenFile => "ファイルを開く…",
             Self::Save => "変えた所を保存する",
@@ -336,6 +341,7 @@ impl CommandId {
             Self::FindPrevious => "まえをさがす",
             Self::NextRaggedRow => "れつのかずがみだしとちがうつぎのぎょうへ",
             Self::PreviousRaggedRow => "れつのかずがみだしとちがうまえのぎょうへ",
+            Self::GoToUnclosedQuote => "とじていないいんようふのぎょうへとぶ",
             Self::Replace => "おきかえる",
             Self::OpenFile => "ふぁいるをひらく",
             Self::Save => "かえたところをほぞんする",
@@ -386,7 +392,7 @@ impl CommandId {
             Self::ChooseEncoding => &["encoding", "charset", "reopen", "utf", "sjis"],
             Self::ChooseDelimiter => &["delimiter", "separator", "reopen", "tab", "comma"],
             Self::ChooseQuoting => &["quote", "quoting", "escape", "reopen"],
-            Self::ChooseUnclosedQuote => &["unclosed", "unterminated", "broken row", "literal"],
+            Self::ChooseUnclosedQuote | Self::GoToUnclosedQuote => &["unclosed", "literal"],
             Self::ChooseHeader => &["header", "heading", "first row"],
             Self::MoveColumnsLeft => &["move column left", "column order"],
             Self::MoveColumnsRight => &["move column right", "column order"],
@@ -451,6 +457,7 @@ impl CommandId {
             Self::Cut => &["カット"],
             Self::Find | Self::FindNext | Self::FindPrevious => &["検索", "サーチ"],
             Self::NextRaggedRow | Self::PreviousRaggedRow => &["壊れた行", "ずれ", "列数"],
+            Self::GoToUnclosedQuote => &["壊れた行へ", "閉じ忘れ", "引用符が閉じない行"],
             Self::Replace => &["置換", "検索", "書き換え"],
             Self::OpenFile => &["読み込み", "オープン"],
             Self::Save => &["上書き保存", "書き出し"],
@@ -510,7 +517,8 @@ impl CommandId {
             | Self::DuplicateColumns
             | Self::RenameColumn
             | Self::InsertColumnsRight
-            | Self::TrimExtraCells => None,
+            | Self::TrimExtraCells
+            | Self::GoToUnclosedQuote => None,
             // Ctrl++ と Ctrl+- は、列全体を選んでいれば列に、そうでなければ行に効く（ADR 0027 の決定 2）。
             Self::InsertRowsAbove | Self::InsertColumnsLeft => Some("Ctrl+Plus"),
             Self::RemoveRows | Self::RemoveColumns => Some("Ctrl+Minus"),
@@ -567,6 +575,7 @@ impl CommandId {
             | Self::Replace
             | Self::NextRaggedRow
             | Self::PreviousRaggedRow
+            | Self::GoToUnclosedQuote
             | Self::OpenFile
             | Self::Save
             | Self::SaveAs
@@ -629,6 +638,7 @@ impl CommandId {
             Self::FindNext => Some(Intent::FindAgain { forward: true }),
             Self::FindPrevious => Some(Intent::FindAgain { forward: false }),
             Self::Replace => Some(Intent::OpenFind { replace: true }),
+            Self::GoToUnclosedQuote => Some(Intent::Root(RootCommand::GoToUnclosedQuote)),
             Self::NextRaggedRow => Some(Intent::Root(RootCommand::FindRagged { forward: true })),
             Self::PreviousRaggedRow => {
                 Some(Intent::Root(RootCommand::FindRagged { forward: false }))

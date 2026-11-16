@@ -330,6 +330,7 @@ impl Viewer {
             Some(Ok(IndexOutcome::Finished(index))) => {
                 let summary =
                     IndexSummary::new(index.records(), index.unclosed_quotes().first().copied())
+                        .with_unclosed_record(index.unclosed_records().first().copied())
                         .with_line_endings(index.line_endings());
                 self.reader.use_index(index);
                 JobReport::Finished(summary)
@@ -883,11 +884,16 @@ impl Viewer {
     }
 
     /// 合成ルートだけが受ける意図（新しい表・ファイルを開く・壊れた行へ・GitHub Issue #377）。
-    fn root_command(&mut self, command: RootCommand) -> Option<ClipboardText> {
+    fn root_command(&mut self, command: RootCommand, view: WindowView) -> Option<ClipboardText> {
         match command {
             RootCommand::NewTable => self.open_new_window(),
             RootCommand::OpenFile => self.open_chosen_file(),
             RootCommand::FindRagged { forward } => return self.find_ragged(forward),
+            RootCommand::GoToUnclosedQuote => {
+                self.palette = None;
+                let effect = self.document.go_to_unclosed_quote(view);
+                return self.effect(effect);
+            }
             RootCommand::DuplicateRows => self.duplicate(false),
             RootCommand::DuplicateColumns => self.duplicate(true),
         }
@@ -1080,7 +1086,7 @@ impl Viewer {
         }
         // 合成ルートだけが受ける意図（新しい表・ファイルを開く・壊れた行へ・GitHub Issue #377）。
         if let Intent::Root(command) = intent {
-            return self.root_command(command);
+            return self.root_command(command, view);
         }
         if let Intent::Zoom(step) = intent {
             // 文字の大きさも配色と同じく、ファイルの画面の状態ではないので設定として持つ（ADR 0020）。

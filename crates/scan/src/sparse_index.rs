@@ -16,6 +16,8 @@ pub struct SparseIndex {
     records: u64,
     bytes: u64,
     unclosed_quotes: Vec<u64>,
+    /// 閉じなかった引用符のあるレコードの番号（`unclosed_quotes` と同じ順・同じ数・GitHub Issue #519）。
+    unclosed_records: Vec<u64>,
     line_endings: LineEndingCounts,
 }
 
@@ -28,6 +30,7 @@ impl SparseIndex {
             records,
             bytes,
             unclosed_quotes: Vec::new(),
+            unclosed_records: Vec::new(),
             line_endings: LineEndingCounts::new(0, 0, 0),
         }
     }
@@ -44,6 +47,15 @@ impl SparseIndex {
     pub(crate) fn with_unclosed_quotes(self, unclosed_quotes: Vec<u64>) -> Self {
         Self {
             unclosed_quotes,
+            ..self
+        }
+    }
+
+    /// 閉じなかった引用符のあるレコードの番号を添える（位置と同じ順）。
+    #[must_use]
+    pub(crate) fn with_unclosed_records(self, unclosed_records: Vec<u64>) -> Self {
+        Self {
+            unclosed_records,
             ..self
         }
     }
@@ -88,6 +100,13 @@ impl SparseIndex {
     #[must_use]
     pub fn unclosed_quotes(&self) -> &[u64] {
         &self.unclosed_quotes
+    }
+
+    /// 閉じなかった引用符のあるレコードの番号（0 始まり・[`Self::unclosed_quotes`] と同じ順）。壊れた所へ飛ぶために覚える
+    /// （ADR 0018 の決定 2・GitHub Issue #519）。
+    #[must_use]
+    pub fn unclosed_records(&self) -> &[u64] {
+        &self.unclosed_records
     }
 
     /// `record` 以前で最も近い目印。目印が無ければ（レコードが無い・作り始めたばかり）`None`。
