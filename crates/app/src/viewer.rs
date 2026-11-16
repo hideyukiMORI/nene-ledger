@@ -1007,6 +1007,10 @@ impl Viewer {
         trial.mark_cut(cuts);
         trial.set_detail(base.detail());
         trial.set_detail_lines(base.detail_lines());
+        // 測った字の送り幅を引き継ぐ（作り直した表は持っていない。欄の字の位置と列の幅が見積もりに戻る・GitHub Issue #528）。
+        if let Some(advances) = base.advances() {
+            trial.set_advances(advances);
+        }
         let original = core::mem::replace(&mut self.document, trial);
         if self.trial.is_none() {
             self.trial = Some(original);
