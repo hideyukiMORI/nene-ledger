@@ -128,7 +128,7 @@ pub(crate) fn start_saving_as(
 /// 原本のファイルが、開く前に取った印のままか。原本の無い新しい表は `None`。計画は原本の今の中身を読むので、
 /// 外から変わっていれば計画より先に止める（行が無いと言うより正しい理由）。書く前と置き換えの直前にも store が確かめる
 /// （ADR 0025）。
-fn source_unchanged(reader: &Reader) -> Result<Option<FileStamp>, SavingFailure> {
+pub(crate) fn source_unchanged(reader: &Reader) -> Result<Option<FileStamp>, SavingFailure> {
     let Some(path) = reader.path() else {
         return Ok(None);
     };
@@ -271,7 +271,10 @@ pub(crate) fn problem_of(failure: &SavingFailure) -> SaveProblem {
             | SaveFailure::Write(_)
             | SaveFailure::Read(_)
             | SaveFailure::Spawn(_)
-            | SaveFailure::Panicked,
+            | SaveFailure::Panicked
+            // 🔴 書き出しの知らせ（件数と所へ飛ぶ・同じファイルは断る）は、入口を作る Issue で足す（ADR 0036）。
+            | SaveFailure::UnrepresentableCells { .. }
+            | SaveFailure::SameAsSource,
         ) => SaveProblem::Other,
     }
 }
@@ -311,6 +314,14 @@ pub(crate) fn describe(failure: &SavingFailure) -> String {
         SavingFailure::Save(SaveFailure::NoSpace { needed, free }) => format!(
             "保存先の空きが足りないので、保存を始めなかった（要る {needed} バイト・空き {free} バイト・原本は元のまま）"
         ),
+        SavingFailure::Save(SaveFailure::UnrepresentableCells { count, row, column }) => format!(
+            "選んだ文字コードで表せない字のあるセルが {count} 個あるので、書き出さなかった（最初は {} 行目の {} 列目）",
+            row.saturating_add(1),
+            column.saturating_add(1)
+        ),
+        SavingFailure::Save(SaveFailure::SameAsSource) => {
+            String::from("書き出す先が今のファイルと同じなので、書き出さなかった")
+        }
         SavingFailure::Save(save) => format!("保存できなかった: {save:?}"),
     }
 }

@@ -10,6 +10,18 @@ use nene_ledger_application::replace_failure::ReplaceFailure;
 pub enum SaveFailure {
     /// 書き換えた値に、原本の文字コードで表せない字がある（SAVE-04）。値をそのまま持つ。
     Unrepresentable(String),
+    /// 書き出す表に、選んだ文字コードで表せない字のあるセルがある（書き始める前の検査・ADR 0036 の決定 5）。
+    /// 何も書いていない（書き出す先を作っていない）。
+    UnrepresentableCells {
+        /// セルの数。
+        count: u64,
+        /// 最初のセルの、表の行の位置（0 始まり・前書きと見出しの行も数える）。
+        row: u64,
+        /// 最初のセルの、表の列の位置（0 始まり）。
+        column: usize,
+    },
+    /// 書き出す先が、今開いているファイルと同じ（書き出しは必ず別のファイルへ・ADR 0036 の決定 2）。何も書いていない。
+    SameAsSource,
     /// 原本の道筋を解けない・原本の情報を読めない。
     Target(ErrorKind),
     /// 開いた後に、原本が外から変えられた（FILE-01）。書いていない（書いた一時ファイルは消した）。
