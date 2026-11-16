@@ -85,8 +85,13 @@ where
     // Unix では、開いているほかのプロセスがあっても `rename` で置き換えられる（確かめることは無い）。
     #[cfg(windows)]
     crate::lock_probe::probe(&target).map_err(SaveFailure::Blocked)?;
-    // 一時ファイルに全体を書くので、原本と同じだけの空きが要る（SAVE-02）。
-    enough_space(replacing, target.parent(), Some(metadata.len()))?;
+    // 一時ファイルに全体を書くので、書く量（原本の大きさ）と同じだけの空きが要る（SAVE-02）。既にあるファイルへ名前を
+    // 付けて保存するときは、保存先の大きさではなく原本の大きさで見積もる（GitHub Issue #526）。
+    enough_space(
+        replacing,
+        target.parent(),
+        source.size().or(Some(metadata.len())),
+    )?;
     let (file, temporary) = create_beside(&target).map_err(SaveFailure::Write)?;
     if let Err(failure) = write_streamed(file, encoding, source, produce)
         .and_then(|()| unchanged_since(&target, opened))

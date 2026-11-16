@@ -788,12 +788,12 @@ impl Document {
             .header
             .iter()
             .filter_map(|row| {
-                let source = row.cells().get(column)?;
-                Some(match self.edits.get(row.row(), self.column_id(column)) {
-                    Some(CellValue::Text(name)) => name.clone(),
-                    Some(CellValue::Absent) => String::new(),
-                    None => String::from(source),
-                })
+                // 見出しの行に無いセル（見出しが短い）も、名前を直していればその名前（GitHub Issue #526）。
+                match self.edits.get(row.row(), self.column_id(column)) {
+                    Some(CellValue::Text(name)) => Some(name.clone()),
+                    Some(CellValue::Absent) => None,
+                    None => row.cells().get(column).map(String::from),
+                }
             })
             .filter(|name| !name.is_empty())
             .collect();
@@ -2297,10 +2297,11 @@ impl Document {
         let columns = (0..self.widths.columns().len())
             .map(|display| self.column_id(self.source_column(display)))
             .collect();
-        // 行は、行の並びの区間（行の同一性）で限る。行を足し消し・並べ替えた表でも、選んだ行だけを照らす。
+        // 行は、今の行の並びの区間（行の同一性）に直して限る。行の数は、行の並びの位置で数える（範囲が見出しの行を
+        // またぐと、本体の番目の差では後ろが足りなくなる・GitHub Issue #526）。
         let rows = self.find_area.rows().map(|(first, last)| {
-            let count = last.saturating_sub(first).saturating_add(1);
-            self.runs_from(self.line_of(first), count)
+            let (from, to) = (self.line_of(first), self.line_of(last));
+            self.runs_from(from, to.saturating_sub(from).saturating_add(1))
         });
         FindScope::new(query, columns, self.edits.clone())
             .within(self.find_area.columns())
@@ -3614,6 +3615,11 @@ impl Document {
 
     /// セル（`row`・`column`）へカーソルを動かし、見えるように表示を動かす。並びに無い行・足した列なら動かない。
     fn reveal_cell(&mut self, row: RowId, column: ColumnId, window: WindowView) -> DocumentEffect {
+        // 見出しのセル（名前の変更を戻した・やり直した）なら、本体のカーソルは動かさない（直すときと同じ・GitHub
+        // Issue #526）。
+        if self.header.iter().any(|header| header.row() == row) {
+            return DocumentEffect::Stay;
+        }
         let (Some(line), Some(source)) =
             (self.rows.position_of(row), self.columns.position_of(column))
         else {
@@ -3920,6 +3926,11 @@ impl Document {
         (press, at, dragging): (PointerPoint, PointerPoint, bool),
         window: WindowView,
     ) -> DocumentEffect {
+        // ドラッグの途中で字を打って直し始めていたら、落とさない（範囲の値が欄に流れ込む・GitHub Issue #526）。
+        if self.editor.is_some() {
+            self.frame = FrameDrag::Idle;
+            return DocumentEffect::Stay;
+        }
         if !dragging {
             self.frame = FrameDrag::Idle;
             let mode = if copy {
@@ -7963,6 +7974,53 @@ mod tests {
         assert_eq!(fitted_status(status, 5), status);
     }
 
+    /// 範囲が見出しの行をまたいでも（前書きからデータまでを選ぶ）、範囲の最後の行まで照らす（GitHub Issue #526）。
+    #[test]
+    fn a_find_range_across_the_header_rows_reaches_its_last_row() {
+        let (mut document, rows) = two_header_rows();
+        // 本体の 0（前書き）〜2（最後のデータの行）の 2 列。
+        document.apply(extending(CursorStep::Down), normal());
+        document.apply(extending(CursorStep::Down), normal());
+        document.apply(extending(CursorStep::Right), normal());
+        assert!(document.scope_find_to_selection().is_some());
+        let scope = document.find_scope(FindQuery::new("0", FindOptions::standard()));
+        let table_rows = &rows;
+        let cells = |record: usize| {
+            move |index: usize| {
+                table_rows
+                    .get(record)
+                    .and_then(|row| row.get(index))
+                    .map(String::from)
+            }
+        };
+        assert_eq!(
+            scope.first_in_row(RowId::Source(3), 0..2, cells(3)),
+            Some(1)
+        );
+        assert_eq!(
+            scope.first_in_row(RowId::Source(4), 0..2, cells(4)),
+            Some(1)
+        );
+    }
+
+    /// 見出しの行に無いセル（見出しが本体より短い）の名前を直すと、すぐに列の名前に出る。名前の変更を戻しても、本体の
+    /// カーソルは動かない（GitHub Issue #526）。
+    #[test]
+    fn a_name_for_a_missing_header_cell_shows_at_once_and_undo_keeps_the_cursor() {
+        let rows = table(&[&["id"], &["1", "a"], &["2", "b"]]);
+        let mut document = opened_with(&rows);
+        document.apply(moving(CursorStep::Down), normal());
+        document.apply(moving(CursorStep::Right), normal());
+        let cursor = document.selection().cursor();
+        document.apply(Intent::Edit(EditTarget::Header), normal());
+        typed(&mut document, "name");
+        document.apply(Intent::Confirm, normal());
+        assert_eq!(document.column_name(1).as_deref(), Some("name"));
+        document.apply(Intent::Undo, normal());
+        assert_eq!(document.column_name(1), None);
+        assert_eq!(document.selection().cursor(), cursor);
+    }
+
     /// パレット「閉じていない引用符の行へ飛ぶ」は、索引が覚えた行へカーソルを動かす。行を足していれば、足した後の
     /// 位置で数える。無ければ（索引を作っている途中も）知らせる（ADR 0018 の決定 2・GitHub Issue #519）。
     #[test]
@@ -12002,6 +12060,24 @@ mod tests {
         assert_eq!(document.drop_range(normal()), None);
         document.hover(Some(to), normal());
         assert_eq!(document.pointer_shape(), PointerShape::Arrow);
+        assert!(document.edits().is_empty());
+    }
+
+    /// ドラッグの途中で字を打って直し始めたら、離しても落とさない（範囲の値を欄に流し込まない・GitHub Issue #526）。
+    #[test]
+    fn typing_during_a_frame_drag_cancels_the_drop() {
+        let mut document = indexed_editable();
+        let edge = bottom_edge(&document, 0, 0);
+        let to = middle(&document, 1, 1);
+        document.apply(pressing(edge, SelectionMode::Collapse), normal());
+        document.apply(Intent::Drag { at: pointer_of(to) }, normal());
+        typed(&mut document, "x");
+        assert_eq!(
+            document.apply(Intent::Release, normal()),
+            DocumentEffect::Stay
+        );
+        assert_eq!(document.take_drop(), None);
+        assert_eq!(field_text(&document), Some("x"));
         assert!(document.edits().is_empty());
     }
 

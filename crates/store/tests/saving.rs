@@ -513,6 +513,41 @@ mod saving {
         assert!(leftovers(&dir).is_empty());
     }
 
+    /// 既にあるファイルへ書くときも、要る量は原本の大きさで見積もる（上書きされる側が大きくても、小さな表は書ける・
+    /// GitHub Issue #526）。
+    #[test]
+    fn the_needed_room_is_the_size_of_what_is_written_not_of_the_file_replaced() {
+        struct Small(Vec<u8>);
+        impl SourceBytes for Small {
+            type Failure = ErrorKind;
+
+            fn read_at(&mut self, offset: u64, buffer: &mut [u8]) -> Result<usize, ErrorKind> {
+                Bytes(self.0.clone()).read_at(offset, buffer)
+            }
+
+            fn size(&self) -> Option<u64> {
+                u64::try_from(self.0.len()).ok()
+            }
+        }
+        let dir = folder("space-over");
+        let target = dir.join("big.csv");
+        std::fs::write(&target, vec![b'x'; 100]).unwrap();
+        let original = b"id\r\n1\r\n".to_vec();
+        let plan = whole(original.len());
+        save(
+            &target,
+            (
+                &plan,
+                TextEncoding::Utf8,
+                SaveTarget::Existing(stamp_of(&target).unwrap()),
+            ),
+            &mut Small(original.clone()),
+            &Roomy(50),
+        )
+        .unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), original);
+    }
+
     /// まだ無いはずのファイルができていれば、書かない（上書きの確認を飛ばさない）。
     #[test]
     fn saving_as_a_new_file_refuses_a_file_that_appeared() {

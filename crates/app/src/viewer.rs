@@ -892,7 +892,11 @@ impl Viewer {
             RootCommand::GoToUnclosedQuote => {
                 self.palette = None;
                 let effect = self.document.go_to_unclosed_quote(view);
-                return self.effect(effect);
+                let copied = self.effect(effect);
+                // 飛んで選択が変わったので、範囲の集計を読み直す（GitHub Issue #526）。
+                self.refresh_totals();
+                self.sync_ticker();
+                return copied;
             }
             RootCommand::DuplicateRows => self.duplicate(false),
             RootCommand::DuplicateColumns => self.duplicate(true),
