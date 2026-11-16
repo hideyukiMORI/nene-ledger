@@ -60,6 +60,19 @@ impl CellEdits {
         width.saturating_sub(trimmed)
     }
 
+    /// 原本の行 `row` の書き換えのうち、いちばん右の原本の列までのセルの数（書き換えが無ければ 0）。原本の行に無い
+    /// セルへ書いた行は、原本の行より長い。
+    #[must_use]
+    pub fn edited_width(&self, row: RowId) -> usize {
+        self.cells
+            .range((row, ColumnId::Source(0))..=(row, ColumnId::Source(usize::MAX)))
+            .next_back()
+            .map_or(0, |(&(_, column), _)| match column {
+                ColumnId::Source(index) => index.saturating_add(1),
+                ColumnId::Added(_) => 0,
+            })
+    }
+
     /// 書き換えが 1 つも無いか。
     #[must_use]
     pub fn is_empty(&self) -> bool {
